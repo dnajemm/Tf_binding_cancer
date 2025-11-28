@@ -70,7 +70,7 @@ export CONDA_PKGS_DIRS=/data/najemd/TF_binding_cancer/conda_envs/conda_pkgs
 #conda create --prefix ./conda_envs/TF_binding_cancer_env r-base -c conda-forge -y
 #conda env export --prefix ./conda_envs/TF_binding_cancer_env > ./conda_envs/TF_binding_cancer_env.yml
 conda activate ./conda_envs/TF_binding_cancer_env
-#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr --yes
+#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr r-hexbin r-mass r-kernsmooth --yes
 
 # 4) Overlap 6mer motifs with annotated methylation data to find intersecting regions and 
 # see if the motifs fall within methylated probes regions.
@@ -516,8 +516,8 @@ p <- ggplot(df, aes(x = "", y = count, fill = cancer_type)) +
     labels = df$legend_label,
     breaks = df$cancer_type)
 
-# Save PNG
-ggsave("./results/summarys/pie_chart_cancer_peaks_count.png",plot = p,width = 8,height = 5,dpi = 300,bg = "white")
+# Save PDF
+ggsave("./results/summarys/pie_chart_cancer_peaks_count.pdf",plot = p,width = 8,height = 5,dpi = 300,bg = "white")
 '
 
 # Distance of peaks to TSS : generate a file per sample with the distances of each peak to the nearest TSS
@@ -709,9 +709,11 @@ done
 
 # Comparing the methylation distribution for the same sample between healthy and cancer samples
 
+# 2>/dev/null = hide all error messages from this command.
+
 #to find samples with healthy and cancer data : 
-for dir in /data/papers/tcga/TCGA-ESCA/*/; do
-    count=$(ls "$dir"/HM450*.bed.gz 2>/dev/null | wc -l)
+for dir in /data/papers/tcga/TCGA-BRCA/*/; do
+    count=$(ls "$dir"/HM450*.bed.gz | wc -l)
     if [ "$count" -gt 1 ]; then
         echo "$dir has $count HM450 methylation files"
         ls "$dir"/HM450*.bed.gz
@@ -719,20 +721,83 @@ for dir in /data/papers/tcga/TCGA-ESCA/*/; do
     fi
 done
 
+# to find samples with no healthy data :
+mkdir -p ./methylation/methylation_counts/
+
+for cancer_dir in /data/papers/tcga/TCGA-*; do
+    cancer=$(basename "$cancer_dir" | sed 's/^TCGA-//')
+
+    tumor_count=$(find "$cancer_dir" -type f -name "HM450*01A_1_annotated_methylation.bed.gz" | wc -l)
+    healthy_count=$(find "$cancer_dir" -type f -name "HM450*11A_1_annotated_methylation.bed.gz" | wc -l)
+    # -gt = greater than
+    if [ "$tumor_count" -gt 0 ] && [ "$healthy_count" -gt 0 ]; then
+        echo "$cancer : has BOTH tumor (01A) and healthy (11A) methylation"
+    else
+        echo "$cancer : tumor = $tumor_count, healthy = $healthy_count"
+    fi
+    printf "%s\t%d\t%d\n" "$cancer" "$tumor_count" "$healthy_count" >> ./methylation/methylation_counts/methylation_presence.tsv
+done
+
+# Visualize the results in a barplot using R
+Rscript -e '
+library(ggplot2)
+library(reshape2)
+
+# Load the table with counts
+df <- read.table("./methylation/methylation_counts/methylation_presence.tsv",header = FALSE)
+# Rename columns: cancer, tumor count, healthy count
+colnames(df) <- c("cancer", "tumor", "healthy")
+
+# Add flag for "no healthy"
+df$no_healthy <- df$healthy == 0
+
+# Convert from wide → long format (because ggplot needs long)
+df_long <- melt(df, id.vars = "cancer",variable.name = "type",value.name = "count")
+
+# Create the barplot
+pdf("./results/summarys/methylation_counts_barplot.pdf", width=10, height=8)
+
+ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = c("tumor" = "salmon", "healthy" = "steelblue"),name = "") +
+    labs(title = "Tumor vs Healthy Methylation Sample Counts per Cancer Type",
+         x = "Cancer Type",
+         y = "Number of Samples",
+         caption = "Red cancer names = cancer type with no healthy (11A) samples") +  
+    theme_minimal(base_size = 13) +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1, colour = ifelse(df$no_healthy, "red", "black")),
+        plot.caption = element_text(hjust = 0.5, color = "red", size = 12))
+
+dev.off()
+'
+
+
 #example of outputs from BRCA : 
 #/data/papers/tcga/TCGA-BRCA/TCGA-A7-A0D9/ has 2 bed.gz files : 
 # /data/papers/tcga/TCGA-BRCA/TCGA-A7-A0D9/HM450_TCGA-BRCA-TCGA-A7-A0D9-11A_1_annotated_methylation.bed.gz --> healthy
 # /data/papers/tcga/TCGA-BRCA/TCGA-A7-A0D9/HM450_TCGA-BRCA-TCGA-A7-A0D9-01A_1_annotated_methylation.bed.gz --> cancer
+# /data/papers/tcga/TCGA-BRCA/TCGA-A7-A13F//HM450_TCGA-BRCA-TCGA-A7-A13F-01A_1_annotated_methylation.bed.gz
+# /data/papers/tcga/TCGA-BRCA/TCGA-A7-A13F//HM450_TCGA-BRCA-TCGA-A7-A13F-11A_1_annotated_methylation.bed.gz
+
+# between two replicates of cancer :
+# /data/papers/tcga/TCGA-BRCA/TCGA-A7-A26J//HM450_TCGA-BRCA-TCGA-A7-A26J-01A_1_annotated_methylation.bed.gz
+# /data/papers/tcga/TCGA-BRCA/TCGA-A7-A26J//HM450_TCGA-BRCA-TCGA-A7-A26J-01A_2_annotated_methylation.bed.gz
+
 # /data/papers/tcga/TCGA-ESCA/TCGA-IC-A6RE/ has 2 HM450 methylation files
 # /data/papers/tcga/TCGA-ESCA/TCGA-IC-A6RE//HM450_TCGA-ESCA-TCGA-IC-A6RE-01A_1_annotated_methylation.bed.gz
 # /data/papers/tcga/TCGA-ESCA/TCGA-IC-A6RE//HM450_TCGA-ESCA-TCGA-IC-A6RE-11A_1_annotated_methylation.bed.gz
+# /data/papers/tcga/TCGA-ESCA/TCGA-L5-A4OQ/ has 2 HM450 methylation files
+# /data/papers/tcga/TCGA-ESCA/TCGA-L5-A4OQ//HM450_TCGA-ESCA-TCGA-L5-A4OQ-01A_1_annotated_methylation.bed.gz
+# /data/papers/tcga/TCGA-ESCA/TCGA-L5-A4OQ//HM450_TCGA-ESCA-TCGA-L5-A4OQ-11A_1_annotated_methylation.bed.gz
 
 # plot the methylation distribution for both healthy and cancer samples of TCGA-BRCA-TCGA-A7-A0D9 using a delta methylation histogram :
 Rscript -e '
 library(ggplot2)
 # Load files (same format: chr start end probe meth)
-cancer  <- read.table("/data/papers/tcga/TCGA-ESCA/TCGA-IC-A6RE//HM450_TCGA-ESCA-TCGA-IC-A6RE-01A_1_annotated_methylation.bed.gz",  header=FALSE)
-healthy <- read.table("/data/papers/tcga/TCGA-ESCA/TCGA-IC-A6RE//HM450_TCGA-ESCA-TCGA-IC-A6RE-11A_1_annotated_methylation.bed.gz", header=FALSE)
+cancer  <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A13F//HM450_TCGA-BRCA-TCGA-A7-A13F-01A_1_annotated_methylation.bed.gz",  header=FALSE)
+healthy <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A13F//HM450_TCGA-BRCA-TCGA-A7-A13F-11A_1_annotated_methylation.bed.gz", header=FALSE)
 
 # Extract probe ID and methylation (col 4 and 5)
 cancer_df  <- data.frame(probe=cancer[,4],  meth_cancer=cancer[,5])
@@ -752,13 +817,13 @@ total <- length(delta)
 pct_negative <- round(sum(delta < 0) / total * 100, 1)
 pct_positive <- round(sum(delta > 0) / total * 100, 1)
 
-png("./results/summarys/delta_methylation_hist_TCGA-ESCA-TCGA-IC-A6RE.png", width=1000, height=800)
+png("./results/summarys/delta_methylation_hist_TCGA-BRCA-TCGA-A7-A13F.png", width=1000, height=800)
 
 hist(delta,
      breaks = 100,
      col = "steelblue",
      border = "black",
-     main = paste0("Δ Methylation (Cancer – Healthy TCGA-ESCA-TCGA-IC-A6RE )\n",
+     main = paste0("Δ Methylation (Cancer – Healthy TCGA-BRCA-TCGA-A7-A13F )\n",
                    pct_negative, "% CpGs hypomethylated (Δ<0) | ",
                    pct_positive, "% hypermethylated (Δ>0)"),
      xlab = "Δ methylation (%)")
@@ -780,6 +845,122 @@ text(x = usr[1] + 5,
 
 dev.off()
 '
+# using a smooth scatter plot to visualize the correlation between healthy and cancer methylation levels for the same sample : 
+Rscript -e '
+library(KernSmooth)
+
+# Load files
+cancer  <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A26J//HM450_TCGA-BRCA-TCGA-A7-A26J-01A_1_annotated_methylation.bed.gz",  header=FALSE)
+healthy <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A26J//HM450_TCGA-BRCA-TCGA-A7-A26J-01A_2_annotated_methylation.bed.gz", header=FALSE)
+
+# Extract probe + methylation
+cancer_df  <- data.frame(probe=cancer[,4],  meth_cancer=cancer[,5])
+healthy_df <- data.frame(probe=healthy[,4], meth_healthy=healthy[,5])
+
+# Merge
+merged <- merge(cancer_df, healthy_df, by="probe")
+
+# Delta methylation
+delta <- merged$meth_cancer - merged$meth_healthy
+
+# Hypo/hyper definitions 
+n_hypo  <- sum(delta <  0, na.rm=TRUE)
+n_hyper <- sum(delta >  0, na.rm=TRUE)
+n_equal <- sum(delta == 0, na.rm=TRUE)
+
+tot <- length(delta)
+pct_hypo  <- round(100 * n_hypo  / tot, 1)
+pct_hyper <- round(100 * n_hyper / tot, 1)
+pct_equal <- round(100 * n_equal / tot, 1)
+
+pdf("./results/summarys/smoothScatter_delta_TCGA-BRCA-TCGA-A7-A26J_replicates.pdf", width=8, height=6)
+
+smoothScatter(
+  merged$meth_healthy,
+  merged$meth_cancer,
+  xlab="replicate1 Methylation (%)",
+  ylab="replicate2 Methylation (%)",
+  main="replicate1 vs replicate2 Cancer Methylation\n TCGA-BRCA-TCGA-A7-A26J. \n delta = replicate1 - replicate2, hypo: delta < 0, hyper: delta > 0")
+
+abline(0, 1, col="red", lwd=2)
+
+# Add annotation
+legend("left", bty="n",cex = 0.8, legend=c(
+  paste0("Hypomethylated: ", n_hypo, " (", pct_hypo, "%)"),
+  paste0("Hypermethylated: ", n_hyper, " (", pct_hyper, "%)"),
+  paste0("Unchanged: ", n_equal, " (", pct_equal, "%)")))
+dev.off()
+'
+
+# plot PCA of methylation data across all samples across all cancer types:
+#This script builds a methylation matrix from TCGA tumor samples, subsampling up to 50 samples per cancer type.
+#It then performs a PCA to visualize how cancer types cluster based on genome-wide methylation profiles.
+
+# create a list of all methylation files for cancer samples
+find /data/papers/tcga/TCGA-* -type f -name "HM450*01A_1_annotated_methylation.bed.gz" > methylation_files.txt
+
+# build a matrix of methylation values : rows = probes, columns = samples
+Rscript -e '
+library(ggplot2)
+
+# List of files , extract sample names without path
+files <- scan("methylation_files.txt", what = "character")
+sample_names <- basename(files)
+
+# Extract Cancer type from filename: HM450_TCGA-BRCA-...
+cancer_all <- sub("HM450_TCGA-([A-Z0-9]+)-.*", "\\\\1", sample_names)
+
+# Subsample: max 50 samples per cancer type : it groups the indices of the files by cancer type, then samples up to max_per_cancer here 50 are randomly selected from each group.
+max_per_cancer <- 50
+set.seed(1)
+idx_list <- split(seq_along(files), cancer_all)
+keep_idx <- unlist(lapply(idx_list, function(ix) {if (length(ix) > max_per_cancer) sample(ix, max_per_cancer) else ix}))
+
+# rebuils the filtered files, sample names and cancer types
+files <- files[keep_idx]
+sample_names <- basename(files)
+cancer_types <- sub("HM450_TCGA-([A-Z0-9]+)-.*", "\\\\1", sample_names)
+
+# Build methylation matrix (rows = probes, cols = samples)
+ref <- read.table(files[1], header = FALSE)
+probes <- ref[, 4]
+meth_mat <- matrix(ref[, 5], nrow = length(probes), ncol = length(files))
+rownames(meth_mat) <- probes
+colnames(meth_mat) <- sample_names
+
+# Fill matrix with other samples 
+for (i in 2:length(files)) {
+  dat <- read.table(files[i], header = FALSE)
+  idx <- match(probes, dat[, 4])
+  meth_mat[, i] <- dat[idx, 5]}
+
+# PCA on all probes 
+meth_t <- t(meth_mat)
+pca <- prcomp(meth_t, center = TRUE, scale. = TRUE)
+var_expl <- summary(pca)$importance[2, 1:2] * 100
+
+# PCA scores data frame for plotting containing PC1, PC2, sample names and cancer types
+scores <- data.frame(
+  sample = rownames(pca$x),
+  PC1    = pca$x[, 1],
+  PC2    = pca$x[, 2],
+  cancer = factor(cancer_types))
+
+pdf("./results/summarys/PCA_cancer_only_PC1_PC2.pdf", width = 9, height = 7)
+
+ggplot(scores, aes(PC1, PC2, color = cancer, shape = cancer)) +
+  geom_point(size = 2.5, alpha = 0.9) +
+  theme_minimal() +
+  labs(
+    title = "PCA of Cancer Samples (max 50 per cancer type)",
+    x = paste0("PC1 (", round(var_expl[1], 1), "%)"),
+    y = paste0("PC2 (", round(var_expl[2], 1), "%)"),
+    color = "Cancer type",
+    shape = "Cancer type")
+
+dev.off()
+'
+rm methylation_files.txt
 
 # 14) statistics of SNV data :
 mkdir -p ./snv
@@ -824,15 +1005,19 @@ dev.off()
 # number of SNVs per cancer type
 mkdir -p ./snv/snv_counts_per_cancer_type/
 # unique SNVs per cancer type
-cancers=$(ls ./snv/SNV_TCGA-*.vcf.gz \
-          | sed 's#./snv/SNV_TCGA-##; s/-.*//' \
+# sed to extract cancer type from filename , first remove prefix and then removes everything after the first '-'
+cancers=$(find ./snv -maxdepth 1 -name 'SNV_TCGA-*.vcf.gz' \
+          | sed 's#.*/SNV_TCGA-##; s/-.*//' \
           | sort -u)
+
 for cancer in $cancers; do
+    echo "→ Processing $cancer..."
     count=$(zgrep -hv "^#" ./snv/SNV_TCGA-"$cancer"-*.vcf.gz \
             | awk '{print $1":"$2":"$4":"$5}' \
             | sort -u \
             | wc -l)
-    echo -e "${cancer}\t${count}" >> ./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv
+    echo "Done $cancer ($count unique SNVs)"
+    printf "%s\t%s\n" "$cancer" "$count" >> ./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv
 done
 
 cut -f2,3 ./snv/snv_counts/snv_per_sample.tsv | awk -F'\t' '{
@@ -921,7 +1106,7 @@ cut -f1 ./peaks/cancer_counts.tsv | sort > ./peaks/cancer_types_with_peaks.txt
 # List of cancer types with SNV data (snv_total_per_cancer.tsv)
 cut -f1 ./snv/snv_counts_per_cancer_type/snv_total_per_cancer.tsv | sort > ./snv/cancer_types_with_snv.txt
 
-# heatmap of cancer types with ATAC vs SNV
+# heatmap of cancer types with ATAC vs SNV vs Methylation data
 Rscript -e 'library(ggplot2)
 
 # Read lists (one cancer type per line)
