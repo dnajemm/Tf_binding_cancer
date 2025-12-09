@@ -1,4 +1,5 @@
 #!/bin/bash
+# To connect to the server dorsal : ssh najemd@serv-bardet-dorsal.igbmc.u-strasbg.fr
 cd TF_binding_cancer
 
 # 1) Filter motifs with p-value threshold and sort them.
@@ -6,6 +7,43 @@ mkdir -p ./motifs
 
 zcat /data/genome/motifs/jaspar_2024/fimo/vertebrata/hg38/NRF1.MA0506.3.bed.gz | awk '($5<=1/4^6)' > ./motifs/NRF1_filtered_6mer.MA0506.3.bed
 zcat /data/genome/motifs/jaspar_2024/fimo/vertebrata/hg38/ZBTB33.MA0527.2.bed.gz | awk '($5<=1/4^6)' > ./motifs/ZBTB33_filtered_6mer.MA0527.2.bed
+
+# barplot of the number of motifs before and after filtering 
+Rscript -e '
+library(ggplot2)
+motifs <- c("NRF1", "BANP")
+before_counts <- c( nrow(read.table(gzfile("/data/genome/motifs/jaspar_2024/fimo/vertebrata/hg38/NRF1.MA0506.3.bed.gz"))),
+                    nrow(read.table(gzfile("/data/genome/motifs/jaspar_2024/fimo/vertebrata/hg38/ZBTB33.MA0527.2.bed.gz"))) )
+after_counts  <- c( nrow(read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed")),
+                    nrow(read.table("./motifs/ZBTB33_filtered_6mer.MA0527.2.bed")) )
+
+statuses <- c("Before 6mer Filtering", "After 6mer Filtering")
+
+df <- data.frame(
+  Motif  = rep(motifs, times = 2),                 # NRF1, BANP, NRF1, BANP
+  Status = rep(statuses, each = length(motifs)),   # Before, Before, After, After
+  Count  = c(before_counts, after_counts)          # b_NRF1, b_BANP, a_NRF1, a_BANP
+)
+
+df$Status <- factor(df$Status,levels = c("Before 6mer Filtering", "After 6mer Filtering"))
+
+# Plot
+ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = Count),
+          position = position_dodge(width = 0.9),
+          vjust = -0.3,
+          size = 3) +
+  theme_minimal() +
+  labs(title = "Number of motifs before and after 6mer filtering",
+       subtitle = "Filtering threshold: p-value <= 1/4^6",
+       y = "Count",
+       x = "Motif") +
+  theme(plot.title = element_text(hjust = 0.7 , size = 12),
+      plot.subtitle = element_text(hjust = 0.7 , size = 9))
+# Save plot
+ggsave("./results/summarys/motif_counts_before_after_6mer_filtering.pdf", width = 6, height = 4, dpi = 300, bg = "white")
+'
 
 # Distance of motifs to TSS : generate a file per sample with the distances of each motif to the nearest TSS
 mkdir -p ./motifs/dist_to_tss/
@@ -70,7 +108,7 @@ export CONDA_PKGS_DIRS=/data/najemd/TF_binding_cancer/conda_envs/conda_pkgs
 #conda create --prefix ./conda_envs/TF_binding_cancer_env r-base -c conda-forge -y
 #conda env export --prefix ./conda_envs/TF_binding_cancer_env > ./conda_envs/TF_binding_cancer_env.yml
 conda activate ./conda_envs/TF_binding_cancer_env
-#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr r-hexbin r-mass r-kernsmooth --yes
+#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr r-hexbin r-mass r-kernsmooth r-venndir --yes
 
 # 4) Overlap 6mer motifs with annotated methylation data to find intersecting regions and 
 # see if the motifs fall within methylated probes regions.
@@ -431,6 +469,127 @@ dev.off()
 '
 rm ./VennDiagram*.log  # remove temporary files created by VennDiagram package
 
+# create a barplot : motifs , peaks and HM450 for NRF1 
+Rscript -e '
+library(ggplot2)
+
+## 1) Read motif sets and build unique IDs (chr:start:end)
+motif_all   <- read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed")
+motif_ids   <- unique(with(motif_all, paste(V1, V2, V3, sep=":")))
+
+motif_peak  <- read.table("./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed")
+peak_ids    <- unique(with(motif_peak, paste(V1, V2, V3, sep=":")))
+
+motif_hm450 <- read.table("./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed")
+hm450_ids   <- unique(with(motif_hm450, paste(V1, V2, V3, sep=":")))
+
+## 2) Counts
+total   <- length(motif_ids)
+in_atac <- length(peak_ids)
+in_hm450<- length(hm450_ids)
+in_both <- length(intersect(peak_ids, hm450_ids))
+
+## 3) Build data frame with percentages + pretty labels
+df <- data.frame(
+  category = c("All NRF1 motifs",
+               "Motifs in ATAC peaks",
+               "Motifs with HM450 probes",
+               "Motifs in both ATAC + HM450"),
+  count = c(total, in_atac, in_hm450, in_both))
+
+df$category <- factor(
+  df$category,
+  levels = c("All NRF1 motifs",
+             "Motifs in ATAC peaks",
+             "Motifs with HM450 probes",
+             "Motifs in both ATAC + HM450"))
+
+df$percent <- df$count / total * 100
+df$label   <- sprintf("%d (%.2f%%)", df$count, df$percent)
+
+## 4) Plot
+p <- ggplot(df, aes(x = reorder(category, -count), y = count, fill = category)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = label), vjust = -0.4, size = 4) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 20, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+  plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = "NRF1 6-mer motif distribution across datasets",
+    subtitle = sprintf("all NRF1 6-mer motifs (n = %d)", total),
+    y = "Number of motifs",
+    x = NULL)
+
+print(p)
+
+ggsave("./results/summarys/NRF1_3D_vs_peaks_vs_HM450_barplot.pdf",plot = p, width = 10, height = 8, dpi = 300, bg = "white")
+'
+
+# create a barplot : motifs , peaks and HM450 for BANP 
+Rscript -e '
+library(ggplot2)
+
+## 1) Read motif sets and build unique IDs (chr:start:end)
+motif_all   <- read.table("./motifs/ZBTB33_filtered_6mer.MA0527.2.bed")
+motif_ids   <- unique(with(motif_all, paste(V1, V2, V3, sep=":")))
+
+motif_peak  <- read.table("./motifs/overlaps/motif_peak_overlaps/ZBTB33_filtered_6mer.MA0527.2_peak_overlaps.bed")
+peak_ids    <- unique(with(motif_peak, paste(V1, V2, V3, sep=":")))
+
+motif_hm450 <- read.table("./motifs/overlaps/intersected_motifs_HM450/ZBTB33_intersected_methylation.bed")
+hm450_ids   <- unique(with(motif_hm450, paste(V1, V2, V3, sep=":")))
+
+## 2) Counts
+total   <- length(motif_ids)
+in_atac <- length(peak_ids)
+in_hm450<- length(hm450_ids)
+in_both <- length(intersect(peak_ids, hm450_ids))
+
+## 3) Build data frame with percentages + pretty labels
+df <- data.frame(
+  category = c("All BANP motifs",
+               "Motifs in ATAC peaks",
+               "Motifs with HM450 probes",
+               "Motifs in both ATAC + HM450"),
+  count = c(total, in_atac, in_hm450, in_both))
+
+df$category <- factor(
+  df$category,
+  levels = c("All BANP motifs",
+             "Motifs in ATAC peaks",
+             "Motifs with HM450 probes",
+             "Motifs in both ATAC + HM450"))
+
+df$percent <- df$count / total * 100
+df$label   <- sprintf("%d (%.2f%%)", df$count, df$percent)
+
+## 4) Plot
+p <- ggplot(df, aes(x = reorder(category, -count), y = count, fill = category)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = label), vjust = -0.4, size = 4) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 20, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+  plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = "BANP 6-mer motif distribution across datasets",
+    subtitle = sprintf("all BANP 6-mer motifs (n = %d)", total),
+    y = "Number of motifs",
+    x = NULL)
+print(p)
+
+ggsave("./results/summarys/BANP_3D_vs_peaks_vs_HM450_barplot.pdf",plot = p, width = 10, height = 8, dpi = 300, bg = "white")
+'
+
+
+
 conda deactivate
 
 # 9) Linking the methylation data from /data/papers/tcga to the methylation folder 
@@ -665,6 +824,127 @@ legend("topright",
        cex=1.2)
 dev.off()
 '
+# Compare UMR, LMR, FMR percentages across all samples per cancer type using a barplot
+# 1) Create a summary table with percentages of UMR, LMR, FMR per sample and cancer type
+mkdir -p ./methylation/methylation_counts/
+# This file will contain: sample, cancer_type, pct_UMR, pct_LMR, pct_FMR only on cancer samples (not healthy)
+files=(/data/papers/tcga/TCGA*/*/*_annotated_methylation.bed.gz)
+total_files=${#files[@]}
+count=0
+
+for file in "${files[@]}"; do
+    count=$((count + 1))
+    echo "→ Processing sample $count / $total_files : $(basename "$file")"
+    sample=$(basename "$file" _annotated_methylation.bed.gz)
+    cancer_type=$(echo "$sample" | cut -d'-' -f2)
+    # Extract TCGA sample type (01=tumor, 11=normal, 06=metastasis…)
+    type=$(echo "$sample" | cut -d'-' -f4 | cut -c1-2)
+    # Skip healthy 
+    [[ "$type" == "11" ]] && continue
+    # Proceed only with TUMOR samples
+    meth_values=$(zcat "$file" | awk '{print $NF}')
+    total=$(echo "$meth_values" | wc -l)
+    n_UMR=$(echo "$meth_values" | awk '$1 >= 0 && $1 < 10' | wc -l)
+    n_LMR=$(echo "$meth_values" | awk '$1 >= 10 && $1 < 50' | wc -l)
+    n_FMR=$(echo "$meth_values" | awk '$1 >= 50 && $1 <= 100' | wc -l)
+    pct_UMR=$(awk -v n="$n_UMR" -v t="$total" 'BEGIN {printf "%.2f", (n / t) * 100}')
+    pct_LMR=$(awk -v n="$n_LMR" -v t="$total" 'BEGIN {printf "%.2f", (n / t) * 100}')
+    pct_FMR=$(awk -v n="$n_FMR" -v t="$total" 'BEGIN {printf "%.2f", (n / t) * 100}')
+    echo -e "$sample\t$cancer_type\t$pct_UMR\t$pct_LMR\t$pct_FMR" >> ./methylation/methylation_counts/methylation_region_percentages_per_cancer_samples.tsv
+done
+
+# 2)add a header to the file
+awk 'BEGIN{print "sample\tcancer_type\tpct_UMR\tpct_LMR\tpct_FMR"}{print}' ./methylation/methylation_counts/methylation_region_percentages_per_cancer_samples.tsv > ./methylation/methylation_counts/methylation_region_percentages_per_sample.tsv
+
+# 3) combine the samples of the same cancer type and taking the median percentage for each region into a new tsv file 
+Rscript -e '
+df <- read.table("./methylation/methylation_counts/methylation_region_percentages_per_sample.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+medians_by_cancer <- aggregate(
+  df[ , c("pct_UMR", "pct_LMR", "pct_FMR")],
+  by = list(Cancer = df$cancer_type),
+  FUN = median,
+  na.rm = TRUE)
+
+write.table(medians_by_cancer,file = "./methylation/methylation_counts/methylation_region_percentages_medians_by_cancer.tsv",sep = "\t", quote = FALSE, row.names = FALSE)
+'
+
+# 4) Plot barplot using ggplot2
+Rscript -e '
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+
+df <- read.table("./methylation/methylation_counts/methylation_region_percentages_medians_by_cancer.tsv",header = TRUE)
+
+df_long <- melt(df, id.vars = "Cancer",variable.name = "region", value.name = "percentage")
+
+# reorder cancers alphabetically or by median total percentage
+df_long$Cancer <- factor(df_long$Cancer, levels = sort(unique(df_long$Cancer)))
+
+# color palette
+palette <- brewer.pal(n = length(unique(df_long$region)), "Set2")
+
+pdf("./results/summarys/methylation_region_percentages_barplot.pdf",width = 14, height = 8)
+
+ggplot(df_long, aes(x = Cancer, y = percentage, fill = region)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(values = palette) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1, size = 10),
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+) +
+  labs(
+    title = "Methylation Region Percentages per Cancer Type",
+    x = "",
+    y = "Percentage (%)")
+dev.off()
+'
+
+# Compare the methylation distribution between cancer types using boxplot for UMR, LMR, FMR to visualize each point to see if we have outliers 
+Rscript -e '
+library(ggplot2)
+library(reshape2)
+
+# 1) Load per-sample percentages
+df <- read.table("./methylation/methylation_counts/methylation_region_percentages_per_sample.tsv",header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+# 2) Go to long format: one line = (sample, cancer_type, region, percentage)
+df_long <- melt(df,
+                id.vars = c("sample", "cancer_type"),
+                variable.name = "region",
+                value.name   = "percentage")
+
+# 3) Order cancer types alphabetically (for x-axis)
+df_long$cancer_type <- factor(df_long$cancer_type,levels = sort(unique(df_long$cancer_type)))
+
+# 4) Boxplot + jitter per region to see outliers ; jitter soo the points do not overlap and are visible
+pdf("./results/summarys/methylation_region_percentages_boxplot_per_sample.pdf",width = 16, height = 9)
+
+ggplot(df_long, aes(x = cancer_type, y = percentage, color = region)) +
+  geom_boxplot(outlier.colour = NA) +
+  geom_jitter(width = 0.2, alpha = 0.4, size = 0.7) +
+  facet_wrap(~ region, nrow = 3, scales = "fixed") +
+  scale_color_brewer(palette = "Set2") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x  = element_text(angle = 60, hjust = 1, size = 7),
+    strip.text = element_text(size = 12),
+    panel.grid.major.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = "UMR / LMR / FMR methylation percentages per sample",
+    x = "Cancer type",
+    y = "Percentage (%)",
+    color = "Region")
+
+dev.off()
+'
 
 # Distance of methylation sites to TSS : generate a file per sample with the distances of each methylation to the nearest TSS
 
@@ -850,8 +1130,8 @@ Rscript -e '
 library(KernSmooth)
 
 # Load files
-cancer  <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A26J//HM450_TCGA-BRCA-TCGA-A7-A26J-01A_1_annotated_methylation.bed.gz",  header=FALSE)
-healthy <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A26J//HM450_TCGA-BRCA-TCGA-A7-A26J-01A_2_annotated_methylation.bed.gz", header=FALSE)
+cancer  <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A0D9/HM450_TCGA-BRCA-TCGA-A7-A0D9-01A_1_annotated_methylation.bed.gz",  header=FALSE)
+healthy <- read.table("/data/papers/tcga/TCGA-BRCA/TCGA-A7-A0D9/HM450_TCGA-BRCA-TCGA-A7-A0D9-11A_1_annotated_methylation.bed.gz", header=FALSE)
 
 # Extract probe + methylation
 cancer_df  <- data.frame(probe=cancer[,4],  meth_cancer=cancer[,5])
@@ -862,27 +1142,41 @@ merged <- merge(cancer_df, healthy_df, by="probe")
 
 # Delta methylation
 delta <- merged$meth_cancer - merged$meth_healthy
+# delta thresholds
+thr <-10  # 10%
+
+# classification
+hypo  <- merged$meth_cancer < (merged$meth_healthy - thr)
+hyper <- merged$meth_cancer > (merged$meth_healthy + thr)
+equal <- !hypo & !hyper   # everything in between
 
 # Hypo/hyper definitions 
-n_hypo  <- sum(delta <  0, na.rm=TRUE)
-n_hyper <- sum(delta >  0, na.rm=TRUE)
-n_equal <- sum(delta == 0, na.rm=TRUE)
+n_hypo  <- sum(hypo,  na.rm=TRUE)
+n_hyper <- sum(hyper, na.rm=TRUE)
+n_equal <- sum(equal, na.rm=TRUE)
 
-tot <- length(delta)
+tot <- n_hypo + n_hyper + n_equal
+
 pct_hypo  <- round(100 * n_hypo  / tot, 1)
 pct_hyper <- round(100 * n_hyper / tot, 1)
 pct_equal <- round(100 * n_equal / tot, 1)
 
-pdf("./results/summarys/smoothScatter_delta_TCGA-BRCA-TCGA-A7-A26J_replicates.pdf", width=8, height=6)
+pdf("./results/summarys/smoothScatter_delta_TCGA-BRCA-TCGA-A7-A0D9.pdf", width=8, height=6)
 
 smoothScatter(
   merged$meth_healthy,
   merged$meth_cancer,
-  xlab="replicate1 Methylation (%)",
-  ylab="replicate2 Methylation (%)",
-  main="replicate1 vs replicate2 Cancer Methylation\n TCGA-BRCA-TCGA-A7-A26J. \n delta = replicate1 - replicate2, hypo: delta < 0, hyper: delta > 0")
+  xlab="cancer Methylation (%)",
+  ylab="healthy Methylation (%)",
+  main="Cancer vs Healthy Methylation\n TCGA-BRCA-TCGA-A7-A0D9. \n delta = cancer - healthy, hypo: delta < 10%, hyper: delta > 10%")
 
+
+# Identity line
 abline(0, 1, col="red", lwd=2)
+
+# ±10% shift lines
+abline(a = -10, b = 1, col = "blue", lwd = 2)   # 10% lower
+abline(a =  10, b = 1, col = "blue", lwd = 2) # 10% higher
 
 # Add annotation
 legend("left", bty="n",cex = 0.8, legend=c(
@@ -891,76 +1185,195 @@ legend("left", bty="n",cex = 0.8, legend=c(
   paste0("Unchanged: ", n_equal, " (", pct_equal, "%)")))
 dev.off()
 '
-
+#!!!!! Not correct yett 
 # plot PCA of methylation data across all samples across all cancer types:
-#This script builds a methylation matrix from TCGA tumor samples, subsampling up to 50 samples per cancer type.
-#It then performs a PCA to visualize how cancer types cluster based on genome-wide methylation profiles.
+# This script selects up to 50 methylation samples per cancer type, extracts the same 3000 CpG probes across all samples that have the highest informative value (standard deviation across samples),
+# builds a unified methylation matrix, and performs PCA to visualize global methylation clustering across cancer types.
 
 # create a list of all methylation files for cancer samples
-find /data/papers/tcga/TCGA-* -type f -name "HM450*01A_1_annotated_methylation.bed.gz" > methylation_files.txt
+find /data/papers/tcga/TCGA-* -type f -name "HM450*01A_1_annotated_methylation.bed.gz" > ./methylation/methylation_files.txt
 
 # build a matrix of methylation values : rows = probes, columns = samples
+# preprocess_methylation_files.R
+# select max 50 samples per cancer type
+Rscript -e '
+files <- scan("/data/najemd/TF_binding_cancer/methylation/methylation_files.txt", what = "")
+
+# extract cancer code from filename "HM450_TCGA-BRCA-..."
+cancer <- sapply(strsplit(basename(files), "-"), `[`, 2)
+
+# group and sample max 50
+set.seed(1)
+keep <- unlist(tapply(files, cancer, function(x) head(sample(x), 1)))
+
+writeLines(keep, "./methylation/methylation_files_1.txt")
+'
+# pca_methylation_50.R
 Rscript -e '
 library(ggplot2)
 
-# List of files , extract sample names without path
-files <- scan("methylation_files.txt", what = "character")
+# 1) Read subset of files (max 50 per cancer type)
+files <- scan("./methylation/methylation_files_50.txt", what = "")
 sample_names <- basename(files)
+cancer <- sapply(strsplit(sample_names, "-"), `[`, 2)
 
-# Extract Cancer type from filename: HM450_TCGA-BRCA-...
-cancer_all <- sub("HM450_TCGA-([A-Z0-9]+)-.*", "\\\\1", sample_names)
-
-# Subsample: max 50 samples per cancer type : it groups the indices of the files by cancer type, then samples up to max_per_cancer here 50 are randomly selected from each group.
-max_per_cancer <- 50
-set.seed(1)
-idx_list <- split(seq_along(files), cancer_all)
-keep_idx <- unlist(lapply(idx_list, function(ix) {if (length(ix) > max_per_cancer) sample(ix, max_per_cancer) else ix}))
-
-# rebuils the filtered files, sample names and cancer types
-files <- files[keep_idx]
-sample_names <- basename(files)
-cancer_types <- sub("HM450_TCGA-([A-Z0-9]+)-.*", "\\\\1", sample_names)
-
-# Build methylation matrix (rows = probes, cols = samples)
+# 2) Read first file to get number of probes
 ref <- read.table(files[1], header = FALSE)
-probes <- ref[, 4]
-meth_mat <- matrix(ref[, 5], nrow = length(probes), ncol = length(files))
-rownames(meth_mat) <- probes
-colnames(meth_mat) <- sample_names
+n_probes <- nrow(ref)
 
-# Fill matrix with other samples 
+# 3) Build methylation matrix: rows = probes, cols = samples (all probes)
+meth <- matrix(NA_real_, nrow = n_probes, ncol = length(files))
+meth[, 1] <- ref[, 5]
+
 for (i in 2:length(files)) {
+  cat("Reading file", i, "of", length(files), ":", files[i], "\n")
   dat <- read.table(files[i], header = FALSE)
-  idx <- match(probes, dat[, 4])
-  meth_mat[, i] <- dat[idx, 5]}
+  meth[, i] <- dat[, 5]}
 
-# PCA on all probes 
-meth_t <- t(meth_mat)
-pca <- prcomp(meth_t, center = TRUE, scale. = TRUE)
+# 3bis) Select top 3000 most variable probes
+probe_sd <- apply(meth, 1, sd, na.rm = TRUE)
+o <- order(probe_sd, decreasing = TRUE)
+
+n_keep <- min(3000, length(o))
+rows <- o[1:n_keep]
+
+# Subset matrix to these informative probes
+meth <- meth[rows, , drop = FALSE]
+
+# 4) PCA
+cat("Matrix completed. Cleaning NA rows and running PCA...\n")
+
+# transpose: rows = samples, cols = probes
+X <- t(meth)
+
+# remove constant / zero-variance probes to avoid issues in PCA
+sds <- apply(X, 2, sd, na.rm = TRUE)
+keep_cols <- sds > 0 & !is.na(sds)
+X <- X[, keep_cols, drop = FALSE]
+
+# enlever les samples qui ont des NA
+non_na <- complete.cases(X)
+X_clean <- X[non_na, , drop = FALSE]
+
+sample_names_clean <- sample_names[non_na]
+cancer_clean       <- cancer[non_na]
+
+cat("Samples kept after NA filtering:", nrow(X_clean), "sur", length(sample_names), "\n")
+
+# PCA
+pca <- prcomp(X_clean, center = TRUE, scale. = TRUE)
 var_expl <- summary(pca)$importance[2, 1:2] * 100
 
-# PCA scores data frame for plotting containing PC1, PC2, sample names and cancer types
+# data frame pour ggplot
 scores <- data.frame(
-  sample = rownames(pca$x),
+  sample = sample_names_clean,
   PC1    = pca$x[, 1],
   PC2    = pca$x[, 2],
-  cancer = factor(cancer_types))
+  cancer = factor(cancer_clean))
 
-pdf("./results/summarys/PCA_cancer_only_PC1_PC2.pdf", width = 9, height = 7)
+# build a shape vector for *all* cancer types
+all_cancers <- levels(factor(cancer_clean))
 
-ggplot(scores, aes(PC1, PC2, color = cancer, shape = cancer)) +
-  geom_point(size = 2.5, alpha = 0.9) +
+# default shape (e.g. 16) for everyone
+shape_map <- setNames(rep(16, length(all_cancers)), all_cancers)
+
+# override shapes for the 3 cancers you care about
+shape_map["TGCT"] <- 16  # solid circle (same as default if you want)
+shape_map["DLBC"] <- 17  # triangle
+shape_map["PCPG"] <- 15  # square
+
+pdf("./results/summarys/PCA_cancer_only_PC1_PC2_50perCancer.pdf", width = 10, height = 8)
+ggplot(scores, aes(x = PC1, y = PC2, color = cancer, shape = cancer)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_shape_manual(values = shape_map) +  # no na.translate needed now
   theme_minimal() +
   labs(
-    title = "PCA of Cancer Samples (max 50 per cancer type)",
+    title = "PCA methylation (max 50 samples per cancer type, ~3000 probes)",
     x = paste0("PC1 (", round(var_expl[1], 1), "%)"),
     y = paste0("PC2 (", round(var_expl[2], 1), "%)"),
     color = "Cancer type",
-    shape = "Cancer type")
-
+    shape = "Cancer type"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3, alpha = 1)),
+         shape = guide_legend(override.aes = list(size = 3, alpha = 1)))
 dev.off()
 '
-rm methylation_files.txt
+# clean up
+rm ./methylation/methylation_files_2.txt
+
+# plot PCA of ATAC peaks data across all samples across all cancer types:
+
+Rscript -e '
+files <- scan("/data/najemd/TF_binding_cancer/methylation/methylation_files.txt", what = "")
+
+# extract cancer code from filename "HM450_TCGA-BRCA-..."
+cancer <- sapply(strsplit(basename(files), "-"), `[`, 2)
+
+# group and sample max 50
+set.seed(1)
+keep <- unlist(tapply(files, cancer, function(x) head(sample(x), 50)))
+
+writeLines(keep, "./methylation/methylation_files_50.txt")
+'
+# pca_methylation_50.R
+Rscript -e '
+library(ggplot2)
+
+# 1) Read subset of files (max 50 per cancer type)
+files <- scan("./methylation/methylation_files_50.txt", what = "")
+sample_names <- basename(files)
+cancer <- sapply(strsplit(sample_names, "-"), `[`, 2)
+
+# 2) Read first file and choose a subset of probes (3000)
+ref <- read.table(files[1], header = FALSE)
+set.seed(1)
+n_keep <- min(3000, nrow(ref))      # 3000 probes here chosen randomly
+rows   <- sort(sample(seq_len(nrow(ref)), n_keep))
+
+# 3) Build methylation matrix: rows = probes, cols = samples
+meth <- matrix(NA_real_, nrow = n_keep, ncol = length(files))
+meth[, 1] <- ref[rows, 5]
+
+for (i in 2:length(files)) {
+  cat("Reading file", i, "of", length(files), ":", files[i], "\n")
+  dat <- read.table(files[i], header = FALSE)
+  meth[, i] <- dat[rows, 5]}
+
+# 4) PCA
+cat("Matrix completed. Running PCA...\n")
+
+# transpose: rows = samples, cols = probes
+X <- t(meth)
+
+# remove constant / zero-variance probes to avoid issues in PCA
+sds <- apply(X, 2, sd, na.rm = TRUE)
+keep <- sds > 0 & !is.na(sds)
+X <- X[, keep, drop = FALSE]
+
+pca <- prcomp(X, center = TRUE, scale. = TRUE)
+var_expl <- summary(pca)$importance[2, 1:2] * 100
+# 5) Plot PCA PC1 vs PC2 colored by cancer type
+scores <- data.frame(
+  sample = sample_names,
+  PC1    = pca$x[, 1],
+  PC2    = pca$x[, 2],
+  cancer = factor(cancer))
+
+pdf("./results/summarys/PCA_cancer_only_PC1_PC2_50perCancer_colored.pdf", width = 10, height = 8)
+ggplot(scores, aes(x = PC1, y = PC2, color = cancer)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(
+    title = "PCA methylation (max 50 samples per cancer type, ~3000 probes)",
+    x = paste0("PC1 (", round(var_expl[1], 1), "%)"),
+    y = paste0("PC2 (", round(var_expl[2], 1), "%)"),
+    color = "Cancer type") +
+  guides(color = guide_legend(override.aes = list(size = 3, alpha = 1)))
+dev.off()
+'
+# clean up
+rm ./methylation/methylation_files_50.txt
+
 
 # 14) statistics of SNV data :
 mkdir -p ./snv
@@ -1001,8 +1414,7 @@ hist(log10(snv_counts + 1),
 dev.off()
 '
 
-###### IMPORTANT !!!!!
-# number of SNVs per cancer type
+# number of SNVs per cancer type with unique SNVs only (removing duplicates across samples of the same cancer type)
 mkdir -p ./snv/snv_counts_per_cancer_type/
 # unique SNVs per cancer type
 # sed to extract cancer type from filename , first remove prefix and then removes everything after the first '-'
@@ -1020,23 +1432,15 @@ for cancer in $cancers; do
     printf "%s\t%s\n" "$cancer" "$count" >> ./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv
 done
 
-cut -f2,3 ./snv/snv_counts/snv_per_sample.tsv | awk -F'\t' '{
-    sample=$1;           # column 1 = sample name
-    snv=$2;              # column 2 = SNV count
-    split(sample,a,"-"); # split sample name using '-'
-    cancer=a[2];         # the 2nd element is the cancer type
-    print cancer "\t" snv;}' \
-    | awk '{sum[$1] += $2} END {for (c in sum) print c "\t" sum[c]}' | sort -r -k1,1  > ./snv/snv_counts_per_cancer_type/snv_total_per_cancer.tsv
-
 # Plot histogram of SNVs per cancer type
 Rscript -e '
 
-data <- read.table("./snv/snv_counts_per_cancer_type/snv_total_per_cancer.tsv")
+data <- read.table("./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv")
                    
 cancer_names <- data[,1]
 snv_counts   <- data[,2]
 snv_millions <- snv_counts / 1e6
-png("./results/summarys/snv_per_cancer_type_barplot.png", width=1200, height=900 , bg = "white")
+pdf("./results/summarys/snv_per_cancer_type_barplot.pdf", width=12, height=9 , bg = "white")
 
 barplot(
   snv_millions,
@@ -1148,3 +1552,753 @@ ggsave("./results/summarys/cancer_types_ATAC_SNV_Methylation_heatmap.png",p, wid
 rm ./snv/cancer_types_with_snv.txt
 rm ./methylation/cancer_types_with_methylation.txt
 rm ./peaks/cancer_types_with_peaks.txt
+
+# 16) Overlap SNV positions with ATAC peak positions per sample and count the number of SNVs that overlap peaks per sample
+mkdir -p ./snv/overlaps/snv_peak_overlap/
+
+for snv_file in ./snv/SNV_TCGA-*.vcf.gz; do
+    snv_base=$(basename "$snv_file" .vcf.gz | sed 's/^SNV_//')
+  
+    cancer=$(echo "$snv_base" | cut -d'-' -f1-2)          # TCGA-ACC
+    rest=${snv_base#${cancer}-}                           # TCGA-OR-A5J2-01A_vs_TCGA-OR-A5J2-10A_1
+    patient=$(echo "$rest" | cut -d'-' -f1-3)             # TCGA-OR-A5J2
+
+    peak_file="./peaks/ATAC_${cancer}_${patient}_1_peaks_macs.bed"
+
+    if [ -f "$peak_file" ]; then
+        echo "Processing $snv_base with peaks $peak_file"
+        # Convert VCF → BED
+        zcat "$snv_file" | grep -v '^#' | awk '{print $1"\t"$2-1"\t"$2}' \
+            | sort -k1,1 -k2,2n > "./snv/overlaps/snv_peak_overlap/${snv_base}_snv.bed"
+
+        # Overlap SNVs with peaks
+        bedtools intersect -u -a "./snv/overlaps/snv_peak_overlap/${snv_base}_snv.bed" -b "$peak_file" \
+            | wc -l > "./snv/overlaps/snv_peak_overlap/${snv_base}_snv_in_peaks.txt"
+        rm "./snv/overlaps/snv_peak_overlap/${snv_base}_snv.bed"
+        echo "Done $snv_base"
+    else
+        echo "No peak file for $snv_base (looked for $peak_file), skipping."
+    fi
+done
+
+# plot barplot of number of SNV in ATAC peak data
+Rscript -e '
+library(ggplot2)
+
+# 1) Files with SNVs-in-peaks counts
+overlap_files <- list.files("./snv/overlaps/snv_peak_overlap",pattern = "_snv_in_peaks.txt$",full.names = TRUE)
+
+# extract sample names that actually have ATAC since only 410 ATAC peaks files exist 
+samples_with_peaks <- sub("_snv_in_peaks.txt$", "", basename(overlap_files))
+# basename() removes all folder paths → keeps only the filename
+# sub() removes the suffix _snv_in_peaks.txt
+
+# 2) Total SNVs for those samples only 
+snv_counts <- read.table("./snv/snv_counts/snv_per_sample.tsv",header = FALSE, stringsAsFactors = FALSE)
+colnames(snv_counts) <- c("idx","sample","count")
+# subset to samples with ATAC data
+snv_sub <- snv_counts[snv_counts$sample %in% samples_with_peaks, ]
+total_snv <- sum(snv_sub$count)
+cat("Total SNVs in samples with ATAC:", total_snv, "\n")
+
+# 3) Sum SNVs in ATAC peaks : for each overlap file, read the count and sum them
+counts <- vapply(
+  overlap_files,
+  function(f) {as.numeric(readLines(f, n = 1))}, # read a single line and convert to numeric 
+  numeric(1)) # output type numeric of length 1
+
+snv_in_peaks <- sum(counts)
+cat("Total SNVs in ATAC peaks:", snv_in_peaks, "\n")
+
+# 4) Barplot in vs out
+df <- data.frame(category = c("SNVs in ATAC peaks", "SNVs outside ATAC peaks"),count = c(snv_in_peaks, total_snv - snv_in_peaks))
+df$percent <- round(100 * df$count / sum(df$count), 2)
+
+p <- ggplot(df, aes(x = category, y = count, fill = category)) +
+  geom_col() +
+  geom_text(aes(label = paste0(count, " (", percent, "%)")),vjust = -0.3) +
+  theme_minimal() +
+  labs(title = "Proportion of SNVs overlapping ATAC peaks",x = "", y = "Number of SNVs") +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1),legend.position = "none")
+
+ggsave("./results/summarys/SNV_in_vs_out_ATAC_barplot.pdf",p, width = 7, height = 5, bg = "white")
+'
+
+# 17) Overlap SNVs with methylation sites per sample and count the number of SNVs that overlap methylation sites per sample
+mkdir -p ./snv/overlaps/snv_methylation_overlap/
+
+for snv_file in ./snv/SNV_TCGA-*.vcf.gz; do
+    snv_base=$(basename "$snv_file" .vcf.gz)   # SNV_TCGA-ACC-TCGA-OR-A5J2-01A_vs_TCGA-OR-A5J2-10A_1
+    
+    # Remove SNV_ prefix for easier parsing
+    core=${snv_base#SNV_}                      # TCGA-ACC-TCGA-OR-A5J2-01A_vs_TCGA-OR-A5J2-10A_1
+    # cancer = TCGA-ACC
+    cancer=$(echo "$core" | cut -d'-' -f1-2 )  # ACC
+    # patient = TCGA-OR-A5J2
+    patient=$(echo "$core" | cut -d'-' -f3-5)
+    # tumor code = 01A (from "01A_vsTCGA-..." part)
+    tumor_block=$(echo "$core" | cut -d'-' -f6)   # 01A_vs_TCGA-OR-A5J2-10A_1
+    tumor_code=${tumor_block%%_*}                 # 01A
+
+    # Path to annotated methylation file of the tumor sample
+    methylation_file="/data/papers/tcga/${cancer}/${patient}/HM450_${cancer}-${patient}-${tumor_code}_1_annotated_methylation.bed.gz"
+    
+    if [ -f "$methylation_file" ]; then
+        echo "Processing $snv_base with methylation $methylation_file"
+
+        # Convert SNVs VCF -> BED (0-based start, 1-based end)
+        zcat "$snv_file" | grep -v '^#' | awk '{print $1"\t"$2-1"\t"$2}'| sort -k1,1 -k2,2n > "./snv/overlaps/snv_methylation_overlap/${snv_base}_snv.bed"
+
+        # Overlap SNVs with methylation probes
+        bedtools intersect -u -a "./snv/overlaps/snv_methylation_overlap/${snv_base}_snv.bed" -b "$methylation_file" | wc -l > "./snv/overlaps/snv_methylation_overlap/${snv_base}_snv_in_methylation.txt"
+        rm "./snv/overlaps/snv_methylation_overlap/${snv_base}_snv.bed"
+        echo "Done $snv_base"
+    else
+        echo "No methylation file for $snv_base (looked for $methylation_file), skipping."
+    fi
+done
+
+# plot barplot of number of SNV in methylation data
+Rscript -e '
+library(ggplot2)
+# 1) Files with SNVs-in-methylation counts
+overlap_files <- list.files("./snv/overlaps/snv_methylation_overlap",pattern = "_snv_in_methylation.txt$",full.names = TRUE)
+
+samples_with_methylation <- basename(overlap_files)
+samples_with_methylation <- sub("_snv_in_methylation.txt$", "", samples_with_methylation)
+samples_with_methylation <- sub("^SNV_", "", samples_with_methylation)  # <-- IMPORTANT
+
+# 2) Total SNVs for those samples only
+snv_counts <- read.table("./snv/snv_counts/snv_per_sample.tsv",header = FALSE, stringsAsFactors = FALSE)
+colnames(snv_counts) <- c("idx","sample","count")
+# subset to samples with methylation data
+snv_sub <- snv_counts[snv_counts$sample %in% samples_with_methylation, ]
+total_snv <- sum(snv_sub$count)
+cat("Total SNVs in samples with methylation:", total_snv, "\n")
+
+# 3) Sum SNVs in methylation probes : for each overlap file, read the count and sum them
+counts <- vapply(
+  overlap_files,
+  function(f) {as.numeric(readLines(f, n = 1))}, # read a single line and convert to numeric
+  numeric(1)) # output type numeric of length 1
+snv_in_methylation <- sum(counts) 
+cat("Total SNVs in methylation probes:", snv_in_methylation, "\n")
+
+# 4) Barplot in vs out
+df <- data.frame(category = c("SNVs in methylation probes", "SNVs outside methylation probes"),count = c(snv_in_methylation, total_snv - snv_in_methylation))
+df$percent <- round(100 * df$count / sum(df$count), 2)
+p <- ggplot(df, aes(x = category, y = count, fill = category)) +
+  geom_col() +
+  geom_text(aes(label = paste0(count, " (", percent, "%)")),  vjust = -0.3) +
+  theme_minimal() +
+  labs(title = "Proportion of SNVs overlapping Methylation probes",x = "", y = "Number of SNVs") +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1),legend.position = "none")
+ggsave("./results/summarys/SNV_in_vs_out_Methylation_barplot.pdf",p, width = 7, height = 5, bg = "white")
+'
+# 18) Overlap SNV in TF motifs and ATAC peaks 
+mkdir -p ./snv/overlaps/intersected_motifs_snv/
+motifs_in_peaks_NRF1=./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed
+motifs_in_peaks_BANP=./motifs/overlaps/motif_peak_overlaps/ZBTB33_filtered_6mer.MA0527.2_peak_overlaps.bed
+bedtools intersect -u -a ./snv/all_unique_SNVs_across_cancers.bed -b $motifs_in_peaks_NRF1 > ./snv/overlaps/intersected_motifs_snv/NRF1_SNVs_in_motifs_in_peaks.bed
+bedtools intersect -u -a ./snv/all_unique_SNVs_across_cancers.bed -b $motifs_in_peaks_BANP > ./snv/overlaps/intersected_motifs_snv/BANP_SNVs_in_motifs_in_peaks.bed
+
+# create a barplot : motifs , peaks and snv for TF : the % is calculated based on the total number of motifs of each TF
+Rscript -e '
+library(ggplot2)
+
+## 1) Read motif sets and build unique IDs (chr:start:end)
+motif_all   <- read.table("./motifs/ZBTB33_filtered_6mer.MA0527.2.bed")
+motif_ids   <- unique(with(motif_all, paste(V1, V2, V3, sep=":")))
+
+motif_peak  <- read.table("./motifs/overlaps/motif_peak_overlaps/ZBTB33_filtered_6mer.MA0527.2_peak_overlaps.bed")
+peak_ids    <- unique(with(motif_peak, paste(V1, V2, V3, sep=":")))
+
+motif_snv <- read.table("./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_motifskept.bed")
+snv_ids   <- unique(with(motif_snv, paste(V1, V2, V3, sep=":")))
+
+## 2) Counts
+total      <- length(motif_ids)
+in_atac    <- length(peak_ids)
+in_variant <- length(snv_ids)
+in_both    <- length(intersect(peak_ids, snv_ids))
+
+## 3) Build data frame with percentages + pretty labels
+df <- data.frame(
+  category = c("All BANP motifs",
+               "Motifs with variants",
+               "Motifs in ATAC peaks",
+               "Motifs in ATAC peaks with variants"),
+  count = c(total, in_variant, in_atac, in_both))
+
+# make sure factor levels MATCH the labels above and are in a nice order
+df$category <- factor(
+  df$category,
+  levels = c("All BANP motifs",
+             "Motifs with variants",
+             "Motifs in ATAC peaks",
+             "Motifs in ATAC peaks with variants"))
+
+df$percent <- df$count / total * 100
+df$label   <- sprintf("%d (%.2f%%)", df$count, df$percent)
+
+## 4) Plot
+p <- ggplot(df, aes(x = category, y = count, fill = category)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = label), vjust = -0.4, size = 4) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 20, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = "BANP 6-mer motif distribution across datasets",
+    subtitle = sprintf("All BANP 6-mer motifs (n = %d)", total),
+    y = "Number of motifs",
+    x = NULL)
+
+print(p)
+
+ggsave("./results/summarys/BANP_3D_vs_peaks_vs_SNV_barplot.pdf",plot = p, width = 10, height = 8, dpi = 300, bg = "white")
+'
+
+# One Barplot too have motifs , peaks and snv for TF : the % is calculated based on the total number of motifs of each TF
+Rscript -e '
+library(ggplot2)
+
+## 1) Read motif sets and build unique IDs (chr:start:end)
+motif_all   <- read.table("./motifs/ZBTB33_filtered_6mer.MA0527.2.bed")
+motif_ids   <- unique(with(motif_all, paste(V1, V2, V3, sep=":")))
+
+motif_peak  <- read.table("./motifs/overlaps/motif_peak_overlaps/ZBTB33_filtered_6mer.MA0527.2_peak_overlaps.bed")
+peak_ids    <- unique(with(motif_peak, paste(V1, V2, V3, sep=":")))
+
+motif_hm450 <- read.table("./motifs/overlaps/intersected_motifs_HM450/ZBTB33_intersected_methylation.bed")
+hm450_ids   <- unique(with(motif_hm450, paste(V1, V2, V3, sep=":")))
+
+motif_snv <- read.table("./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_motifskept.bed")
+snv_ids   <- unique(with(motif_snv, paste(V1, V2, V3, sep=":")))
+
+## 2) Counts
+total          <- length(motif_ids)
+in_atac        <- length(peak_ids)
+in_hm450       <- length(hm450_ids)
+in_snv         <- length(snv_ids)
+in_peak_hm450  <- length(intersect(peak_ids, hm450_ids))
+in_peak_snv    <- length(intersect(peak_ids, snv_ids))
+
+## 3) Build data frame with percentages + pretty labels
+df <- data.frame(
+  category = c("All BANP motifs",
+               "Motifs with variants",
+               "Motifs in ATAC peaks",
+               "Motifs in ATAC peaks with variants",
+               "Motifs with HM450 probes",
+               "Motifs in ATAC peaks and HM450"),
+  count = c(total,
+            in_snv,
+            in_atac,
+            in_peak_snv,
+            in_hm450,
+            in_peak_hm450))
+
+df$category <- factor(
+  df$category,
+  levels = c("All BANP motifs",
+             "Motifs with variants",
+             "Motifs in ATAC peaks",
+             "Motifs in ATAC peaks with variants",
+             "Motifs with HM450 probes",
+             "Motifs in ATAC peaks and HM450"))
+
+df$percent <- df$count / total * 100
+df$label   <- sprintf("%d (%.2f%%)", df$count, df$percent)
+
+## 4) Plot
+p <- ggplot(df, aes(x = category, y = count, fill = category)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = label), vjust = -0.4, size = 4) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 20, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = "BANP 6-mer motif distribution across datasets",
+    subtitle = sprintf("All BANP 6-mer motifs (n = %d)", total),
+    y = "Number of motifs",
+    x = NULL)
+
+print(p)
+
+ggsave("./results/summarys/BANP_3D_vs_peaks_vs_HM450_vs_SNV_barplot.pdf",plot = p, width = 10, height = 8, dpi = 300, bg = "white")
+'
+# one barplot for both TFs NRF1 and BANP together : this script creates a small barplot showing the percentage of motifs in each category for both TFs 
+Rscript -e '
+library(ggplot2)
+
+# Function to compute stats
+compute_tf_stats <- function(tf_name, motif_file, peak_file, hm450_file, snv_file) {
+
+  motif_all <- read.table(motif_file)
+  motif_ids <- unique(with(motif_all, paste(V1, V2, V3, sep=":")))
+  total <- length(motif_ids)
+
+  motif_peak <- read.table(peak_file)
+  peak_ids   <- unique(with(motif_peak, paste(V1, V2, V3, sep=":")))
+  in_atac    <- length(peak_ids)
+
+  motif_hm450 <- read.table(hm450_file)
+  hm450_ids   <- unique(with(motif_hm450, paste(V1, V2, V3, sep=":")))
+  in_hm450    <- length(hm450_ids)
+
+  motif_snv <- read.table(snv_file)
+  snv_ids   <- unique(with(motif_snv, paste(V1, V2, V3, sep=":")))
+  in_snv    <- length(snv_ids)
+
+  in_peak_snv   <- length(intersect(peak_ids, snv_ids))
+  in_peak_hm450 <- length(intersect(peak_ids, hm450_ids))
+
+  data.frame(
+    TF = tf_name,
+    category = c(
+      "All motifs",
+      "Motifs with variants",
+      "Motifs in ATAC peaks",
+      "Motifs in ATAC peaks + variants",
+      "Motifs with HM450 probes",
+      "Motifs in ATAC peaks + HM450"
+    ),
+    count = c(total, in_snv, in_atac, in_peak_snv, in_hm450, in_peak_hm450),
+    total = total
+  )
+}
+
+# Load NRF1
+df_nrf1 <- compute_tf_stats(
+  "NRF1",
+  "./motifs/NRF1_filtered_6mer.MA0506.3.bed",
+  "./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed",
+  "./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed",
+  "./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_motifskept.bed")
+
+# Load BANP
+df_banp <- compute_tf_stats(
+  "BANP",
+  "./motifs/ZBTB33_filtered_6mer.MA0527.2.bed",
+  "./motifs/overlaps/motif_peak_overlaps/ZBTB33_filtered_6mer.MA0527.2_peak_overlaps.bed",
+  "./motifs/overlaps/intersected_motifs_HM450/ZBTB33_intersected_methylation.bed",
+  "./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_motifskept.bed")
+
+# Merge datasets
+df <- rbind(df_nrf1, df_banp)
+
+df$category <- factor(df$category,
+  levels = c("All motifs",
+             "Motifs with variants",
+             "Motifs in ATAC peaks",
+             "Motifs in ATAC peaks + variants",
+             "Motifs with HM450 probes",
+             "Motifs in ATAC peaks + HM450"))
+
+# Percent values
+df$percent <- df$count / df$total * 100
+
+
+# Short X-axis labels
+df$category_short <- factor(
+  df$category,
+  labels = c("All",
+             "Variants",
+             "ATAC",
+             "ATAC+Var",
+             "HM450",
+             "ATAC+HM450"),
+  levels = levels(df$category))
+
+# Compact, small plot
+
+p <- ggplot(df, aes(x = category_short, y = percent, fill = TF)) +
+  geom_col(position = position_dodge(width = 0.3), width = 0.25) +   # thin, close bars
+  theme_minimal(base_size = 6) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, size = 5),
+    axis.text.y = element_text(size = 5),
+    axis.title.x = element_text(size = 6),
+    axis.title.y = element_text(size = 6),
+    plot.title  = element_text(size = 7, hjust = 0.5),
+    plot.subtitle = element_text(size = 6, hjust = 0.5),
+    legend.position = "top",
+    legend.text = element_text(size = 5),
+    legend.title = element_text(size = 6)) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  labs(
+    title = "NRF1 and BANP motif distribution across datasets",
+    subtitle = "Percentage of total motifs per TF",
+    x = "",
+    y = "Percentage of motifs (%)",
+    fill = "TF")
+
+# Save figure
+ggsave("./results/summarys/NRF1_BANP_combined_barplot_PERCENT_ULTRASMALL.pdf",p,width = 4,height = 2.5,dpi = 300,bg = "white")
+'
+
+# 19) Heatmap to show SNVs across differents cancer types 
+
+# 1)Build a list of unique SNVs per cancer type
+mkdir -p ./snv/snv_unique_per_cancer/
+# extract cancer types from filenames
+cancers=$(find ./snv -maxdepth 1 -name 'SNV_TCGA-*.vcf.gz' | sed 's#.*/SNV_TCGA-##; s/-.*//' | sort -u)
+
+for cancer in $cancers; do
+    echo "→ Processing $cancer"
+    zgrep -hv "^#" ./snv/SNV_TCGA-"$cancer"-*.vcf.gz \
+        | awk '{print $1":"$2":"$4":"$5}' \
+        | sort -u \
+        | gzip > ./snv/snv_unique_per_cancer/${cancer}_unique_SNVs.txt.gz
+    echo "Done $cancer"
+done
+
+# 2)Create a unified list of all unique SNVs across all cancer types
+zcat ./snv/snv_unique_per_cancer/*_unique_SNVs.txt.gz | sort -u | gzip > ./snv/all_unique_SNVs_across_cancers.txt.gz
+
+# 3) Build a presence/absence matrix of SNVs (rows = SNVs, columns = cancer types)
+outfile="./snv/snv_presence_matrix.tsv"
+
+# header : SNV    ACC  BLCA  BRCA  COAD ...
+echo -ne "SNV" > $outfile # first column name of the header is SNV
+for f in ./snv/snv_unique_per_cancer/*_unique_SNVs.txt.gz; do
+    cancer=$(basename "$f" _unique_SNVs.txt.gz)
+    echo -ne "\t${cancer}" >> $outfile # add a tab + the cancer name for each type of cancer
+done
+echo "" >> $outfile # add a newline at the end of the header
+  
+# Filter only SNV that overlap with motifs of NRF1 and BANP: 
+# overlap SNV with motifs of NRF1 and BANP 
+mkdir -p ./snv/overlaps/intersected_motifs_snv/ 
+zcat ./snv/all_unique_SNVs_across_cancers.txt.gz | awk -F':' -v OFS='\t' '{print $1, $2-1, $2, $0}' | sort -k1,1 -k2,2n > ./snv/all_unique_SNVs_across_cancers.bed
+
+# transform the SNV data file to a bed file : chrom pos-1 pos nom:chrom:pos:reference:variation intersecting with the motif bed files and keep only the SNVs that overlap with the motifs
+bedtools intersect -u -a ./snv/all_unique_SNVs_across_cancers.bed -b ./motifs/NRF1_filtered_6mer.MA0506.3.bed > ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs.bed 
+bedtools intersect -u -a ./snv/all_unique_SNVs_across_cancers.bed -b ./motifs/ZBTB33_filtered_6mer.MA0527.2.bed > ./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs.bed
+
+# 4) Keep only the motifs that have SNV inside (instead of keeping the SNV that overlap with motifs) and plot the number of motifs that have SNV inside for NRF1 and BANP
+# transform the SNV data file to a bed file but intersecting with the motif bed keeping the motif that have SNV inside
+# NRF1_intersected_SNVs_motifskept.bed contains the motifs that have SNV inside 
+bedtools intersect -u -a ./motifs/NRF1_filtered_6mer.MA0506.3.bed -b ./snv/all_unique_SNVs_across_cancers.bed > ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_motifskept.bed 
+bedtools intersect -u -a ./motifs/ZBTB33_filtered_6mer.MA0527.2.bed -b ./snv/all_unique_SNVs_across_cancers.bed > ./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_motifskept.bed
+
+# count number of SNVs that overlap with NRF1 and BANP motifs
+cat ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_motifskept.bed  | wc -l > ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_count_kept.tsv
+cat ./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_motifskept.bed  | wc -l > cat ./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_motifskept.bed  | wc -l > ./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_count_kept.tsv
+# Plot barplot of SNV counts in NRF1 and BANP motifs
+Rscript -e '
+library(ggplot2)
+
+# Motif names
+motifs <- c("NRF1", "BANP")
+
+# Read the numeric counts from the .tsv files (SNVs in motifs)
+snv_counts <- c(
+  as.numeric(readLines("./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_count_kept.tsv")),
+  as.numeric(readLines("./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_count_kept.tsv")))
+
+# TOTAL motif counts
+total_motifs <- c(
+  843539,  
+  168557)
+
+# Build data frame
+df <- data.frame(
+  Motif       = motifs,
+  SNV_count   = snv_counts,
+  TotalMotifs = total_motifs)
+
+# Percentage of SNVs relative to all motifs
+df$Percent <- df$SNV_count / df$TotalMotifs * 100
+
+# Label to show **inside** the bar: value + percentage
+df$BarLabel <- sprintf("%d\n(%.2f%%)", df$SNV_count, df$Percent)
+
+# X-axis label with total motifs **under** motif name
+df$MotifLabel <- sprintf("%s\n(n = %d motifs)", df$Motif, df$TotalMotifs)
+
+# Plot
+p <- ggplot(df, aes(x = MotifLabel, y = SNV_count, fill = Motif)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = BarLabel),
+            vjust = -0.3,
+            size = 3) +
+  theme_minimal() +
+  labs(
+    title = "NRF1 and BANP motifs that contain variants",
+    y = "Number of variants in motifs",
+    x = "Motif (TF) and total motif count") +
+  theme(
+    plot.title   = element_text(hjust = 0.5, size = 12),
+    axis.text    = element_text(size = 10),
+    axis.title   = element_text(size = 11),
+    legend.position = "none")
+
+print(p)
+
+ggsave("./results/summarys/SNV_counts_in_motifs_NRF1_BANP_kept.pdf",plot = p, width = 10, height = 12, dpi = 300, bg = "white")
+'
+
+# 20) Build presence/absence matrix of SNVs in NRF1 and BANP motifs per cancer type using these files ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs.bed and ./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs.bed
+# transform the intersection of SNV in motifs bed file to a list of SNV ids only
+# note that the SNV id is in the 4th column of the bed file and that it will generate a unique list of SNV ids only so less lines than the bed file
+# presence and absence matrix separtly for each type of cancer type for NRF1 and BANP motifs
+
+# 1) make a list of SNV ids that overlap with NRF1 and BANP motifs
+cut -f4 ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs.bed | sort -u > ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_ids.txt
+snv_ids_NRF1="./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_ids.txt"
+# folder for intermediate columns
+mkdir -p ./snv/snv_presence_columns_NRF1/
+
+build_column_NRF1() {
+    local snv_list="$1"      # ./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_ids.txt
+    local cancer_file="$2"   # ./snv/snv_unique_per_cancer/BRCA_unique_SNVs.txt.gz
+    local out_file="$3"      # ./snv/snv_presence_columns_NRF1/BRCA.col
+
+    local cancer
+    cancer=$(basename "$cancer_file" _unique_SNVs.txt.gz)
+    echo "  → building column for $cancer"
+
+    awk -v OFS='\t' '
+        NR==FNR { has[$1]=1; next }    # first file = cancer SNVs → store in hash
+        {
+            val = ($1 in has ? 1 : 0); # if this SNV appears in cancer → 1 else 0
+            print $1, val;
+        }
+    ' <(zcat "$cancer_file") "$snv_list" > "$out_file"
+}
+
+
+# 2) loop over cancers in parallel
+threads=5    # threads minimum to keep free 
+max_jobs=2   # max parallel jobs
+job_count=0
+
+for f in ./snv/snv_unique_per_cancer/*_unique_SNVs.txt.gz; do
+    cancer=$(basename "$f" _unique_SNVs.txt.gz)
+    out="./snv/snv_presence_columns_NRF1/${cancer}.col"
+
+    # check available CPU before launching a new job 
+    CPU=$(top -b -n 2 | awk '($1~"%Cpu"){cpu=$2}END{print int(48*(100-cpu)/100)}')
+    while [ "$CPU" -le "$threads" ]; do
+        echo "[$cancer] attente CPU : seulement $CPU CPU libres (min = $threads)"
+        sleep 60
+        CPU=$(top -b -n 2 | awk '($1~"%Cpu"){cpu=$2}END{print int(48*(100-cpu)/100)}')
+    done
+
+    echo "→ Lancement job pour $cancer (CPU libres = $CPU)"
+    build_column_NRF1 "$snv_ids_NRF1" "$f" "$out" &
+
+    job_count=$((job_count + 1))
+    if [ "$job_count" -ge "$max_jobs" ]; then
+        # wait for current jobs to finish before launching new ones
+        wait
+        job_count=0
+    fi
+done
+
+# final 
+wait
+echo "All jobs for NRF1 columns are done."
+
+# 3) merge toutes les colonnes en une seule matrice
+first_file=./snv/snv_presence_columns_NRF1/ACC.col
+
+# 1) Extract SNV IDs from first file → this must become tmp.matrix
+awk '{print $1}' "$first_file" > ./snv/tmp.matrix
+
+# 2) Loop through all columns and add only the 0/1 column
+for f in ./snv/snv_presence_columns_NRF1/*.col; do
+    base=$(basename "$f" .col)
+
+    echo "→ Adding $base"
+
+    # Extract column 2 robustly (cut may fail if spacing inconsistent)
+    awk '{print $2}' "$f" > "./snv/${base}.values"
+
+    # paste SNV column + new cancer column
+    paste ./snv/tmp.matrix "./snv/${base}.values" > ./snv/tmp2.matrix
+
+    mv ./snv/tmp2.matrix ./snv/tmp.matrix
+    rm "./snv/${base}.values"
+done
+
+# After loop → rename tmp.matrix to final matrix
+mv ./snv/tmp.matrix ./snv/snv_presence_matrix_NRF1.tsv
+
+# 3) add header
+header=./snv/header.tmp
+echo -ne "SNV" > "$header"
+
+for f in ./snv/snv_presence_columns_NRF1/*.col; do
+    base=$(basename "$f" .col)
+    echo -ne "\t$base" >> "$header"
+done
+echo >> "$header"
+
+# Combine header + matrix into final file
+cat "$header" ./snv/snv_presence_matrix_NRF1.tsv > ./snv/snv_presence_matrix_NRF1.with_header.tsv
+
+# Replace old file
+mv ./snv/snv_presence_matrix_NRF1.with_header.tsv ./snv/snv_presence_matrix_NRF1.tsv
+rm "$header"
+
+
+# 11) heatmap of raw shared SNVs between cancer types IN A LOG10 SCALE
+# it also adds the clustering groups cancers that have similar patterns of shared NRF1-motif SNVs across all cancer types
+Rscript -e '
+library(pheatmap)
+
+data <- read.table("./snv/snv_presence_matrix_NRF1.tsv",header = TRUE, stringsAsFactors = FALSE)
+mat <- as.matrix(data[ , -1])
+rownames(mat) <- data$SNV
+
+# shared[i,j] = number of SNVs present in both cancer i and j
+shared <- t(mat) %*% mat
+
+# ---- log10 transform to enhance contrast ----
+shared_log <- log10(shared + 1)   # +1 to avoid log10(0)
+
+# remove diagonal from the matrix we plot
+diag(shared_log) <- NA
+
+# compute color range only on off-diagonal
+min_val <- min(shared_log, na.rm = TRUE)
+max_val <- max(shared_log, na.rm = TRUE)
+cat("Color range (log10 scale):", min_val, "to", max_val, "\n")
+
+pdf("./results/summarys/SNV_shared_NRF1_variants_between_cancer_types_heatmap_rescaled.pdf",width = 10, height = 8, bg = "white")
+
+pheatmap(shared_log,
+         main = "Number of shared NRF1-motif variants\nbetween cancer types (log10 scale)",
+         cluster_cols = TRUE,
+         cluster_rows = TRUE,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         color = colorRampPalette(c("white","steelblue","navy"))(200),
+         breaks = seq(min_val, max_val, length.out = 201),
+         na_col = "grey90")   # diagonal = grey
+
+dev.off()
+'
+
+# 21) Heatmap with the percentage oof shared variants between the different cancer types : 
+Rscript -e '
+library(pheatmap)
+
+# 1) Read presence/absence matrix
+#    Rows = SNVs, columns = SNV + cancer types
+data <- read.table("./snv/snv_presence_matrix_BANP.tsv",header = TRUE,stringsAsFactors = FALSE)
+
+# 2) Sort cancer types alphabetically (exclude first column "SNV")
+cancer_cols  <- colnames(data)[-1]
+cancer_order <- sort(cancer_cols)
+
+# Rebuild matrix with columns in alphabetical order
+mat <- as.matrix(data[, cancer_order])
+rownames(mat) <- data$SNV
+
+# 3) Shared SNV counts between cancer types
+#    shared[i,j] = number of SNVs present in BOTH cancer i and j
+shared <- t(mat) %*% mat
+
+# 4) Convert counts to PERCENT of SNVs in the row cancer type
+#    pct_shared[row = A, col = B] = (shared(A,B) / total SNVs in A) * 100
+totals <- diag(shared)                          # total SNVs per cancer
+pct_shared <- sweep(shared, 1, totals, FUN = "/") * 100
+
+# Remove diagonal (100%) so scale focuses on between-cancer similarity
+diag(pct_shared) <- NA
+
+# 5) Color range based on off-diagonal values only
+min_val <- min(pct_shared, na.rm = TRUE)
+max_val <- max(pct_shared, na.rm = TRUE)
+cat("NRF1: percentage range:", min_val, "to", max_val, "\n")
+
+pdf("./results/summarys/SNV_shared_BANP_percentage_between_cancer_types_heatmap.pdf",width = 10, height = 8, bg = "white")
+
+pheatmap(pct_shared,
+         main = "Percentage of shared BANP-motif variants\nbetween cancer types",
+         cluster_cols = TRUE,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         color = colorRampPalette(c("white","steelblue","navy"))(200),
+         breaks = seq(min_val, max_val, length.out = 201),
+         na_col = "grey90")
+
+dev.off()
+'
+# 22) Venn diagram of motifs with peaks and methylation probes or SNVs
+Rscript -e '
+library(VennDiagram)
+library(grid)
+
+# 1) Load NRF1 motif sets
+motif_all <- unique(with(read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed"),paste(V1, V2, V3, sep=":")))
+
+motif_peak <- unique(with(read.table("./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed"),paste(V1, V2, V3, sep=":")))
+
+motif_variants <- unique(with(read.table("./snv/overlaps/intersected_motifs_snv/NRF1_intersected_SNVs_motifskept.bed"),paste(V1, V2, V3, sep=":")))
+
+# 2) 3-way Venn
+venn.plot <- venn.diagram(
+  x = list(
+    "All NRF1 motifs"          = motif_all,
+    "Motifs in ATAC peaks"     = motif_peak,
+    "Motifs with variants" = motif_variants),
+  filename = NULL,
+  fill = c("steelblue", "lightgreen", "salmon"),
+  alpha = 0.5,
+  lwd = 2,
+  cex = 1.3,
+  cat.cex = 1.3,
+  main = "NRF1 motif overlap: genomic, accessible, and variant-covered")
+
+# 3) Save to PDF
+pdf("./results/summarys/NRF1_motifs_ATAC_variant_3D_venn.pdf", width = 6, height = 6)
+grid.draw(venn.plot)
+dev.off()
+'
+# 23) Proportional Euler diagram of motifs with peaks and methylation probes
+
+Rscript -e '
+library(eulerr)
+
+# Charger les sets de motif (6-mer)
+motif_all <- unique(with(read.table("./motifs/ZBTB33_filtered_6mer.MA0527.2.bed"),paste(V1, V2, V3, sep = ":")))
+
+motif_peak <- unique(with(read.table("./motifs/overlaps/motif_peak_overlaps/ZBTB33_filtered_6mer.MA0527.2_peak_overlaps.bed"),paste(V1, V2, V3, sep = ":")))
+
+motif_hm450 <- unique(with(read.table("./motifs/overlaps/intersected_motifs_HM450/ZBTB33_intersected_methylation.bed"),paste(V1, V2, V3, sep = ":")))
+
+# Liste nommée de sets 
+sets <- list(
+  "All BANP motifs"    = motif_all,
+  "Motifs in ATAC"     = motif_peak,
+  "Motifs with HM450"  = motif_hm450)
+
+# Calcul du diagramme proportionnel avec eulerr
+fit <- euler(sets)
+
+pdf("./results/summarys/BANP_motifs_ATAC_HM450_eulerr.pdf", width = 7, height = 7)
+plot(
+  fit,
+  fills = c("#4C72B0", "#55A868", "#C44E52"),  # ta palette BANP
+  edges = "black",
+  quantities = list(type = "counts", cex = 0.9),
+  labels = list(cex = 1.1),
+  main = "BANP motifs: genome-wide, accessible,\n and covered by HM450 probes")
+dev.off()
+'
+
+
+
