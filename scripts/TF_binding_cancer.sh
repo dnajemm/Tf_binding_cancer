@@ -44,6 +44,34 @@ ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
 # Save plot
 ggsave("./results/summarys/motif_counts_before_after_6mer_filtering.pdf", width = 6, height = 4, dpi = 300, bg = "white")
 '
+# barplot to see only the number of motifs after filtering
+Rscript -e '
+library(ggplot2)
+motifs <- c("NRF1", "BANP")
+after_counts  <- c( nrow(read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed")),
+                    nrow(read.table("./motifs/ZBTB33_filtered_6mer.MA0527.2.bed")) )
+df <- data.frame(
+  Motif  = motifs,
+  Count  = after_counts
+)
+# Plot
+ggplot(df, aes(x = Motif, y = Count, fill = Motif)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = Count),
+          vjust = -0.3,
+          size = 4) +
+  theme_minimal() +
+  labs(title = "Number of motifs after 6mer filtering",
+       subtitle = "Filtering threshold: p-value <= 1/4^6",
+       y = "Count",
+       x = "Motif") +
+  theme(plot.title = element_text(hjust = 0.7 , size = 12),
+      plot.subtitle = element_text(hjust = 0.7 , size = 9),
+      legend.position = "none")
+# Save plot
+ggsave("./results/summarys/motif_counts_after_6mer_filtering.pdf", width = 5, height = 4, dpi = 300, bg = "white")
+'
+
 
 # Distance of motifs to TSS : generate a file per sample with the distances of each motif to the nearest TSS
 mkdir -p ./motifs/dist_to_tss/
@@ -677,6 +705,84 @@ p <- ggplot(df, aes(x = "", y = count, fill = cancer_type)) +
 
 # Save PDF
 ggsave("./results/summarys/pie_chart_cancer_peaks_count.pdf",plot = p,width = 8,height = 5,dpi = 300,bg = "white")
+'
+# Plot histogram of nbr of Peaks per cancer type
+# count peaks number per cancer type we have to merge all peak files per cancer type first and take the count of merged peaks
+
+
+# Get list of cancer types from peak filenames
+# Filenames look like: ATAC_TCGA-BRCA_TCGA-AR-A0TP_1_peaks_macs.bed
+mkdir -p ./peaks/peaks_counts_per_cancer_type/
+
+# 0) empty the output file (or create it)
+> ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv
+
+# 1) list cancer codes from filenames
+#    ATAC_TCGA-BRCA_TCGA-AR-A0TP_1_peaks_macs.bed  →  TCGA-BRCA
+cancers=$(ls ./peaks/ATAC_TCGA-*_*_peaks_macs.bed \
+          | sed 's#.*/ATAC_##; s/_.*//' \
+          | sort -u)
+
+# 2) for each cancer, merge all peaks and count merged intervals
+for cancer in $cancers; do
+    echo "→ Processing $cancer ..."
+
+    count=$(cat ./peaks/ATAC_${cancer}_*_peaks_macs.bed \
+            | cut -f1-3 \
+            | sort -k1,1 -k2,2n \
+            | bedtools merge -i stdin \
+            | wc -l)
+
+    printf "%s\t%d\n" "$cancer" "$count" >> ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv
+done
+
+cut -d "-" -f2 ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv > ./peaks/peaks_counts_per_cancer_type/tmp.tsv
+mv ./peaks/peaks_counts_per_cancer_type/tmp.tsv ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv
+
+# create a cancer color order file based on the order of cancers in the peaks and snv unique per cancer files
+cat ./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv \
+    ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv \
+    | cut -f1 \
+    | sort -u \
+    > ./results/summarys/cancer_color_order.txt
+
+
+Rscript -e '
+
+data <- read.table("./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv")
+                   
+cancer_names <- data[,1]
+peak_counts  <- data[,2]
+# Sort from biggest to smallest
+ord <- order(peak_counts, decreasing = TRUE)
+cancer_names <- cancer_names[ord]
+peak_counts  <- peak_counts[ord]
+# reverse order for horizontal barplot (largest at top)
+cancer_names <- rev(cancer_names)
+peak_counts  <- rev(peak_counts)
+# Convert to thousands
+peak_thousands <- peak_counts / 1e3
+# Build consistent colors
+all_cancers <- scan("./results/summarys/cancer_color_order.txt", what = "")
+palette <- rainbow(length(all_cancers))
+names(palette) <- all_cancers
+bar_colors <- palette[cancer_names]
+
+pdf("./results/summarys/peaks_per_cancer_type_barplot.pdf", width=12, height=9 , bg = "white")
+
+barplot(
+  peak_thousands,
+  names.arg=cancer_names,
+  horiz=TRUE,                          # horizontal bars
+  las=1,                               # labels readable
+  col = bar_colors,
+  border="black",
+  main="Peaks per Cancer Type",
+  cex.main = 3,
+  cex.lab = 1.5,
+  xlab="Total Peaks (thousands)")
+
+dev.off()
 '
 
 # Distance of peaks to TSS : generate a file per sample with the distances of each peak to the nearest TSS
@@ -1436,26 +1542,46 @@ done
 Rscript -e '
 
 data <- read.table("./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv")
-                   
+
 cancer_names <- data[,1]
 snv_counts   <- data[,2]
-snv_millions <- snv_counts / 1e6
-pdf("./results/summarys/snv_per_cancer_type_barplot.pdf", width=12, height=9 , bg = "white")
 
+# Sort from biggest to smallest
+ord <- order(snv_counts, decreasing = TRUE)
+cancer_names <- cancer_names[ord]
+snv_counts  <- snv_counts[ord]
+# reverse order for horizontal barplot (largest at top)
+cancer_names <- rev(cancer_names)
+snv_counts  <- rev(snv_counts)
+
+snv_millions <- snv_counts / 1e6
+# Build consistent colors
+all_cancers <- scan("./results/summarys/cancer_color_order.txt", what = "")
+palette <- rainbow(length(all_cancers))
+names(palette) <- all_cancers
+bar_colors <- palette[cancer_names]
+
+pdf("./results/summarys/snv_per_cancer_type_barplot2.pdf",width=12, height=9, bg = "white")
+
+nice_max <- max(pretty(snv_millions))
 barplot(
   snv_millions,
-  names.arg=cancer_names,
-  horiz=TRUE,                          # horizontal bars
-  las=1,                               # labels readable
-  col = rainbow(length(snv_counts)),
-  border="black",
-  main="SNVs per Cancer Type",
+  names.arg = cancer_names,
+  horiz = TRUE,
+  las = 1,
+  col = bar_colors,
+  border = "black",
+  main = "SNVs per Cancer Type",
   cex.main = 3,
-  cex.lab = 1.5,
-  xlab="Total SNVs (millions)")
-
+  cex.lab  = 1.5,
+  xlab = "Total SNVs (millions)",
+  xlim = c(0, nice_max))
 dev.off()
 '
+
+
+
+
 
 # Distance of SNVs sites to TSS : generate a file per sample with the distances of each SNV to the nearest TSS
 # ./snv/SNV_TCGA-BRCA-TCGA-AR-A0TP-01A_vs_TCGA-AR-A0TP-10A_1.vcf.gz
