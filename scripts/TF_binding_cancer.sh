@@ -1099,30 +1099,49 @@ done
 
 #to find samples with healthy and cancer data : 
 for dir in /data/papers/tcga/TCGA-BRCA/*/; do
-    count=$(ls "$dir"/HM450*.bed.gz | wc -l)
-    if [ "$count" -gt 1 ]; then
-        echo "$dir has $count HM450 methylation files"
-        ls "$dir"/HM450*.bed.gz
+    # Any tumor sample (01,02,03,05,06,07,08,09)
+    tumor_files=( "$dir"/HM450*-0[1-9]*.bed.gz )
+    # Any normal sample (10,11,12,13)
+    normal_files=( "$dir"/HM450*-1[0-3]*.bed.gz )
+    # Check that both tumor and normal exist
+    if [ -e "${tumor_files[0]}" ] && [ -e "${normal_files[0]}" ]; then
+        echo ">>> $dir has tumor + normal HM450 methylation:"
+        echo "Tumor:"
+        ls "${tumor_files[@]}"
+        echo "Normal:"
+        ls "${normal_files[@]}"
         echo ""
     fi
 done
 
 # to find samples with no healthy data :
 mkdir -p ./methylation/methylation_counts/
+mkdir -p ./methylation/methylation_counts/
+
+# (optional) add a header once
+echo -e "cancer\ttumor_count\thealthy_count" > ./methylation/methylation_counts/methylation_presence.tsv
 
 for cancer_dir in /data/papers/tcga/TCGA-*; do
     cancer=$(basename "$cancer_dir" | sed 's/^TCGA-//')
 
-    tumor_count=$(find "$cancer_dir" -type f -name "HM450*01A_1_annotated_methylation.bed.gz" | wc -l)
-    healthy_count=$(find "$cancer_dir" -type f -name "HM450*11A_1_annotated_methylation.bed.gz" | wc -l)
-    # -gt = greater than
+    # Any tumor sample: 0[1-9] = 01,02,03,05,06,07,08,09...
+    tumor_count=$(find "$cancer_dir" -type f \
+        -name "HM450*-0[1-9]*_1_annotated_methylation.bed.gz" | wc -l)
+
+    # Any normal sample: 1[0-3] = 10,11,12,13
+    healthy_count=$(find "$cancer_dir" -type f \
+        -name "HM450*-1[0-3]*_1_annotated_methylation.bed.gz" | wc -l)
+
     if [ "$tumor_count" -gt 0 ] && [ "$healthy_count" -gt 0 ]; then
-        echo "$cancer : has BOTH tumor (01A) and healthy (11A) methylation"
+        echo "$cancer : has BOTH tumor (0[1-9]) and healthy (1[0-3]) methylation"
     else
         echo "$cancer : tumor = $tumor_count, healthy = $healthy_count"
     fi
-    printf "%s\t%d\t%d\n" "$cancer" "$tumor_count" "$healthy_count" >> ./methylation/methylation_counts/methylation_presence.tsv
+
+    printf "%s\t%d\t%d\n" "$cancer" "$tumor_count" "$healthy_count" \
+        >> ./methylation/methylation_counts/methylation_presence.tsv
 done
+
 
 # Visualize the results in a barplot using R
 Rscript -e '
@@ -1130,34 +1149,66 @@ library(ggplot2)
 library(reshape2)
 
 # Load the table with counts
-df <- read.table("./methylation/methylation_counts/methylation_presence.tsv",header = FALSE)
-# Rename columns: cancer, tumor count, healthy count
+df <- read.table("./methylation/methylation_counts/methylation_presence.tsv", header = TRUE)
 colnames(df) <- c("cancer", "tumor", "healthy")
 
 # Add flag for "no healthy"
 df$no_healthy <- df$healthy == 0
 
-# Convert from wide → long format (because ggplot needs long)
-df_long <- melt(df, id.vars = "cancer",variable.name = "type",value.name = "count")
+# Compute total samples per cancer type
+df$total <- df$tumor + df$healthy
+
+# Reorder cancers by total samples (descending)
+df$cancer <- factor(df$cancer, levels = df$cancer[order(-df$total)])
+
+# Build label dataframe AFTER reordering + after no_healthy exists
+label_df <- df[, c("cancer", "no_healthy")]
+
+# Convert to long format (only tumor + healthy)
+df_long <- melt(df,
+                id.vars = "cancer",
+                measure.vars = c("tumor", "healthy"),
+                variable.name = "type",
+                value.name = "count")
 
 # Create the barplot
-pdf("./results/summarys/methylation_counts_barplot.pdf", width=10, height=8)
+pdf("./results/summarys/methylation_counts_barplot.pdf", width=12, height=8)
 
 ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
-    geom_bar(stat = "identity", position = "dodge") +
-    scale_fill_manual(values = c("tumor" = "salmon", "healthy" = "steelblue"),name = "") +
-    labs(title = "Tumor vs Healthy Methylation Sample Counts per Cancer Type",
-         x = "Cancer Type",
-         y = "Number of Samples",
-         caption = "Red cancer names = cancer type with no healthy (11A) samples") +  
-    theme_minimal(base_size = 13) +
-    theme(
-        plot.title = element_text(hjust = 0.5),
-        axis.text.x = element_text(angle = 45, hjust = 1, colour = ifelse(df$no_healthy, "red", "black")),
-        plot.caption = element_text(hjust = 0.5, color = "red", size = 12))
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("tumor" = "salmon", "healthy" = "steelblue"), name = "") +
+  labs(
+    title   = "Tumor vs Healthy Methylation Sample Counts per Cancer Type",
+    x       = "Cancer Type",
+    y       = "Number of Samples",
+    caption = "Red cancer names = cancer types with no healthy samples") +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title   = element_text(hjust = 0.5),
+    axis.text.x  = element_blank(),     # hide default x labels
+    axis.ticks.x = element_blank(),
+    plot.caption = element_text(hjust = 0.5, color = "red", size = 12),
+    plot.margin  = margin(t = 10, r = 20, b = 60, l = 20)  # more space for labels) +
+  coord_cartesian(clip = "off") +   # prevent clipping
+  geom_text(
+    data = label_df,
+    aes(
+      x     = cancer,
+      y     = 0,
+      label = cancer,
+      color = no_healthy),
+    angle       = 45,
+    hjust       = 1,
+    vjust       = 1.2,
+    inherit.aes = FALSE,
+    size        = 4) +
+  scale_color_manual(
+    values = c(`TRUE` = "red", `FALSE` = "black"),
+    guide  = "none")
 
 dev.off()
 '
+
 
 
 #example of outputs from BRCA : 
@@ -2404,21 +2455,20 @@ motif_all <- unique(with(read.table("./motifs/ZBTB33_filtered_6mer.MA0527.2.bed"
 
 motif_peak <- unique(with(read.table("./motifs/overlaps/motif_peak_overlaps/ZBTB33_filtered_6mer.MA0527.2_peak_overlaps.bed"),paste(V1, V2, V3, sep = ":")))
 
-motif_hm450 <- unique(with(read.table("./motifs/overlaps/intersected_motifs_HM450/ZBTB33_intersected_methylation.bed"),paste(V1, V2, V3, sep = ":")))
-
+motif_variants <- unique(with(read.table("./snv/overlaps/intersected_motifs_snv/BANP_intersected_SNVs_motifskept.bed"),paste(V1, V2, V3, sep = ":")))
 # Liste nommée de sets 
 sets <- list(
-  "All BANP motifs"    = motif_all,
+  "All NRF1 motifs"    = motif_all,
   "Motifs in ATAC"     = motif_peak,
-  "Motifs with HM450"  = motif_hm450)
+  "Motifs with variants"  = motif_variants)
 
 # Calcul du diagramme proportionnel avec eulerr
 fit <- euler(sets)
 
-pdf("./results/summarys/BANP_motifs_ATAC_HM450_eulerr.pdf", width = 7, height = 7)
+pdf("./results/summarys/BANP_motifs_ATAC_variants_3D_venn.pdf", width = 7, height = 7)
 plot(
   fit,
-  fills = c("#4C72B0", "#55A868", "#C44E52"),  # ta palette BANP
+  fills = c("steelblue", "lightgreen", "red"),  # ta palette BANP
   edges = "black",
   quantities = list(type = "counts", cex = 0.9),
   labels = list(cex = 1.1),
@@ -2426,5 +2476,235 @@ plot(
 dev.off()
 '
 
+# Plots for expected results poster: 
 
+Rscript -e ' 
+# Expected Results: schematic methylation–expression relationship
+library(ggplot2)
 
+# Fake conceptual data for a clean, illustrative plot
+set.seed(42)
+
+normal <- data.frame(
+  methylation = seq(0.05, 0.45, length.out = 40),
+  expression  = 20 - 2 * seq(0.05, 0.45, length.out = 40) + rnorm(40, 0, 0.3),
+  group = "Normal")
+
+tumor <- data.frame(
+  methylation = seq(0.40, 0.95, length.out = 40),
+  expression  = 17 - 5 * (seq(0.40, 0.95, length.out = 40) - 0.40) + rnorm(40, 0, 0.3),
+  group = "Tumor")
+
+df <- rbind(normal, tumor)
+
+# Plot
+ggplot(df, aes(x = methylation, y = expression, color = group)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, size = 1.2) +
+  scale_color_manual(values = c("Normal" = "#1B9E77", "Tumor" = "#D95F02")) +
+  labs(
+    x = "Methylation",
+    y = "Gene Expression",
+    title = "Expected Relationship: Hypermethylation → Reduced Expression",
+    subtitle = "NRF1/BANP target genes are expected to show decreased expression\nwhen promoter CpGs become hypermethylated"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "top"
+  )
+ggsave("./results/summarys/Expected_methylation_expression_relationship_NRF1_BANP_targets.pdf", width = 8, height = 6, dpi = 300, bg = "white")
+'
+
+#expected Variant effect on TF binding plot
+Rscript -e '
+library(ggplot2)
+set.seed(123)
+# 1. Simulate expression
+n <- 80
+
+# Motif with variant: lower expression
+expr_variant <- rlnorm(n, meanlog = 0.6, sdlog = 0.6)
+
+# WT motif: higher expression
+expr_wt      <- rlnorm(n, meanlog = 2.5, sdlog = 0.4)
+
+df <- rbind(
+  data.frame(group = "Motif with variant", expression = expr_variant),
+  data.frame(group = "WT motif",           expression = expr_wt))
+
+# 2. Plot
+p <- ggplot(df, aes(x = group, y = expression)) +
+  # violins (pastel)
+  geom_violin(aes(fill = group), trim = FALSE, alpha = 0.6, width = 0.9, colour = NA) +
+  # boxplots (darker, on top)
+  geom_boxplot(aes(fill = group),
+               width = 0.18,
+               outlier.size = 0.7,
+               colour = "black",
+               alpha = 0.9) +
+  scale_fill_manual(values = c(
+    "Motif with variant" = "#E67E22",  # peach
+    "WT motif"           = "#2ECC71"   # mint
+  )) +
+  scale_y_log10(
+    breaks = c(1, 3, 10, 30),
+    labels = c("1", "3", "10", "30")
+  ) +
+  labs(
+    title = "Effect of Variants in NRF1/BANP Motifs on\nGene Expression for Each Cancer Type",
+    x     = "",
+    y     = "Gene expression"
+  ) +
+  theme_bw(base_size = 16) +
+  theme(
+    plot.title   = element_text(hjust = 0.5, face = "bold", size = 20),
+    axis.title.y = element_text(size = 18),
+    axis.text.x  = element_text(size = 18),
+    axis.text.y  = element_text(size = 14),
+    legend.position = "none"
+  )
+
+# 3. Save PDF
+ggsave(
+  filename = "./results/summarys/Effect_variants_NRF1_BANP_gene_expression.pdf",
+  plot     = p,
+  width    = 8,
+  height   = 5
+)
+'
+
+# expected gene network plot :
+Rscript -e '
+library(igraph)
+# DEFINE NODES (MULTIPLE TFs + MANY GENES)
+tf_names   <- paste0("TF_", 1:4)
+gene_names <- paste0("GENE_", LETTERS[1:12])
+
+nodes <- data.frame(
+  name   = c(tf_names, gene_names),
+  type   = c(rep("TF", length(tf_names)), rep("Gene", length(gene_names))),
+  status = c(
+    rep("TF", length(tf_names)),  # TFs
+    "Altered",  "Altered",  "Unchanged", "Unchanged",
+    "Altered",  "Unchanged", "Altered",   "Unchanged",
+    "Altered",  "Unchanged", "Unchanged", "Altered"
+  ),
+  stringsAsFactors = FALSE)
+
+# DEFINE EDGES (MULTIPLE TF -> MANY GENES, SOME SHARED TARGETS)
+edge_list <- rbind(
+  data.frame(from = "TF_1", to = c("GENE_A", "GENE_B", "GENE_C", "GENE_D", "GENE_E")),
+  data.frame(from = "TF_2", to = c("GENE_C", "GENE_F", "GENE_G", "GENE_H")),
+  data.frame(from = "TF_3", to = c("GENE_A", "GENE_D", "GENE_I", "GENE_J", "GENE_K")),
+  data.frame(from = "TF_4", to = c("GENE_E", "GENE_G", "GENE_H", "GENE_L")))
+
+# add a few gene–gene edges
+gene_gene_edges <- data.frame(
+  from = c("GENE_B", "GENE_F", "GENE_I"),
+  to   = c("GENE_C", "GENE_G", "GENE_J"))
+
+edges <- rbind(edge_list, gene_gene_edges)
+
+# CREATE GRAPH
+g <- graph_from_data_frame(edges, vertices = nodes, directed = FALSE)
+
+# COLOR / SHAPE / SIZE
+vertex_colors <- ifelse(
+  V(g)$type == "TF", "#1F77B4",
+  ifelse(V(g)$status == "Altered", "#D62728", "lightgrey"))
+
+vertex_shapes <- ifelse(V(g)$type == "TF", "square", "circle")
+vertex_sizes  <- ifelse(V(g)$type == "TF", 28, 23)
+
+# LAYOUT: TFs INNER CIRCLE, GENES OUTER CIRCLE
+n_tf   <- length(tf_names)
+n_gene <- length(gene_names)
+
+theta_tf   <- seq(0, 2*pi, length.out = n_tf + 1)[-(n_tf + 1)]
+theta_gene <- seq(0, 2*pi, length.out = n_gene + 1)[-(n_gene + 1)]
+
+layout_tf <- cbind(0.6 * cos(theta_tf), 0.6 * sin(theta_tf))
+layout_gene <- cbind(1.4 * cos(theta_gene), 1.4 * sin(theta_gene))
+
+layout_final <- rbind(layout_tf, layout_gene)
+
+# PLOT TO PDF
+pdf("./results/summarys/TF_multicenter_gene_network_expected.pdf", width = 6, height = 6)
+
+plot(
+  g,
+  layout             = layout_final,
+  vertex.color       = vertex_colors,
+  vertex.shape       = vertex_shapes,
+  vertex.size        = vertex_sizes,
+  vertex.label       = V(g)$name,
+  vertex.label.cex   = 0.8,
+  vertex.label.color = "black",
+  edge.width         = 2,
+  edge.color         = "grey50",
+  main = "Expected Gene Network: Multi-TF model\nCancer-altered targets highlighted in red"
+)
+
+dev.off()
+'
+# expected methylation gene expression plot 
+Rscript -e 'library(ggplot2);
+
+set.seed(123);
+
+# 1. Simulate delta methylation (%)
+n <- 120;   # fewer points
+delta_meth <- runif(n, -100, 100);
+
+# 2. Simulate log2FC with coupling
+log2fc <- -0.03 * delta_meth + rnorm(n, sd = 0.5);
+
+df <- data.frame(
+  delta_meth = delta_meth,
+  log2FC     = log2fc
+);
+
+# 3. Fit linear model
+fit <- lm(log2FC ~ delta_meth, data = df);
+
+line_df <- data.frame(
+  intercept = coef(fit)[1],
+  slope     = coef(fit)[2]
+);
+
+# 4. Plot (large colored points)
+p <- ggplot(df, aes(x = delta_meth, y = log2FC, color = delta_meth)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_point(alpha = 0.8, size = 2) +       
+  scale_color_gradient2(
+    low = "#1f77b4", mid = "white", high = "#d62728",
+    midpoint = 0,
+    name = "Methylation Change"
+  ) +
+  geom_abline(
+    data = line_df,
+    aes(intercept = intercept, slope = slope),
+    colour = "black",
+    linewidth = 1
+  ) +
+  labs(
+    title    = "Expected Cancer-Specific Impact of Promoter Motif Alterations",
+    subtitle = "Promoter hypermethylation at TF motifs reduces gene expression",
+    x        = "Change in promoter methylation (Cancer - Healthy, %)",
+    y        = "Change in expression (log2 fold change)"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title    = element_text(hjust = 0.5, face = "bold", size = 16),
+    plot.subtitle = element_text(hjust = 0.5, size = 11));
+
+# 5. Save PDF
+ggsave(
+  filename = "./results/summarys/Expected_methylation_expression_coupling.pdf",
+  plot     = p,
+  width    = 8,
+  height   = 5
+);'
