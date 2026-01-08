@@ -3020,8 +3020,134 @@ cat("Wrote:", out_tsv, "\n")
 cat("Wrote:", out_pdf, "\n")
 '
 
-# Do the boxplot but on only CpGs that are in NRF1 motifs in peaks and BANP motifs in peaks
+# Do the boxplot but on only CpGs that are in NRF1 motifs and BANP motifs 
 mkdir -p ./methylation/overlaps/intersected_motifs_HM450/
 bedtools intersect -u -a ./methylation/annotated_methylation_data_probes.bed -b ./motifs/NRF1_filtered_6mer.MA0506.3.bed > ./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed
 bedtools intersect -u -a ./methylation/annotated_methylation_data_probes.bed -b ./motifs/ZBTB33_filtered_6mer.MA0527.2.bed  > ./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed
 
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs.tsv"
+out_tsv    <- "./methylation/sample_pairs_files/delta_methylation_MOTIF_CpG_per_pair_by_cancer.tsv"
+out_pdf    <- "./results/summarys/boxplot_delta_methylation_MOTIF_CpG_by_cancer_oneplot.pdf"
+
+thr <- 10  # 10% (your values are in 0–100)
+
+# =========================
+# ADD THIS: choose motif CpGs file (NRF1 or BANP)
+# =========================
+motif_bed <- "./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed"
+# motif_bed <- "./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed"
+
+motif_probes <- fread(motif_bed, header = FALSE)[[4]]
+motif_probes <- unique(as.character(motif_probes))
+if (length(motif_probes) == 0) stop("Motif probe list is empty: ", motif_bed)
+cat("Keeping", length(motif_probes), "CpGs from:", motif_bed, "\n")
+
+read_probe_meth <- function(f) {
+  dt <- fread(cmd = paste("zcat", shQuote(f)), header = FALSE, select = c(4,5))
+  setnames(dt, c("probe","meth"))
+  dt[, meth := as.numeric(meth)]
+  dt
+}
+
+get_cancer <- function(folder) {
+  parts <- strsplit(folder, "/")[[1]]
+  parts[which(grepl("^TCGA-[A-Z]+$", parts))[1]]
+}
+
+pairs <- fread(pairs_file)[!is.na(tumor_file) & !is.na(healthy_file)]
+pairs[, cancer := vapply(folder, get_cancer, character(1))]
+
+res <- vector("list", nrow(pairs))
+
+for (i in seq_len(nrow(pairs))) {
+
+  tumor  <- read_probe_meth(pairs$tumor_file[i])
+  normal <- read_probe_meth(pairs$healthy_file[i])
+
+  # safety check for probe order
+  if (nrow(tumor) != nrow(normal) || !identical(tumor$probe, normal$probe)) {
+    stop("Probe order mismatch at pair ", i,
+         "\nTumor: ", pairs$tumor_file[i],
+         "\nNormal: ", pairs$healthy_file[i])
+  }
+
+  # =========================
+  # ADD THIS: filter to motif CpGs
+  # =========================
+  idx <- tumor$probe %chin% motif_probes
+  delta <- tumor$meth[idx] - normal$meth[idx]
+
+  hypo  <- delta < -thr
+  hyper <- delta >  thr
+  same  <- !hypo & !hyper
+
+  n <- sum(!is.na(delta))
+
+  res[[i]] <- data.table(
+    cancer = pairs$cancer[i],
+    folder = pairs$folder[i],
+    tumor_file = pairs$tumor_file[i],
+    healthy_file = pairs$healthy_file[i],
+    n_cpg = n,
+    pct_hypo  = round(100 * sum(hypo,  na.rm=TRUE) / n, 2),
+    pct_hyper = round(100 * sum(hyper, na.rm=TRUE) / n, 2),
+    pct_same  = round(100 * sum(same,  na.rm=TRUE) / n, 2)
+  )
+
+  if (i %% 50 == 0) cat("Processed", i, "of", nrow(pairs), "\n")
+}
+
+res_dt <- rbindlist(res)
+dir.create(dirname(out_tsv), recursive=TRUE, showWarnings=FALSE)
+fwrite(res_dt, out_tsv, sep="\t")
+
+# --------- Make plot in the SAME STYLE as your UMR/LMR/FMR code ---------
+counts <- res_dt[, .N, by = cancer]
+res_dt <- merge(res_dt, counts, by="cancer", all.x=TRUE)
+res_dt[, cancer_label := paste0(cancer, " (n=", N, ")")]
+
+res_dt[, cancer_label := factor(cancer_label, levels = sort(unique(cancer_label)))]
+
+long <- melt(
+  res_dt,
+  id.vars = c("cancer","cancer_label","folder","tumor_file","healthy_file","n_cpg","N"),
+  measure.vars = c("pct_hypo","pct_hyper","pct_same"),
+  variable.name = "class",
+  value.name = "percentage"
+)
+
+long[, class := fifelse(class=="pct_hypo","Hypomethylated",
+                 fifelse(class=="pct_hyper","Hypermethylated","Unchanged"))]
+
+dir.create(dirname(out_pdf), recursive=TRUE, showWarnings=FALSE)
+
+pdf(out_pdf, width=16, height=9)
+
+ggplot(long, aes(x = cancer_label, y = percentage, color = class)) +
+  geom_boxplot(outlier.colour = NA) +
+  geom_jitter(width = 0.2, alpha = 0.4, size = 0.7) +
+  facet_wrap(~ class, nrow = 3, scales = "fixed") +
+  scale_color_brewer(palette = "Set2") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x  = element_text(angle = 60, hjust = 1, size = 7),
+    strip.text = element_text(size = 12),
+    panel.grid.major.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = paste0("Tumor vs Healthy methylation change categories per pair (motif CpGs)\n", basename(motif_bed)),
+    x = "Cancer type",
+    y = "Percentage (%)",
+    color = "Class"
+  )
+
+dev.off()
+
+cat("Wrote:", out_tsv, "\n")
+cat("Wrote:", out_pdf, "\n")
+'
