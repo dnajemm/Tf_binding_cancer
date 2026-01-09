@@ -1,5 +1,5 @@
 #!/usr/bin/env Rscript
-
+# The t-SNE perplexity parameter (perp here) controls how local neighborhoods are defined and therefore influences how samples are positioned relative to each other in the 2D embedding.
 library(data.table)
 library(ggplot2)
 library(Rtsne)
@@ -10,11 +10,11 @@ has_polychrome <- requireNamespace("Polychrome", quietly = TRUE)
 
 # ------------------ Inputs / outputs ------------------
 infile <- "./methylation/methylation_files_tumor0x.txt"
-outpdf <- "./results/summarys/tSNE_methylation_01A_top2000SD_distinctColors.pdf"
+outpdf <- "./results/summarys/tSNE_methylation_01A_top1000SD_distinctColors.pdf"
 
 # ------------------ Parameters ------------------
 max_per_cancer <- 200      # only for selecting variable probes
-n_var_probes   <- 2000     # number of most-variable CpGs
+n_var_probes   <- 1000     # number of most-variable CpGs
 n_pcs          <- 30       # PCA dims before tSNE
 max_iter_tsne  <- 1000
 
@@ -245,5 +245,5 @@ if (has_polychrome) {
 
 print(g)
 dev.off()
-
+save(tsne_df, file = "TSNE_results.RData")
 cat(">>> DONE\n")
