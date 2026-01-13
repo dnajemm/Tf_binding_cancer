@@ -136,7 +136,8 @@ export CONDA_PKGS_DIRS=/data/najemd/TF_binding_cancer/conda_envs/conda_pkgs
 #conda create --prefix ./conda_envs/TF_binding_cancer_env r-base -c conda-forge -y
 #conda env export --prefix ./conda_envs/TF_binding_cancer_env > ./conda_envs/TF_binding_cancer_env.yml
 conda activate ./conda_envs/TF_binding_cancer_env
-#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr r-hexbin r-mass r-kernsmooth r-venndir r-polychrome --yes
+#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr r-hexbin r-mass r-kernsmooth r-venndir r-polychrome r-plotly r-FNN --yes 
+
 
 # 4) Overlap 6mer motifs with annotated methylation data to find intersecting regions and 
 # see if the motifs fall within methylated probes regions.
@@ -466,8 +467,6 @@ for file in /data/papers/tcga/TCGA*/*/HM450*.txt; do
 done
 
 # 10) Linking the methylation data with the HM450 manifest file for annotation : chr start end probe_id(gc) beta_value
-
-mkdir -p ./methylation/annotated_methylation_data/
 # for each methylation file, annotate it and save it as a gzipped bed file in the same input directory
 total=$(ls /data/papers/tcga/TCGA*/*/HM450*.txt | wc -l)
 count=0
@@ -501,7 +500,7 @@ cat ./methylation/annotated_methylation_file_line_counts.txt | grep 485569 | wc 
 
 # 12) Statistics for Peaks : nbr of cancer types with peaks, nbr of peaks per cancer type, total nbr of peaks
 
-# nbr of cancer types with peaks --> 23 types 
+# nbr of cancer types with peaks --> 22 types 
 ls ./peaks/filtered_peaks/ATAC_TCGA*bed | cut -d'-' -f2 | cut -d'_' -f1 | sort | uniq -c | awk '{print $2 "\t" $1}' > ./peaks/cancer_counts.tsv
 
 conda activate ./conda_envs/TF_binding_cancer_env
@@ -929,9 +928,7 @@ for file in /data/papers/tcga/TCGA*/*/*_annotated_methylation.bed.gz; do
 done
 
 # Comparing the methylation distribution for the same sample between healthy and cancer samples
-
 # 2>/dev/null = hide all error messages from this command.
-
 #to find samples with healthy and cancer data : 
 for dir in /data/papers/tcga/TCGA-BRCA/*/; do
     # Any tumor sample (01,02,03,05,06,07,08,09)
@@ -951,9 +948,8 @@ done
 
 # to find samples with no healthy data :
 mkdir -p ./methylation/methylation_counts/
-mkdir -p ./methylation/methylation_counts/
 
-# (optional) add a header once
+# add a header once
 echo -e "cancer\ttumor_count\thealthy_count" > ./methylation/methylation_counts/methylation_presence.tsv
 
 for cancer_dir in /data/papers/tcga/TCGA-*; do
@@ -961,12 +957,11 @@ for cancer_dir in /data/papers/tcga/TCGA-*; do
 
     # Any tumor sample: 0[1-9] = 01,02,03,05,06,07,08,09...
     tumor_count=$(find "$cancer_dir" -type f \
-        -name "HM450*-0[1-9]*_1_annotated_methylation.bed.gz" | wc -l)
+        -name "HM450_TCGA-*-TCGA-*-*-0[1-9]*_1_annotated_methylation.bed.gz" | wc -l)
 
     # Any normal sample: 1[0-3] = 10,11,12,13
     healthy_count=$(find "$cancer_dir" -type f \
-        -name "HM450*-1[0-3]*_1_annotated_methylation.bed.gz" | wc -l)
-
+        -name "HM450_TCGA-*-TCGA-*-*-1[0-3]*_1_annotated_methylation.bed.gz" | wc -l)
     if [ "$tumor_count" -gt 0 ] && [ "$healthy_count" -gt 0 ]; then
         echo "$cancer : has BOTH tumor (0[1-9]) and healthy (1[0-3]) methylation"
     else
@@ -1022,7 +1017,7 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     axis.text.x  = element_blank(),     # hide default x labels
     axis.ticks.x = element_blank(),
     plot.caption = element_text(hjust = 0.5, color = "red", size = 12),
-    plot.margin  = margin(t = 10, r = 20, b = 60, l = 20)  # more space for labels) +
+    plot.margin  = margin(t = 10, r = 20, b = 60, l = 20) ) +  # more space for labels
   coord_cartesian(clip = "off") +   # prevent clipping
   geom_text(
     data = label_df,
@@ -1396,7 +1391,7 @@ library(ggplot2)
 # 1) Files with SNVs-in-peaks counts
 overlap_files <- list.files("./snv/overlaps/snv_peak_overlap",pattern = "_snv_in_peaks.txt$",full.names = TRUE)
 
-# extract sample names that actually have ATAC since only 410 ATAC peaks files exist 
+# extract sample names that actually have ATAC since only 217 ATAC peaks files exist 
 samples_with_peaks <- sub("_snv_in_peaks.txt$", "", basename(overlap_files))
 # basename() removes all folder paths → keeps only the filename
 # sub() removes the suffix _snv_in_peaks.txt
@@ -2528,7 +2523,7 @@ for cancer in $(ls ./snv/SNV_TCGA-*.vcf.gz | cut -d'-' -f2 | sort -u); do
   > ./snv/within_cancer_freq/${cancer}_variant_samplefreq.tsv
 
 done
-
+# !!! NOT DONE YET !!!
 # 28) plot the PCA or tSNE of the samples based on the presence/absence matrix of SNVs in NRF1 and BANP motifs per cancer type
 # first filter SNV that are in motifs and fall in peaks
 mkdir -p ./snv/overlaps/intersected_motifs_in_peaks_snv
@@ -2582,9 +2577,9 @@ for f in ./snv/within_cancer_freq/*_variant_samplefreq.tsv; do
   ' "$ids" "$f" \
   > "${outdir}/${cancer}_NRF1_inMotifsInPeaks_min3_lenLE50.tsv"
 done
+#!! NOT PLOTED YET!!
 
-
-# redo Ven diagram overlaps betweenn moottifs atac peaks and variants whith filtering structural variants 
+# redo Ven diagram overlaps betweenn motifs atac peaks and variants whith filtering structural variants 
 
 # filtering VCF files to remove structural variants (indels >= 50 bp)
 mkdir ./snv/snv_filtered_without_structural_variants/
@@ -2689,22 +2684,34 @@ dev.off()
 # To look into hypermethylation hypomethylation and unchanged methylation patterns in cancer compared to healthy samples at NRF1 and BANP motifs
 
 # 1) build pairs files with sample healthy cancer pairs for each cancer type
-mkdir -p ./methylation/sample_pairs_files/
+set -euo pipefail
+shopt -s nullglob
 
-echo -e "folder\ttumor_file\thealthy_file" > ./methylation/sample_pairs_files/methylation_pairs.tsv
+mkdir -p ./methylation/sample_pairs_files
+out=./methylation/sample_pairs_files/methylation_pairs.tsv
+echo -e "cancer\tpatient\ttumor_file\thealthy_file" > "$out"
 
-for d in /data/papers/tcga/TCGA-*/*; do
-  tumors=($d/*-0*A*_annotated_methylation.bed.gz)
-  normals=($d/*-1*A*_annotated_methylation.bed.gz)
+for cancer_dir in /data/papers/tcga/TCGA-*; do
+  cancer=$(basename "$cancer_dir" | sed 's/^TCGA-//')
 
-  for t in "${tumors[@]}"; do
-    for n in "${normals[@]}"; do
-      [ -f "$t" ] && [ -f "$n" ] && echo -e "$d\t$t\t$n"
-    done
+  for patient_dir in "$cancer_dir"/*; do
+    [ -d "$patient_dir" ] || continue
+    patient=$(basename "$patient_dir")
+
+    tumors=(  "$patient_dir"/*-01A_*_annotated_methylation.bed.gz )
+    normals=( "$patient_dir"/*-11A_*_annotated_methylation.bed.gz )
+
+    # Skip unless exactly one of each (01A vs 11A only, one pair per patient)
+    [ "${#tumors[@]}" -eq 1 ] || continue
+    [ "${#normals[@]}" -eq 1 ] || continue
+
+    echo -e "$cancer\t$patient\t${tumors[0]}\t${normals[0]}" >> "$out"
   done
-done >> ./methylation/sample_pairs_files/methylation_pairs.tsv
-# this file contains the list of all tumor-healthy pairs for methylation analysis for 24 cancer types that had at least one tumor-healthy pair.
+done
 
+echo "Wrote: $out"
+
+# this file contains the list of all tumor-healthy pairs for methylation analysis for 22 cancer types that had at least one tumor-healthy pair.
 # 2) compute delta methylation per pair and classify into hypo hyper unchanged and make boxplot per cancer type
 Rscript -e '
 library(data.table)
@@ -2729,7 +2736,7 @@ get_cancer <- function(folder) {
 }
 
 pairs <- fread(pairs_file)[!is.na(tumor_file) & !is.na(healthy_file)]
-pairs[, cancer := vapply(folder, get_cancer, character(1))]
+# cancer is already in the file
 
 res <- vector("list", nrow(pairs))
 
@@ -2755,7 +2762,7 @@ for (i in seq_len(nrow(pairs))) {
 
   res[[i]] <- data.table(
     cancer = pairs$cancer[i],
-    folder = pairs$folder[i],
+    patient = pairs$patient[i],
     tumor_file = pairs$tumor_file[i],
     healthy_file = pairs$healthy_file[i],
     n_cpg = n,
@@ -2764,6 +2771,7 @@ for (i in seq_len(nrow(pairs))) {
     pct_same  = round(100 * sum(same,  na.rm=TRUE) / n, 2)
   )
 
+
   if (i %% 50 == 0) cat("Processed", i, "of", nrow(pairs), "\n")
 }
 
@@ -2771,7 +2779,7 @@ res_dt <- rbindlist(res)
 dir.create(dirname(out_tsv), recursive=TRUE, showWarnings=FALSE)
 fwrite(res_dt, out_tsv, sep="\t")
 
-# --------- Make plot in the SAME STYLE as your UMR/LMR/FMR code ---------
+# --------- Make plot in the SAME STYLE as UMR/LMR/FMR code ---------
 # add counts in x labels
 counts <- res_dt[, .N, by = cancer]
 res_dt <- merge(res_dt, counts, by="cancer", all.x=TRUE)
@@ -2783,7 +2791,7 @@ res_dt[, cancer_label := factor(cancer_label, levels = sort(unique(cancer_label)
 # long format like reshape2::melt
 long <- melt(
   res_dt,
-  id.vars = c("cancer","cancer_label","folder","tumor_file","healthy_file","n_cpg","N"),
+  id.vars = c("cancer","cancer_label","patient","tumor_file","healthy_file","n_cpg","N"),
   measure.vars = c("pct_hypo","pct_hyper","pct_same"),
   variable.name = "class",
   value.name = "percentage"
@@ -2830,13 +2838,13 @@ library(data.table)
 library(ggplot2)
 
 pairs_file <- "./methylation/sample_pairs_files/methylation_pairs.tsv"
-out_tsv    <- "./methylation/sample_pairs_files/delta_methylation_MOTIF_CpG_per_pair_by_cancer.tsv"
+out_tsv    <- "./methylation/sample_pairs_files/delta_methylation_MOTIF_BANP_CpG_per_pair_by_cancer.tsv"
 out_pdf    <- "./results/summarys/boxplot_delta_methylation_MOTIF_BANP_CpG_by_cancer_oneplot.pdf"
 
 thr <- 10  # 10% (your values are in 0–100)
 
 # =========================
-# ADD THIS: choose motif CpGs file (NRF1 or BANP)
+# choose motif CpGs file (NRF1 or BANP)
 # =========================
 #motif_bed <- "./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed"
 motif_bed <- "./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed"
@@ -2853,13 +2861,7 @@ read_probe_meth <- function(f) {
   dt
 }
 
-get_cancer <- function(folder) {
-  parts <- strsplit(folder, "/")[[1]]
-  parts[which(grepl("^TCGA-[A-Z]+$", parts))[1]]
-}
-
 pairs <- fread(pairs_file)[!is.na(tumor_file) & !is.na(healthy_file)]
-pairs[, cancer := vapply(folder, get_cancer, character(1))]
 
 res <- vector("list", nrow(pairs))
 
@@ -2889,7 +2891,7 @@ for (i in seq_len(nrow(pairs))) {
 
   res[[i]] <- data.table(
     cancer = pairs$cancer[i],
-    folder = pairs$folder[i],
+    patient = pairs$patient[i],
     tumor_file = pairs$tumor_file[i],
     healthy_file = pairs$healthy_file[i],
     n_cpg = n,
@@ -2898,6 +2900,7 @@ for (i in seq_len(nrow(pairs))) {
     pct_same  = round(100 * sum(same,  na.rm=TRUE) / n, 2)
   )
 
+
   if (i %% 50 == 0) cat("Processed", i, "of", nrow(pairs), "\n")
 }
 
@@ -2905,7 +2908,7 @@ res_dt <- rbindlist(res)
 dir.create(dirname(out_tsv), recursive=TRUE, showWarnings=FALSE)
 fwrite(res_dt, out_tsv, sep="\t")
 
-# --------- Make plot in the SAME STYLE as your UMR/LMR/FMR code ---------
+# --------- Make plot in the SAME STYLE as UMR/LMR/FMR code ---------
 counts <- res_dt[, .N, by = cancer]
 res_dt <- merge(res_dt, counts, by="cancer", all.x=TRUE)
 res_dt[, cancer_label := paste0(cancer, " (n=", N, ")")]
@@ -2914,7 +2917,7 @@ res_dt[, cancer_label := factor(cancer_label, levels = sort(unique(cancer_label)
 
 long <- melt(
   res_dt,
-  id.vars = c("cancer","cancer_label","folder","tumor_file","healthy_file","n_cpg","N"),
+  id.vars = c("cancer","cancer_label","patient","tumor_file","healthy_file","n_cpg","N"),
   measure.vars = c("pct_hypo","pct_hyper","pct_same"),
   variable.name = "class",
   value.name = "percentage"
@@ -2953,6 +2956,8 @@ cat("Wrote:", out_pdf, "\n")
 '
 
 # plot a violin plot showing the difference in methylation between CpG probes in motifs and all CpG probes
+# Using matched primary tumor–normal pairs (01A–11A), we computed methylation differences (Δβ) for CpG probes and compared sites overlapping transcription-factor motifs to non-motif CpGs. Per patient, Δβ values were summarized by their median and visualized with violin plots, with paired Wilcoxon tests used to assess significance within each cancer type.
+
 Rscript -e '
 library(data.table)
 library(ggplot2)
@@ -2972,16 +2977,10 @@ read_probe_meth <- function(f) {
   dt
 }
 
-get_cancer <- function(folder) {
-  parts <- strsplit(folder, "/")[[1]]
-  parts[which(grepl("^TCGA-[A-Z]+$", parts))[1]]
-}
-
 motif_probes <- unique(as.character(fread(motif_bed, header=FALSE)[[4]]))
 if (length(motif_probes) == 0) stop("Motif probe list is empty: ", motif_bed)
 
 pairs <- fread(pairs_file)[!is.na(tumor_file) & !is.na(healthy_file)]
-pairs[, cancer := vapply(folder, get_cancer, character(1))]
 
 keep_per_pair <- 3000
 
@@ -3003,7 +3002,7 @@ for (i in seq_len(nrow(pairs))) {
 
   lst[[i]] <- data.table(
     cancer = pairs$cancer[i],
-    pair_id = i,
+    pair_id = pairs$patient[i],
     group = ifelse(is_motif[idx], "Motif CpGs", "Non-motif CpGs"),
     delta = delta[idx]
   )
@@ -3131,5 +3130,6 @@ dev.off()
 
 cat("Wrote:", out_pdf, "\n")
 '
+
 
 

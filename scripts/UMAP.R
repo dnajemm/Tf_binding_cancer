@@ -8,6 +8,7 @@
 library(data.table)
 library(ggplot2)
 library(uwot)
+library(Polychrome)
 
 # ------------------ Inputs / outputs ------------------
 infile <- "./methylation/methylation_files_tumor0x.txt"
@@ -15,7 +16,7 @@ outpdf <- "./results/summarys/UMAP_methylation_01A_top3000SD_max200perCancer.pdf
 
 # ------------------ Parameters ------------------
 max_per_cancer <- 200
-n_var_probes   <- 3000
+n_var_probes   <- 2000
 n_neighbors    <- 30
 min_dist       <- 0.3
 
@@ -39,15 +40,13 @@ files_all <- files_all[keep_idx]
 sample_names_all <- sample_names_all[keep_idx]
 cancer_all <- cancer_all[keep_idx]
 
-# Optional: stable ordering (nice for reproducibility/plotting)
+# stable ordering (nice for reproducibility/plotting)
 ord <- order(cancer_all, sample_names_all)
 files_all <- files_all[ord]
 sample_names_all <- sample_names_all[ord]
 cancer_all <- cancer_all[ord]
 
 cat("Kept", length(files_all), "samples after max_per_cancer filter\n")
-# Uncomment if you want to verify:
-# print(sort(table(cancer_all), decreasing = TRUE))
 
 # ------------------ Reader ------------------
 read_one <- function(f) {
@@ -134,13 +133,19 @@ plot_dt <- data.table(
   cancer = cancer_all
 )
 
+# ------------------ Distinct colors per cancer (Polychrome) ------------------
+cancers <- sort(unique(plot_dt$cancer))
+pal <- Polychrome::createPalette(length(cancers), seedcolors = c("#000000"))
+names(pal) <- cancers
+
 # ------------------ Plot ------------------
 dir.create(dirname(outpdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(outpdf, width = 14, height = 8)
 print(
   ggplot(plot_dt, aes(UMAP1, UMAP2, color = cancer)) +
-    geom_point(alpha = 0.8, size = 1.2) +
+    geom_point(alpha = 0.3, size = 0.8) +
+    scale_color_manual(values = pal) +
     theme_minimal(base_size = 12) +
     labs(
       title    = paste0("UMAP of TCGA tumor methylation (HM450) – top ", n_var_probes, " variable probes"),
@@ -151,6 +156,10 @@ print(
         " | n_samples=", nrow(plot_dt)
       ),
       color = "Cancer type"
+    ) +
+    theme(
+      legend.position = "right",
+      legend.key.height = unit(0.6, "cm")
     )
 )
 dev.off()

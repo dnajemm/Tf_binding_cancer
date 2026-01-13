@@ -1,3 +1,11 @@
+'''
+1)It collects all ATAC-seq peak BED files in `./peaks/filtered_peaks/` (TCGA cancers), extracts the cancer type from each filename, and reports how many samples/cancers are included.
+2)It builds a global merged peak set by concatenating all peaks, sorting, and running `bedtools merge` to create one unified reference peak list.
+3)For each sample, it computes a binary peak presence/absence vector over the merged peaks, estimates peak variability across samples, keeps the top 3000 most variable peaks, then rebuilds a reduced matrix (peaks × samples).
+4)It transposes to samples × peaks, scales the features, runs PCA (up to 30 PCs), and then runs t-SNE on the PCA scores (perplexity chosen from sample count, seed fixed).
+5)Finally, it saves the t-SNE coordinates + cancer labels to a TSV and produces a colored t-SNE scatter plot PDF with one point per sample.
+'''
+
 #!/usr/bin/env Rscript
 library(data.table)
 library(Rtsne)

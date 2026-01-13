@@ -1,22 +1,26 @@
 #!/usr/bin/env Rscript
-# The t-SNE perplexity parameter (perp here) controls how local neighborhoods are defined and therefore influences how samples are positioned relative to each other in the 2D embedding.
+# t-SNE of TCGA tumor methylation (HM450) — 01A only
+# Color points by epithelial class (Adenocarcinoma / Squamous / Mixed / NonEpithelial / Other)
+# Shape is a single constant (no organ grouping)
+
 library(data.table)
 library(ggplot2)
 library(Rtsne)
 
-# Best for many distinct colors:
-# If Polychrome is installed, we use it; otherwise we fall back to a decent ggplot hue palette.
 has_polychrome <- requireNamespace("Polychrome", quietly = TRUE)
 
 # ------------------ Inputs / outputs ------------------
 infile <- "./methylation/methylation_files_tumor0x.txt"
-outpdf <- "./results/summarys/tSNE_methylation_01A_top1000SD_distinctColors.pdf"
+outpdf <- "./results/summarys/tSNE_methylation_01A_top2000SD_epithelialColors.pdf"
+out_tsv <- "./results/summarys/tSNE_methylation_01A_top2000SD_epithelialCoords.tsv"
+out_rds <- "./results/summarys/tSNE_methylation_01A_top2000SD_epithelialCoords.rds"
 
 # ------------------ Parameters ------------------
 max_per_cancer <- 200      # only for selecting variable probes
-n_var_probes   <- 1000     # number of most-variable CpGs
+n_var_probes   <- 2000     # number of most-variable CpGs
 n_pcs          <- 30       # PCA dims before tSNE
 max_iter_tsne  <- 1000
+seed <- 1
 
 # ------------------ Load file list ------------------
 files_all <- scan(infile, what = "", quiet = TRUE)
@@ -166,9 +170,14 @@ n <- nrow(X_pca)
 perp <- max(5, min(30, floor((n - 1) / 3) - 1))
 cat(">>> Running t-SNE (perplexity =", perp, ")...\n")
 
-set.seed(1)
-tsne <- Rtsne(X_pca, perplexity = perp, check_duplicates = FALSE,
-              max_iter = max_iter_tsne, verbose = TRUE)
+set.seed(seed)
+tsne <- Rtsne(
+  X_pca,
+  perplexity = perp,
+  check_duplicates = FALSE,
+  max_iter = max_iter_tsne,
+  verbose = TRUE
+)
 
 tsne_df <- data.frame(
   sample = rownames(X),
@@ -177,73 +186,71 @@ tsne_df <- data.frame(
   tSNE2 = tsne$Y[, 2]
 )
 
-# ------------------ Organ grouping for shapes ------------------
-organ_map <- list(
-  "CNS"           = c("GBM","LGG"),
-  "Breast"        = c("BRCA"),
-  "Gynecologic"   = c("CESC","OV","UCEC","UCS"),
-  "Lung"          = c("LUAD","LUSC"),
-  "HeadNeck"      = c("HNSC"),
-  "ThyroidThymus" = c("THCA","THYM"),
-  "SkinEye"       = c("SKCM","UVM"),
-  "GI"            = c("COAD","READ","ESCA","STAD"),
-  "Hepatobiliary" = c("LIHC","CHOL"),
-  "Pancreas"      = c("PAAD"),
-  "Kidney"        = c("KICH","KIRC","KIRP"),
-  "Bladder"       = c("BLCA"),
-  "Prostate"      = c("PRAD"),
-  "Testis"        = c("TGCT"),
-  "Adrenal"       = c("ACC","PCPG"),
-  "Sarcoma"       = c("SARC"),
-  "HemeLymph"     = c("LAML","DLBC"),
-  "Mesothelioma"  = c("MESO")
+# ------------------ Epithelial class mapping ------------------
+# NOTE: ESCA + CESC are mixed cohorts in TCGA; BLCA is urothelial (transitional), kept as Mixed.
+epi_map <- list(
+  Adenocarcinoma = c(
+    "BRCA","COAD","READ","STAD","PAAD","PRAD","LUAD","OV","UCEC","UCS",
+    "CHOL","LIHC","THCA","KIRC","KIRP","KICH","ACC"
+  ),
+  Squamous = c(
+    "HNSC","LUSC"
+  ),
+  Mixed = c(
+    "ESCA","CESC","BLCA"
+  ),
+  NonEpithelial = c(
+    "GBM","LGG","LAML","DLBC","SKCM","UVM","SARC",
+    "TGCT","PCPG","MESO","THYM"
+  )
 )
 
-cancer_to_organ <- function(ct) {
-  for (g in names(organ_map)) if (ct %in% organ_map[[g]]) return(g)
+cancer_to_epi <- function(ct) {
+  for (g in names(epi_map)) if (ct %in% epi_map[[g]]) return(g)
   "Other"
 }
-tsne_df$organ_group <- factor(vapply(as.character(tsne_df$cancer), cancer_to_organ, character(1)))
 
-shape_values <- c(16, 17, 15, 3, 7, 8, 18, 4, 1, 2, 5, 6, 9, 10, 11, 12, 13, 14, 0)
-names(shape_values) <- levels(tsne_df$organ_group)
+tsne_df$epithelial_class <- factor(
+  vapply(as.character(tsne_df$cancer), cancer_to_epi, character(1)),
+  levels = c("Adenocarcinoma","Squamous","Mixed","NonEpithelial","Other")
+)
 
-# ------------------ DISTINCT color palette for many cancers ------------------
-if (has_polychrome) {
-  n_cancers <- nlevels(tsne_df$cancer)
-  pal <- Polychrome::createPalette(
-    n_cancers,
-    seedcolors = c("#000000", "#E69F00", "#56B4E9", "#009E73")
-  )
-  names(pal) <- levels(tsne_df$cancer)
-}
+# ------------------ Save coordinates ------------------
+dir.create(dirname(outpdf), recursive = TRUE, showWarnings = FALSE)
+fwrite(as.data.table(tsne_df), out_tsv, sep = "\t")
+saveRDS(tsne_df, out_rds)
+
+# ------------------ Colors for epithelial classes ------------------
+# (fixed, readable palette; independent of number of cancers)
+epi_pal <- c(
+  Adenocarcinoma = "#1b9e77",
+  Squamous       = "#d95f02",
+  Mixed          = "#7570b3",
+  NonEpithelial  = "#e7298a",
+  Other          = "grey40"
+)
 
 # ------------------ Plot ------------------
-dir.create(dirname(outpdf), recursive = TRUE, showWarnings = FALSE)
-
-pdf(outpdf, width = 11, height = 9)
-g <- ggplot(tsne_df, aes(tSNE1, tSNE2, color = cancer, shape = organ_group)) +
-  geom_point(size = 1.6, alpha = 0.85) +
-  scale_shape_manual(values = shape_values) +
+pdf(outpdf, width = 10.5, height = 8.5)
+g <- ggplot(tsne_df, aes(tSNE1, tSNE2, color = epithelial_class)) +
+  geom_point(size = 1.7, alpha = 0.85) +
+  scale_color_manual(values = epi_pal, drop = FALSE) +
   theme_minimal() +
   labs(
     title = "t-SNE of TCGA tumor methylation (HM450) — 01A only",
-    subtitle = paste0("Top ", length(top_probes), " variable probes; perplexity=", perp),
-    color = "Cancer type",
-    shape = "Organ group"
+    subtitle = paste0("Top ", n_var_probes, " variable probes; PCA=", min(n_pcs, ncol(X_pca)),
+                      " dims; perplexity=", perp),
+    color = "Epithelial class",
+    x = "tSNE1", y = "tSNE2"
   ) +
   guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) +
   theme(legend.position = "right")
 
-if (has_polychrome) {
-  g <- g + scale_color_manual(values = pal)
-} else {
-  # fallback if Polychrome not installed
-  g <- g + scale_color_hue(h = c(0, 360), l = 60, c = 120)
-  message("NOTE: install Polychrome for more distinct colors: install.packages(\"Polychrome\")")
-}
-
 print(g)
 dev.off()
-save(tsne_df, file = "TSNE_results.RData")
+
+cat("Wrote:", outpdf, "\n")
+cat("Wrote:", out_tsv, "\n")
+cat("Wrote:", out_rds, "\n")
 cat(">>> DONE\n")
+
