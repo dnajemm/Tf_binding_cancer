@@ -136,8 +136,7 @@ export CONDA_PKGS_DIRS=/data/najemd/TF_binding_cancer/conda_envs/conda_pkgs
 #conda create --prefix ./conda_envs/TF_binding_cancer_env r-base -c conda-forge -y
 #conda env export --prefix ./conda_envs/TF_binding_cancer_env > ./conda_envs/TF_binding_cancer_env.yml
 conda activate ./conda_envs/TF_binding_cancer_env
-#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr r-hexbin r-mass r-kernsmooth r-venndir r-polychrome r-plotly r-FNN --yes 
-
+#conda install -c conda-forge r-venndiagram r-eulerr r-ggplot2 r-dplyr r-tidyr r-hexbin r-mass r-kernsmooth r-venndir r-polychrome r-plotly r-FNN bioconda bioconductor-illuminaHumanMethylation450kanno.ilmn12.hg19 bioconductor-minfi bioconductor-sesame bioconductor-sesamedata --yes 
 
 # 4) Overlap 6mer motifs with annotated methylation data to find intersecting regions and 
 # see if the motifs fall within methylated probes regions.
@@ -3130,6 +3129,17 @@ dev.off()
 
 cat("Wrote:", out_pdf, "\n")
 '
+# to look into the range oof the beta values to make sure it between 0 and 100 for one file
+zcat /data/papers/tcga/TCGA-ACC/TCGA-OR-A5KX/HM450_TCGA-ACC-TCGA-OR-A5KX-01A_1_annotated_methylation.bed.gz | awk '{print $5}' | sort -n | awk 'NR==1{min=$1} END{print "min:", min, "max:", $1}'
 
+# 31) Filter methylation files: filter CpG probes to remove chrX chrY chrM and keep only unique probes based on probe ID (4th column) and keep only probes starting with "cg" (to remove control probes)
 
-
+# filter methylation files
+mkdir -p ./methylation/filtered_methylation/
+for file in /data/papers/tcga/TCGA*/*/*_annotated_methylation.bed.gz; do
+  out=./methylation/filtered_methylation/$(basename "$file" .bed.gz)_filtered.bed.gz
+  zcat "$file" | awk 'BEGIN{FS=OFS="\t"} $1!="chrX" && $1!="chrY" && $1!="chrM" && !seen[$4]++ && $4 ~ /^cg/ {print}' | gzip > "$out"
+  # removes chrX chrY chrM, keeps only unique probes based on probe ID (4th column), keeps only probes starting with "cg" (to remove control probes)
+  echo "Filtered $(basename "$file") -> $(basename "$out")"
+done
+  
