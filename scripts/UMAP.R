@@ -3,7 +3,7 @@
 #* **Scaling:** Z-score per probe
 #* **UMAP:** `n_neighbors = 30`, `min_dist = 0.3`, Euclidean distance
 #* **Output:** 2D embedding colored by cancer type
-
+# This script performs UMAP dimensionality reduction on TCGA tumor methylation data (HM450), selecting the top 2,000 most variable CpG probes across all samples (with a maximum of 200 samples per cancer type) to create a 2D embedding visualized by cancer type.
 #!/usr/bin/env Rscript
 library(data.table)
 library(ggplot2)

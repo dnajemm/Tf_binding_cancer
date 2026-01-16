@@ -1172,7 +1172,6 @@ dev.off()
 # create a list of all methylation files for cancer samples includes all tumor types and samples while excluding healthy samples and including only primary vial of tumor samples (A)
 find /data/papers/tcga/TCGA-* -type f -name "HM450*_annotated_methylation.bed.gz" | grep -E -- '-0[0-9]A_' > ./methylation/methylation_files_tumor0x.txt
 
-
 # SNV statistics : number of SNVs per sample
 mkdir -p ./snv/snv_counts/
 for file in ./snv/SNV_TCGA*vcf.gz; do
@@ -2710,8 +2709,42 @@ done
 
 echo "Wrote: $out"
 
+# 2) build pairs files with sample healthy cancer pairs for each cancer type from filtered methylation files only 01A tumor and 11A healthy first replicates _1
+
+set -euo pipefail
+shopt -s nullglob
+
+in_dir="./methylation/filtered_methylation"
+mkdir -p ./methylation/sample_pairs_files
+out="./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+
+echo -e "cancer\tpatient\ttumor_file\thealthy_file" > "$out"
+
+# Loop ONLY over tumor files ending with -01A_1_...
+for tumor in "$in_dir"/HM450_TCGA-*-TCGA-*-01A_1_annotated_methylation_filtered.bed.gz; do
+  bn=$(basename "$tumor")
+
+  # Extract cancer (e.g., TCGA-BRCA)
+  cancer=$(echo "$bn" | sed -n 's/^HM450_\(TCGA-[A-Z0-9]\+\)-.*$/\1/p')
+
+  # Extract patient barcode (e.g., TCGA-A2-A25C)
+  patient=$(echo "$bn" | sed -n 's/^HM450_TCGA-[A-Z0-9]\+-\(TCGA-[A-Z0-9]\+-[A-Z0-9]\+\)-01A_1_.*$/\1/p')
+
+  [[ -n "$cancer" && -n "$patient" ]] || continue
+
+  # Require normal ALSO to be exactly -11A_1_...
+  normal="$in_dir/HM450_${cancer}-${patient}-11A_1_annotated_methylation_filtered.bed.gz"
+
+  # Skip if that exact normal _1 file doesn't exist
+  [[ -f "$normal" ]] || continue
+
+  echo -e "${cancer}\t${patient}\t${tumor}\t${normal}" >> "$out"
+done
+
+echo "Wrote: $out"
+
 # this file contains the list of all tumor-healthy pairs for methylation analysis for 22 cancer types that had at least one tumor-healthy pair.
-# 2) compute delta methylation per pair and classify into hypo hyper unchanged and make boxplot per cancer type
+# 3) compute delta methylation per pair and classify into hypo hyper unchanged and make boxplot per cancer type
 Rscript -e '
 library(data.table)
 library(ggplot2)
@@ -2955,19 +2988,19 @@ cat("Wrote:", out_pdf, "\n")
 '
 
 # plot a violin plot showing the difference in methylation between CpG probes in motifs and all CpG probes
-# Using matched primary tumor–normal pairs (01A–11A), we computed methylation differences (Δβ) for CpG probes and compared sites overlapping transcription-factor motifs to non-motif CpGs. Per patient, Δβ values were summarized by their median and visualized with violin plots, with paired Wilcoxon tests used to assess significance within each cancer type.
+# Using matched primary tumor–normal pairs (01A–11A), we computed methylation differences (Δβ) for 10000 moost variable CpG probes and compared sites overlapping transcription-factor motifs to non-motif CpGs. Per patient, Δβ values were summarized by their median and visualized with violin plots, with paired Wilcoxon tests used to assess significance within each cancer type and corrected pvalue with FDR.
 
 Rscript -e '
 library(data.table)
 library(ggplot2)
 
-pairs_file <- "./methylation/sample_pairs_files/methylation_pairs.tsv"
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
 
 # Motif CpG probes file
 #motif_bed  <- "./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed"
 motif_bed <- "./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed"
 
-out_pdf <- "./results/summarys/violin_deltaBeta_motif_NRF1_vs_nonmotif_by_cancer_points_stars.pdf"
+out_pdf <- "./results/summarys/violin_absdeltaBeta_motif_NRF1_vs_nonmotif_by_cancer_points_stars.pdf"
 
 read_probe_meth <- function(f) {
   dt <- fread(cmd = paste("zcat", shQuote(f)), header = FALSE, select = c(4,5))
@@ -2981,7 +3014,7 @@ if (length(motif_probes) == 0) stop("Motif probe list is empty: ", motif_bed)
 
 pairs <- fread(pairs_file)[!is.na(tumor_file) & !is.na(healthy_file)]
 
-keep_per_pair <- 3000
+keep_per_pair <- 10000
 
 lst <- vector("list", nrow(pairs))
 for (i in seq_len(nrow(pairs))) {
@@ -2992,11 +3025,11 @@ for (i in seq_len(nrow(pairs))) {
     stop("Probe order mismatch at pair ", i)
   }
 
-  delta <- tumor$meth - normal$meth
+  delta <- abs(tumor$meth - normal$meth)
   is_motif <- tumor$probe %chin% motif_probes
 
   idx <- which(!is.na(delta))
-  idx <- idx[order(abs(delta[idx]), decreasing = TRUE)]
+  idx <- idx[order(delta[idx], decreasing = TRUE)]
   idx <- head(idx, min(keep_per_pair, length(idx)))
 
   lst[[i]] <- data.table(
@@ -3012,7 +3045,7 @@ dt[, group := factor(group, levels = c("Non-motif CpGs","Motif CpGs"))]
 
 # -----------------------
 # 1) Points per sample (pair): summarize CpG-level deltas into ONE value per pair & group
-#    (median of Δβ across the selected CpGs)
+#    (median of |Δβ| across the selected CpGs)
 # -----------------------
 pts <- dt[, .(delta_pair = median(delta, na.rm=TRUE)), by = .(cancer, pair_id, group)]
 
@@ -3028,9 +3061,13 @@ pvals <- wide[, {
   .(p = w$p.value)
 }, by = cancer]
 
-pvals[, star := fifelse(p < 0.001, "***",
-                 fifelse(p < 0.01,  "**",
-                 fifelse(p < 0.05,  "*", "")))]
+# correction multiple testing (FDR)
+pvals[, p_adj := p.adjust(p, method = "BH")]
+
+#  étoiles BASÉES sur les p-values corrigées
+pvals[, star := fifelse(p_adj < 0.001, "***",
+                 fifelse(p_adj < 0.01,  "**",
+                 fifelse(p_adj < 0.05,  "*", "")))]
 
 # y-position for stars: put them slightly above the max violin range per cancer
 ypos <- dt[, .(y = max(delta, na.rm=TRUE)), by = cancer]
@@ -3069,9 +3106,9 @@ ggplot(dt, aes(x=group, y=delta, fill=group)) +
   theme_minimal(base_size=11) +
   theme(legend.position="none", axis.text.x=element_text(angle=20, hjust=1)) +
   labs(
-    title=paste0("deltaB (Tumor − Normal): Motif vs Non-motif CpGs (", basename(motif_bed), ")"),
-    subtitle="Points = per-pair median deltaB; Stars = paired Wilcoxon on per-pair medians",
-    x="", y=expression(Delta*beta)
+    title=paste0("|deltaB| (Tumor − Normal): Motif vs Non-motif CpGs (", basename(motif_bed), ")"),
+    subtitle="Points = per-pair median |deltaB|; Stars = paired Wilcoxon on per-pair medians",
+    x="", y=expression("|"*Delta*beta*"|")
   )
 
 dev.off()
@@ -3133,7 +3170,7 @@ cat("Wrote:", out_pdf, "\n")
 zcat /data/papers/tcga/TCGA-ACC/TCGA-OR-A5KX/HM450_TCGA-ACC-TCGA-OR-A5KX-01A_1_annotated_methylation.bed.gz | awk '{print $5}' | sort -n | awk 'NR==1{min=$1} END{print "min:", min, "max:", $1}'
 
 # 31) Filter methylation files: filter CpG probes to remove chrX chrY chrM and keep only unique probes based on probe ID (4th column) and keep only probes starting with "cg" (to remove control probes)
-
+# after filtering we have 470851 probes (from original 485569 probes).
 # filter methylation files
 mkdir -p ./methylation/filtered_methylation/
 for file in /data/papers/tcga/TCGA*/*/*_annotated_methylation.bed.gz; do
@@ -3142,4 +3179,139 @@ for file in /data/papers/tcga/TCGA*/*/*_annotated_methylation.bed.gz; do
   # removes chrX chrY chrM, keeps only unique probes based on probe ID (4th column), keeps only probes starting with "cg" (to remove control probes)
   echo "Filtered $(basename "$file") -> $(basename "$out")"
 done
-  
+
+# create a list of all filtered methylation files for cancer samples only 01A_1 tumor type first replicate and samples while excluding healthy samples 
+find ./methylation/filtered_methylation/ -type f -name "HM450*_annotated_methylation_filtered.bed.gz" | grep -E -- '-01A_1' > ./methylation/filtered_methylation_files_tumor01A_1.txt
+
+# 32) get list of top 10000 variable CpGs pan-cancer from yspill data 
+# What he did to get top 10000 variable CpGs pan-cancer: /shared/misc/tinman/yspill/2018-08-10_pca_of_normals/pca_of_normals.R
+# 1) For each TCGA cancer type, a pre-normalized DNA methylation beta-value matrix (CpGs × samples), generated using NOOB normalization, is loaded; each matrix contains methylation values for all samples of a given cancer type.
+# 2) CpG probe identifiers (row names) are extracted from each cancer-specific matrix and intersected across all cancer types, retaining only CpGs that are present in every dataset, thereby enforcing a common and consistent CpG feature space across cancers.
+# 3) Each cancer-specific matrix is subset to this shared CpG set and all matrices are concatenated column-wise to produce a single pan-cancer methylation matrix containing all samples from all cancer types with identical CpG ordering.
+# 4) The variance of each CpG is computed across all samples in the merged pan-cancer matrix, CpGs are ranked by decreasing variance, and the 10,000 most variable CpGs are selected; the merged matrix is then restricted to these CpGs and saved for downstream dimensionality-reduction analyses such as PCA or SVD.
+
+Rscript -e '
+library(data.table)
+load("/data/yspill/2018-08-10_pca_of_normals/TCGA-all_cancer_top10k_most_variable.RData")
+writeLines(rownames(beta_var), "./cpg_list.txt")
+'
+# create a list of cancer types with methylation data available
+find ./methylation/filtered_methylation -maxdepth 1 -type f -name "*_annotated_methylation_filtered.bed.gz" -printf "%f\n" \
+| awk '
+{
+  cancer=$0
+  sub(/^HM450_TCGA-/, "", cancer)   # remove prefix
+  sub(/-.*/, "", cancer)            # keep up to first dash -> cancer code
+  print cancer
+}
+' | sort -u > ./methylation/cancer_types_with_methylation_data.txt
+
+# create a list of cancer types with both normal and tumor samples for methylation analysis
+
+find ./methylation/filtered_methylation -maxdepth 1 -type f -name "*_annotated_methylation_filtered.bed.gz" -printf "%f\n" \
+| awk '
+{
+  cancer=$0
+  sub(/^HM450_TCGA-/, "", cancer)   # remove prefix
+  sub(/-.*/, "", cancer)            # keep up to first dash -> cancer code
+
+  if ($0 ~ /-01A_/) t[cancer]=1
+  if ($0 ~ /-11A_/) n[cancer]=1
+}
+END{
+  for (c in t) if (n[c]) print c
+}
+' | sort > ./methylation/cancer_types_with_tumor_and_normal.txt
+
+# get the 10000 most variable CpGs from the list of all CpGs
+
+Rscript -e '
+#!/usr/bin/env Rscript
+
+suppressPackageStartupMessages({
+  library(foreach)
+  library(doParallel)
+  library(purrr)
+  library(abind)
+  library(matrixStats)
+})
+
+# ------------------ inputs ------------------
+cancers_file <- "./methylation/cancer_types_with_methylation_data.txt"
+norm_dir     <- "./methylation/noob_normalized_matrices"
+
+out_rdata <- "./methylation/TCGA-all_cancer_top10k_most_variable.RData"
+out_txt   <- "./methylation/top10000_variable_CpGs_pan_cancer.txt"
+
+cores <- 2
+
+# ------------------ load cancer list ------------------
+cancers <- scan(cancers_file, what = "", quiet = TRUE)
+cancers <- cancers[cancers != ""]
+cat(">>> Cancers:", length(cancers), "\n")
+
+# ------------------ load all matrices ------------------
+cat(">>> Loading normalized matrices...\n")
+registerDoParallel(cores = cores)
+
+matrices_raw <- foreach(cancer = cancers, .combine = "list") %dopar% {
+  f <- file.path(norm_dir, paste0("TCGA-", cancer, "_cancer_normalization_noob.RData"))
+  if (!file.exists(f)) return(list(cancer = cancer, mat = NULL))
+  load(f)   # loads myNorm
+  list(cancer = cancer, mat = myNorm)
+}
+
+stopImplicitCluster()
+
+# ------------------ filter bad entries ------------------
+bad <- vapply(matrices_raw, function(x) is.null(x$mat) ||
+                                   !is.matrix(x$mat) ||
+                                   is.null(rownames(x$mat)),
+              logical(1))
+
+if (any(bad)) {
+  cat(">>> WARNING: dropped", sum(bad), "matrices:\n")
+  cat("    ", paste(vapply(matrices_raw[bad], `[[`, "", "cancer"), collapse = ", "), "\n")
+}
+
+matrices <- lapply(matrices_raw[!bad], `[[`, "mat")
+rm(matrices_raw); gc()
+
+cat(">>> Matrices kept:", length(matrices), "\n")
+if (length(matrices) < 2) stop("Not enough matrices after filtering.")
+
+# ------------------ common CpGs ------------------
+cat(">>> Computing common CpGs...\n")
+cpgs <- lapply(matrices, rownames)
+common_cpgs <- reduce(cpgs, intersect)
+cat(">>> Common CpGs:", length(common_cpgs), "\n")
+if (length(common_cpgs) == 0) stop("No common CpGs found.")
+
+# ------------------ subset & merge ------------------
+cat(">>> Subsetting matrices...\n")
+reduced_matrices <- lapply(matrices, function(x) x[common_cpgs, , drop = FALSE])
+
+rm(matrices); gc()
+
+cat(">>> Merging matrices...\n")
+mat <- abind(reduced_matrices, along = 2)
+
+rm(reduced_matrices); gc()
+
+cat(">>> Merged dims:", paste(dim(mat), collapse = " x "), "\n")
+
+# ------------------ top 10k CpGs ------------------
+cat(">>> Computing row variances...\n")
+rv <- rowVars(mat)
+
+cat(">>> Selecting top 10,000 CpGs...\n")
+top_idx <- order(rv, decreasing = TRUE)[seq_len(10000)]
+beta_var <- mat[top_idx, , drop = FALSE]
+
+# ------------------ save ------------------
+cat(">>> Saving outputs...\n")
+save(beta_var, file = out_rdata)
+writeLines(rownames(beta_var), out_txt)
+
+cat(">>> DONE\n")
+'

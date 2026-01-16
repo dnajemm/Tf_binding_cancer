@@ -1,4 +1,4 @@
-'''
+''' This script performs t-SNE analysis on ATAC-seq peak presence/absence data across all TCGA cancer types.
 1)It collects all ATAC-seq peak BED files in `./peaks/filtered_peaks/` (TCGA cancers), extracts the cancer type from each filename, and reports how many samples/cancers are included.
 2)It builds a global merged peak set by concatenating all peaks, sorting, and running `bedtools merge` to create one unified reference peak list.
 3)For each sample, it computes a binary peak presence/absence vector over the merged peaks, estimates peak variability across samples, keeps the top 3000 most variable peaks, then rebuilds a reduced matrix (peaks × samples).
