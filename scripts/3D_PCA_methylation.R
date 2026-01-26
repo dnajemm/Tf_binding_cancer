@@ -16,7 +16,7 @@ suppressPackageStartupMessages({
 
 # ------------------ settings ------------------
 meth_dir <- "./methylation/filtered_methylation"
-top_cpgs_file <- "./cpg_list.txt"   # 10k CpGs, one per line
+top_cpgs_file <- "./methylation/top10000_variable_CpGs_pan_cancer.txt"   # 10k CpGs, one per line
 
 out_root <- "./results/PCA_methylation_by_cancer_interactive"
 

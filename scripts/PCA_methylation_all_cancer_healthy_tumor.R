@@ -5,7 +5,7 @@ library(ggplot2)
 
 # ------------------ settings ------------------
 meth_dir <- "./methylation/filtered_methylation"
-top_cpgs_file <- file.path("cpg_list.txt")
+top_cpgs_file <- file.path("./methylation/top10000_variable_CpGs_pan_cancer.txt")
   
 out_dir <- "./results/PCA_methylation_pan_cancer"
 out_pdf <- file.path(out_dir, "PCA_HM450_pan_cancer_01A_vs_11A_faceted.pdf")

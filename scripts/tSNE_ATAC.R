@@ -160,3 +160,134 @@ ggsave(out_pdf, p, width = 12, height = 8)
 
 cat("Wrote:", out_pdf, "\n")
 cat("Wrote:", out_tsv, "\n")
+
+
+'''
+#!/usr/bin/env Rscript
+# One-page PDF with 3 separate t-SNE panels (Cancer / Organ group / Tissue type),
+# each with its OWN Polychrome legend placed BELOW its plot.
+# Input: TSV with columns: sample, cancer, tSNE1, tSNE2
+
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+  library(Polychrome)
+  library(patchwork)
+})
+
+# ------------------ inputs / outputs ------------------
+in_tsv  <- "./results/summarys/tSNE_ATAC_ALLCANCERS_coords.tsv"
+out_pdf <- "./results/summarys/tSNE_ATAC_3views.pdf"
+
+# ------------------ load tSNE coords ------------------
+dt <- fread(in_tsv)
+stopifnot(all(c("sample","cancer","tSNE1","tSNE2") %in% names(dt)))
+
+# ------------------ mappings ------------------
+organ_map <- list(
+  CNS           = c("GBM","LGG"),
+  Breast        = c("BRCA"),
+  Gynecologic   = c("CESC","OV","UCEC","UCS"),
+  Lung          = c("LUAD","LUSC"),
+  HeadNeck      = c("HNSC"),
+  ThyroidThymus = c("THCA","THYM"),
+  SkinEye       = c("SKCM","UVM"),
+  GI            = c("COAD","READ","ESCA","STAD"),
+  Hepatobiliary = c("LIHC","CHOL"),
+  Pancreas      = c("PAAD"),
+  Kidney        = c("KICH","KIRC","KIRP"),
+  Bladder       = c("BLCA"),
+  Prostate      = c("PRAD"),
+  Testis        = c("TGCT"),
+  Adrenal       = c("ACC","PCPG"),
+  Sarcoma       = c("SARC"),
+  HemeLymph     = c("LAML","DLBC"),
+  Mesothelioma  = c("MESO")
+)
+
+tissue_map <- list(
+  Adenocarcinoma = c(
+    "BRCA","COAD","READ","STAD","PAAD","PRAD","LUAD","OV","UCEC","UCS",
+    "CHOL","LIHC","THCA","KIRC","KIRP","KICH","ACC"
+  ),
+  Squamous = c("HNSC","LUSC"),
+  Mixed = c("ESCA","CESC","BLCA"),
+  NonEpithelial = c(
+    "GBM","LGG","LAML","DLBC","SKCM","UVM","SARC",
+    "TGCT","PCPG","MESO","THYM"
+  )
+)
+
+map_group <- function(ct, mapping) {
+  ct2 <- gsub("^TCGA-", "", ct)
+  for (g in names(mapping)) if (ct2 %in% mapping[[g]]) return(g)
+  "Other"
+}
+
+# add annotations
+dt[, organ_group := factor(vapply(cancer, map_group, character(1), mapping = organ_map))]
+dt[, tissue_type := factor(vapply(cancer, map_group, character(1), mapping = tissue_map))]
+dt[, cancer := factor(cancer)]
+
+# ------------------ Polychrome palettes ------------------
+pal_cancer <- Polychrome::createPalette(
+  nlevels(dt$cancer),
+  seedcolors = c("#ff0000ff", "#E69F00", "#56B4E9", "#009E73")
+)
+names(pal_cancer) <- levels(dt$cancer)
+
+pal_organ <- Polychrome::createPalette(
+  nlevels(dt$organ_group),
+  seedcolors = c("#ff00c3ff", "#815801ff", "#24099eff", "#55ffd2ff")
+)
+names(pal_organ) <- levels(dt$organ_group)
+
+pal_tissue <- Polychrome::createPalette(
+  nlevels(dt$tissue_type),
+  seedcolors = c("#2bff00ff", "#d9ff00ff", "#9e8dffff", "#004a36ff")
+)
+names(pal_tissue) <- levels(dt$tissue_type)
+
+# ------------------ plots (each with its own legend below) ------------------
+base_theme <- theme_bw(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(face = "bold", size = 13),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 9),
+    legend.key.size = unit(0.45, "cm")
+  )
+
+p_cancer <- ggplot(dt, aes(tSNE1, tSNE2, color = cancer)) +
+  geom_point(size = 1.4, alpha = 0.85) +
+  scale_color_manual(values = pal_cancer) +
+  labs(title = "Cancer type", x = "tSNE1", y = "tSNE2") +
+  base_theme
+
+p_organ <- ggplot(dt, aes(tSNE1, tSNE2, color = organ_group)) +
+  geom_point(size = 1.4, alpha = 0.85) +
+  scale_color_manual(values = pal_organ) +
+  labs(title = "Organ group", x = "tSNE1", y = "tSNE2") +
+  base_theme
+
+p_tissue <- ggplot(dt, aes(tSNE1, tSNE2, color = tissue_type)) +
+  geom_point(size = 1.4, alpha = 0.85) +
+  scale_color_manual(values = pal_tissue) +
+  labs(title = "Tissue type", x = "tSNE1", y = "tSNE2") +
+  base_theme
+
+# ------------------ export one-page PDF ------------------
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+pdf(out_pdf, width = 18, height = 7)
+(p_cancer | p_organ | p_tissue) +
+  plot_annotation(
+    title = "t-SNE of ATAC-seq peak presence/absence (TCGA)",
+    subtitle = "Same t-SNE coordinates, colored by: Cancer type / Organ group / Tissue type"
+  )
+dev.off()
+
+cat("Wrote:", out_pdf, "\n")
+
+''''
