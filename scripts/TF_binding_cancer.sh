@@ -461,17 +461,21 @@ df <- data.frame(
 
 df$Status <- factor(df$Status, levels = statuses)
 
+# order the 3 bars within each Motif from bigger to smaller 
+df$StatusWithin <- paste(df$Status, df$Motif, sep="__")
+lev <- with(df, StatusWithin[order(Motif, -Count)])
+df$StatusWithin <- factor(df$StatusWithin, levels = unique(lev))
 out_pdf <- "./results/summarys/motif_counts_NRF1_BANP_barplot_mm0to2mm.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
-p <- ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
-  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
-  geom_text(aes(label = comma(Count)),                       # commas on bar labels
-            position = position_dodge(width = 0.9),
+p <- ggplot(df, aes(x = Motif, y = Count, fill = Status, group = StatusWithin)) +
+  geom_bar(stat = "identity", position = position_dodge2(width = 0.9, preserve = "single")) +
+  geom_text(aes(label = comma(Count)),
+            position = position_dodge2(width = 0.9, preserve = "single"),
             vjust = -0.3, size = 3) +
-  scale_y_continuous(labels = comma) +                       # commas on y-axis
+  scale_y_continuous(labels = comma) +
   theme_minimal() +
-  labs(title = "Number of motifs across filtering variants",
+  labs(title = "Number of motifs across filtering mismatches",
        subtitle = "Original vs mm<=2 (with/without CG-protection)",
        y = "Count",
        x = "Motif") +
@@ -4761,6 +4765,26 @@ for file in ./snv/snv_filtered_without_structural_variants/SNV_TCGA*vcf.gz; do
     echo "Processed $counter : $sample with $count SNVs"
 done
 
+#######################################################################################################
+# SAMPLES WITH SNV PER CANCER TYPE --> ./snv/snv_sample_counts_per_cancer/samples_per_cancer.tsv
+#######################################################################################################
+
+VCF_DIR="./snv/snv_filtered_without_structural_variants"
+OUT_DIR="./snv/snv_sample_counts_per_cancer"
+OUT_FILE="${OUT_DIR}/samples_per_cancer.tsv"
+
+mkdir -p "$OUT_DIR"
+
+# Extract cancer type from filename SNV_TCGA-<CANCER>-..., count occurrences
+ls "${VCF_DIR}"/SNV_TCGA-*.vcf.gz 2>/dev/null \
+  | sed -E 's|.*/SNV_TCGA-([A-Z0-9]+)-.*|\1|' \
+  | sort \
+  | uniq -c \
+  | awk -v OFS="\t" '{print $2, $1}' \
+  > "$OUT_FILE"
+
+echo "[DONE] Wrote: $OUT_FILE"
+
 ###############################################################################
 # Frequency of variants found within each cancer type after filtering structural variants
 ###############################################################################
@@ -4785,7 +4809,7 @@ for cancer in $(ls ./snv/snv_filtered_without_structural_variants/SNV_TCGA-*.vcf
 
 done
 #!!IM HERE!!
-# plot pca 
+# plot heatmap per cancer type to see if samples have shared variants across the same cancer type. 
 
 
 
@@ -5608,7 +5632,7 @@ pheatmap(pct_shared,
 
 dev.off()
 '
-#!!LAUNCHED!!
+#!!DONE 3!!
 ###############################################################################
 # SNV HEATMAP ACROSS CANCER TYPES for 2mm motifs
 ###############################################################################
