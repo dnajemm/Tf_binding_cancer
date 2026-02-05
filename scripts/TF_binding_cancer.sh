@@ -5296,7 +5296,6 @@ p <- ggplot(df_long, aes(x = dataset, y = cancer_type, fill = factor(available))
 ggsave("./results/summarys/cancer_types_ATAC_SNV_Methylation_heatmap.pdf",p, width = 10, height = 10, dpi = 300, bg = "white")
 '
 # clean up intermediate files
-rm ./snv/cancer_types_with_snv_filtered.txt
 rm ./methylation/cancer_types_with_methylation.txt
 rm ./peaks/cancer_types_with_peaks.txt
 
@@ -5994,3 +5993,134 @@ cat ./snv/all_unique_variants_across_cancers.bed | grep 'chr9' | awk ' $2 >=3329
 # chr9    33290694        33290695        chr9:33290695:T:C
 
 # LOOKED INTO THE PAPER WHERE IT WAS FOUND , THEY MAPPED ON THE HG19 GENOME WHILE MINE ARE ON HG38. PLUS THE FOUND SNP IS A GERMLINE VARIATION WHILE MUTECT2 IS FOR SOMATIC MUTATIONS.
+
+############################################################################
+# 11) LOOKING INTO IF MUTATION AFFECT METHYLATION LEVELS AT A CG SITE 
+############################################################################
+# 1) Get the list of HM450 probes that overlap with NRF1 motif (2 CG in motif)
+set -euo pipefail
+
+PROBES_TXT="./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_probes.txt"
+ALL_CPG_BED="./methylation/annotated_methylation_data_probes_filtered.bed"
+MOTIF_BED="./motifs/NRF1_mm0to2_noCGmm.bed.gz"
+OUTDIR="./results/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes"
+mkdir -p "$OUTDIR"
+
+# Output: chr  start  end  cg_id  motif_chr  motif_start  motif_end  
+bedtools intersect -wa -wb \
+  -a <(
+        awk 'BEGIN{FS=OFS="\t"}
+             NR==FNR {keep[$1]=1; next}
+             ($4 in keep) {print $1,$2,$3,$4}' \
+          <(grep -v "^[[:space:]]*$" "$PROBES_TXT" | awk '{print $1}' | sort -u) \
+          "$ALL_CPG_BED" \
+        | sort -k1,1 -k2,2n
+      ) \
+  -b <(zcat "$MOTIF_BED") \
+> "$OUTDIR/NRF1_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
+
+set -euo pipefail
+
+PROBES_TXT="./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probes.txt"
+ALL_CPG_BED="./methylation/annotated_methylation_data_probes_filtered.bed"
+MOTIF_BED="./motifs/BANP_mm0to2_noCGmm.bed.gz"
+OUTDIR="./results/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes"
+mkdir -p "$OUTDIR"
+
+# Output: chr  start  end  cg_id  motif_chr  motif_start  motif_end  
+bedtools intersect -wa -wb \
+  -a <(
+        awk 'BEGIN{FS=OFS="\t"}
+             NR==FNR {keep[$1]=1; next}
+             ($4 in keep) {print $1,$2,$3,$4}' \
+          <(grep -v "^[[:space:]]*$" "$PROBES_TXT" | awk '{print $1}' | sort -u) \
+          "$ALL_CPG_BED" \
+        | sort -k1,1 -k2,2n
+      ) \
+  -b <(zcat "$MOTIF_BED") \
+> "$OUTDIR/BANP_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
+
+# 2) Get the list of SNVs that overlap with these probes in motifs (using the TSV above) and the VCF files per cancer type (filtered SNVs without structural variants)
+#!/usr/bin/env bash
+set -euo pipefail
+VCF_GLOB="./snv/snv_filtered_without_structural_variants/*.vcf.gz"
+TSV="./results/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes/NRF1_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
+OUT_DIR="./results/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
+mkdir -p "$OUT_DIR"
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+# Build a BED with motif intervals FROM TSV (these are the motifs that overlap cg probes) and attach cg as 4th column for bedtools -wb output.
+# TSV columns: cg=$4, motif_chr=$5, motif_start=$6, motif_end=$7
+TSV_BED_CG="$TMPDIR/tsv_motifs_with_cg.bed"
+awk 'BEGIN{FS=OFS="\t"} NR>1 && $4!="" && $5!="" {print $5,$6,$7,$4}' "$TSV" | sort -k1,1 -k2,2n -k3,3n -k4,4 -u > "$TSV_BED_CG"
+for vcf in $VCF_GLOB; do
+  sample=$(basename "$vcf" .vcf.gz)
+  # cancer code from "SNV_TCGA-ACC-...." -> ACC
+  cancer=$(echo "$sample" | sed -n 's/^SNV_TCGA-\([A-Za-z0-9]\+\)-.*/\1/p')
+  [[ -n "${cancer:-}" ]]
+  out_subdir="$OUT_DIR/$cancer"
+  mkdir -p "$out_subdir"
+  out="$out_subdir/${sample}.tsv"
+  echo "[RUN] $cancer / $sample"
+  # Variant stream: chrom, start0, end1, chrom, pos, ref, alt
+  bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\n' "$vcf" \
+    | awk 'BEGIN{OFS="\t"}{print $1,$2-1,$2,$1,$2,$3,$4}' \
+    | bedtools intersect -wa -wb \
+        -a "$TSV_BED_CG" \
+        -b - \
+    | awk 'BEGIN{OFS="\t"}{
+        # A (from TSV_BED_CG): $1 $2 $3 $4 = motif_chr motif_start motif_end cg
+        # B (from variants): starts at $5
+        #   $8=var_chr  $9=var_pos  $10=ref  $11=alt
+        print $1,$2,$3,$4,$8,$9,$10">"$11
+      }' > "$out"
+  echo -e "[OK] Wrote $out\t(hits: $(wc -l < "$out"))"
+done
+echo "[DONE] Outputs in $OUT_DIR/<CANCER>/"
+
+#!/usr/bin/env bash
+set -euo pipefail
+VCF_GLOB="./snv/snv_filtered_without_structural_variants/*.vcf.gz"
+TSV="./results/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes/BANP_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
+OUT_DIR="./results/methylation_motif_mutation_overlap/vcf_hits_in_BANP_mm0to2_noCGmm_motifs"
+mkdir -p "$OUT_DIR"
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+# Build a BED with motif intervals FROM TSV (these are the motifs that overlap cg probes) and attach cg as 4th column for bedtools -wb output.
+# TSV columns: cg=$4, motif_chr=$5, motif_start=$6, motif_end=$7
+TSV_BED_CG="$TMPDIR/tsv_motifs_with_cg.bed"
+awk 'BEGIN{FS=OFS="\t"} NR>1 && $4!="" && $5!="" {print $5,$6,$7,$4}' "$TSV" | sort -k1,1 -k2,2n -k3,3n -k4,4 -u > "$TSV_BED_CG"
+for vcf in $VCF_GLOB; do
+  sample=$(basename "$vcf" .vcf.gz)
+  # cancer code from "SNV_TCGA-ACC-...." -> ACC
+  cancer=$(echo "$sample" | sed -n 's/^SNV_TCGA-\([A-Za-z0-9]\+\)-.*/\1/p')
+  [[ -n "${cancer:-}" ]]
+  out_subdir="$OUT_DIR/$cancer"
+  mkdir -p "$out_subdir"
+  out="$out_subdir/${sample}.tsv"
+  echo "[RUN] $cancer / $sample"
+  # Variant stream: chrom, start0, end1, chrom, pos, ref, alt
+  bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\n' "$vcf" \
+    | awk 'BEGIN{OFS="\t"}{print $1,$2-1,$2,$1,$2,$3,$4}' \
+    | bedtools intersect -wa -wb \
+        -a "$TSV_BED_CG" \
+        -b - \
+    | awk 'BEGIN{OFS="\t"}{
+        # A (from TSV_BED_CG): $1 $2 $3 $4 = motif_chr motif_start motif_end cg
+        # B (from variants): starts at $5
+        #   $8=var_chr  $9=var_pos  $10=ref  $11=alt
+        print $1,$2,$3,$4,$8,$9,$10">"$11
+      }' > "$out"
+  echo -e "[OK] Wrote $out\t(hits: $(wc -l < "$out"))"
+done
+echo "[DONE] Outputs in $OUT_DIR/<CANCER>/"
+
+
+# 3) Create a list of pairs of two samples per cancer type, one with the SNV in the motif and one without, to compare their methylation levels at the overlapping probes (boxplot or similar)
+
+
+
+
+
+
+

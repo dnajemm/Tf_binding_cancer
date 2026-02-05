@@ -1,3 +1,6 @@
+###################################################################################################################################################################
+# this code performs t-SNE analysis on ATAC-seq peak presence/absence data across all TCGA cancer types.
+###################################################################################################################################################################
 ''' This script performs t-SNE analysis on ATAC-seq peak presence/absence data across all TCGA cancer types.
 1)It collects all ATAC-seq peak BED files in `./peaks/filtered_peaks/` (TCGA cancers), extracts the cancer type from each filename, and reports how many samples/cancers are included.
 2)It builds a global merged peak set by concatenating all peaks, sorting, and running `bedtools merge` to create one unified reference peak list.
@@ -162,7 +165,9 @@ cat("Wrote:", out_pdf, "\n")
 cat("Wrote:", out_tsv, "\n")
 
 
-'''
+###################################################################################################################################################################
+# this code is for a one-page PDF with 3 separate t-SNE panels (Cancer / Organ group / Tissue type), each with its OWN Polychrome legend placed BELOW its plot.
+###################################################################################################################################################################
 #!/usr/bin/env Rscript
 # One-page PDF with 3 separate t-SNE panels (Cancer / Organ group / Tissue type),
 # each with its OWN Polychrome legend placed BELOW its plot.
@@ -290,4 +295,4 @@ dev.off()
 
 cat("Wrote:", out_pdf, "\n")
 
-''''
+
