@@ -381,7 +381,6 @@ echo "[DONE] Wrote: $out"
 iupac2meme -logodds MOTIF > ./motifs/cg.meme
 
 
-
 ###############################################################################
 # 1) MOTIF FILTERING (6-MER STRINGENCY) , I DONT USE IT.
 ###############################################################################
@@ -1273,7 +1272,7 @@ print(p2)
 dev.off()
 cat("Wrote:", out_pdf, "\n")
 '
-#!! DONE 3 !!
+
 # create a barplot : One page per TF: 2mm motifs, ATAC, HM450, SNVs
 Rscript -e '
 library(ggplot2)
@@ -1382,7 +1381,7 @@ dev.off()
 cat("Wrote:", out_pdf, "\n")
 '
 
-# !!! DONE !!!
+
 ###############################################################################
 # ONE BARPLOT FOR BOTH TF : MOTIFS, ATAC, HM450, SNVs 
 ###############################################################################
@@ -1481,7 +1480,7 @@ for (tf in names(tf_files)) {
 dev.off()
 cat("DONE →", out_pdf, "\n")
 '
-#!!! DONE  !!!
+
 ###############################################################################
 # PROPORTIONAL EULER DIAGRAM PER TF : 6 mer MOTIFS, ATAC, HM450, SNVs 
 ###############################################################################
@@ -1623,7 +1622,7 @@ mtext("BANP motifs: genome-wide, accessible,\nand covered by HM450 probes",
 dev.off()
 cat("DONE →", out_pdf, "\n")
 '
-#!!DONE 3!!
+
 ###############################################################################
 # PROPORTIONAL EULER DIAGRAM PER TF : 2mm MOTIFS, ATAC, HM450, SNVs 
 ###############################################################################
@@ -1723,6 +1722,22 @@ for(motif in motifs){
 dev.off()
 cat("DONE ->", out_pdf, "\n")
 '
+###############################################################################
+# 7) Linking motifs with the closest gene using bedtools closest 
+###############################################################################
+# Gene annotation file : /data/genome/annotations/hg38_genes.bed
+for files in ./motifs/*_mm0to2*.bed.gz; do 
+    echo "Processing $files ..."
+    zcat "$files" | sort -k1,1 -k2,2n | closestBed -t "first" -d -a stdin -b /data/genome/annotations/hg38_tss.bed > "${files%.bed.gz}_closest_genes.bed"
+done
+
+# add header to the closest genes files
+for file in ./motifs/*_mm0to2*_closest_genes.bed; do
+  tmp="${file}.tmp"
+  { echo -e "chrom_motif\tstart_motif\tend_motif\tmotif\tpvalue\tstrand_motif\tchrom_gene\tstart_gene\tend_gene\tgene\tstrand_gene\tgene_id\tdistance"; cat "$file"; } > "$tmp" && mv "$tmp" "$file"
+done
+
+
 
 ###############################################################################
 
@@ -2389,7 +2404,7 @@ mkdir -p ./methylation/methylation_data/
 for file in /data/papers/tcga/TCGA*/*/HM450*.txt; do
     ln -s "$file" ./methylation/methylation_data/
 done
-##!!!Done!!!
+
 ###############################################################################
 # SECTION 3 — ANNOTATE HM450 FILES WITH GENOMIC COORDINATES FROM MANIFEST FILE 
 ###############################################################################
@@ -3208,10 +3223,42 @@ bedtools intersect -u \
   -b <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) \
   > ./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_intersected_methylation.bed
 
-#!!DONE!!
+
 ###########################################################################################
-# SMOOTH SCATTER PLOT FOR ALL CANCER-HEALTHY SAMPLE PAIRS FILTERED with 2mm motif
-###########################################################################################
+# Overlaps Mehtylaiton probes with 2mm motifs in peaks 
+########################################################################################### 
+mkdir -p ./methylation/overlaps/intersected_motifs2mm_HM450_peaks
+
+PROBES=./methylation/annotated_methylation_data_probes_filtered.bed
+
+# NRF1 mm0to2
+bedtools intersect -u \
+  -a "$PROBES" \
+  -b <(cat ./motifs/overlaps/motif2mm_peak_overlaps/NRF1_mm0to2_peak_overlaps.bed) \
+  > ./methylation/overlaps/intersected_motifs2mm_HM450_peaks/NRF1_mm0to2_intersected_methylation.bed
+
+# NRF1 mm0to2 noCGmm
+bedtools intersect -u \
+  -a "$PROBES" \
+  -b <(cat ./motifs/overlaps/motif2mm_peak_overlaps/NRF1_mm0to2_noCGmm_peak_overlaps.bed) \
+  > ./methylation/overlaps/intersected_motifs2mm_HM450_peaks/NRF1_mm0to2_noCGmm_intersected_methylation.bed
+
+# BANP mm0to2
+bedtools intersect -u \
+  -a "$PROBES" \
+  -b <(cat ./motifs/overlaps/motif2mm_peak_overlaps/BANP_mm0to2_peak_overlaps.bed) \
+  > ./methylation/overlaps/intersected_motifs2mm_HM450_peaks/BANP_mm0to2_intersected_methylation.bed
+
+# BANP mm0to2 noCGmm
+bedtools intersect -u \
+  -a "$PROBES" \
+  -b <(cat ./motifs/overlaps/motif2mm_peak_overlaps/BANP_mm0to2_noCGmm_peak_overlaps.bed) \
+  > ./methylation/overlaps/intersected_motifs2mm_HM450_peaks/BANP_mm0to2_noCGmm_intersected_methylation.bed  
+
+
+#############################################################################################################################
+# SMOOTH SCATTER PLOT FOR ALL CANCER-HEALTHY SAMPLE PAIRS FILTERED with 2mm motif for one cancer type , healthy vs tumor
+#############################################################################################################################
 # plot the methylation distribution for both healthy and cancer samples of all samples using a delta methylation histogram :
 #This script generates a single PDF where each page contains three plots for one tumor–normal pair: global CpG methylation, CpGs in NRF1 motifs, and CpGs in BANP motifs.
 #In the second and third plots, CpGs overlapping NRF1 or BANP binding sites with strong methylation changes (|Δβ| ≥ 20%) are highlighted in red to assess motif-specific epigenetic disruption.
@@ -3402,7 +3449,853 @@ dev.off()
 cat("DONE -> ", out_pdf, " (pages:", pages_written, ")\n", sep="")
 '
 
-#!!! DONE2 !!!
+# HM450_TCGA-BRCA-TCGA-E9-A1RH-01A_1_annotated_methylation_filtered.bed.gz
+# HM450_TCGA-BRCA-TCGA-E9-A1RH-11A_1_annotated_methylation_filtered.bed.gz
+# HM450_TCGA-BLCA-TCGA-BL-A13J-01A_1_annotated_methylation_filtered.bed.gz
+# HM450_TCGA-BLCA-TCGA-BL-A13J-11A_1_annotated_methylation_filtered.bed.gz
+#############################################################################################################################
+# SMOOTH SCATTER PLOT FOR one CANCER-CANCER SAMPLE between two cancer type 
+#############################################################################################################################
+Rscript -e '
+suppressPackageStartupMessages({
+  library(data.table)
+  library(KernSmooth)
+})
+
+# =========================
+# INPUTS (edit these 2!)
+# =========================
+tumorA_file <- "./methylation/filtered_methylation/HM450_TCGA-BLCA-TCGA-BL-A13J-11A_1_annotated_methylation_filtered.bed.gz" 
+tumorB_file <- "./methylation/filtered_methylation/HM450_TCGA-BLCA-TCGA-BT-A20U-11A_1_annotated_methylation_filtered.bed.gz"  
+labelA <- "BLCA | BL-A13J | 11A_1"
+labelB <- "BLCA | BT-A20U | 11A_1"
+
+thr <- 20
+out_pdf <- "./results/summarys/smoothScatter_HEALTHY_vs_HEALTHY_one_cancer_type.pdf"
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# motif CpG sets
+motif_files <- list(
+  NRF1_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_intersected_methylation.bed",
+  BANP_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_intersected_methylation.bed",
+  NRF1_noCGmm_mm0to2 = "./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_intersected_methylation.bed",
+  BANP_noCGmm_mm0to2 = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_intersected_methylation.bed"
+)
+
+# =========================
+# HELPERS
+# =========================
+pct_fmt <- function(x, n) {
+  if (n == 0) return("0%")
+  sprintf("%.1f%%", 100 * x / n)
+}
+
+add_class_legend <- function(delta_vec, thr, title = "All CpGs") {
+  n <- length(delta_vec)
+  hypo <- sum(delta_vec <= -thr, na.rm = TRUE)
+  hyper <- sum(delta_vec >=  thr, na.rm = TRUE)
+  unch <- sum(abs(delta_vec) < thr, na.rm = TRUE)
+
+  lab <- paste0(
+    title, "\n",
+    "HYPO (Delta≤-", thr, "): ", pct_fmt(hypo, n), "\n",
+    "Unchanged (|Delta|<", thr, "): ", pct_fmt(unch, n), "\n",
+    "HYPER (Delta≥+", thr, "): ", pct_fmt(hyper, n)
+  )
+
+  usr <- par("usr")
+  x <- usr[1] + 0.02 * (usr[2] - usr[1])
+  y <- usr[4] - 0.02 * (usr[4] - usr[3])
+  text(x, y, labels = lab, adj = c(0, 1), cex = 0.85)
+}
+
+read_bed_gz <- function(path) {
+  if(!file.exists(path)) stop(paste("Missing:", path))
+  fread(cmd = paste("zcat", shQuote(path)), header = FALSE, showProgress = FALSE)
+}
+
+plot_all <- function(merged, delta, thr, main_title){
+  smoothScatter(
+    merged$meth_A, merged$meth_B,
+    xlab = paste0(labelA, " methylation (%)"),
+    ylab = paste0(labelB, " methylation (%)"),
+    main = main_title
+  )
+  abline(0, 1, col = "black", lwd = 2)
+  abline(a = -thr, b = 1, col = "blue", lwd = 2)
+  abline(a =  thr, b = 1, col = "blue", lwd = 2)
+  add_class_legend(delta, thr, title = "All CpGs")
+}
+
+plot_motif_red <- function(merged, delta, thr, in_motif, label_title){
+  smoothScatter(
+    merged$meth_A, merged$meth_B,
+    xlab = paste0(labelA, " methylation (%)"),
+    ylab = paste0(labelB, " methylation (%)"),
+    main = paste0(label_title, " in red (|DeltaBeta| ≥ ", thr, "%)")
+  )
+  is_red <- in_motif & (abs(delta) >= thr)
+  points(
+    merged$meth_A[is_red],
+    merged$meth_B[is_red],
+    pch = 16, cex = 0.5, col = rgb(1, 0, 0, 0.6)
+  )
+  abline(0, 1, col = "black", lwd = 2)
+  abline(a = -thr, b = 1, col = "blue", lwd = 2)
+  abline(a =  thr, b = 1, col = "blue", lwd = 2)
+  add_class_legend(delta[in_motif], thr, title = label_title)
+}
+
+# =========================
+# LOAD MOTIF SETS
+# =========================
+motif_cpgs <- lapply(motif_files, function(f){
+  if(!file.exists(f)) stop(paste("Missing motif file:", f))
+  unique(fread(f, header = FALSE, showProgress = FALSE)[[4]])
+})
+
+# =========================
+# LOAD TWO TUMORS + MERGE
+# =========================
+cat("[INFO] Reading tumor A:", tumorA_file, "\n")
+A <- read_bed_gz(tumorA_file)
+cat("[INFO] Reading tumor B:", tumorB_file, "\n")
+B <- read_bed_gz(tumorB_file)
+
+A_dt <- data.table(probe=A[[4]], meth_A=as.numeric(A[[5]]))
+B_dt <- data.table(probe=B[[4]], meth_B=as.numeric(B[[5]]))
+
+merged <- merge(A_dt, B_dt, by="probe")
+merged <- merged[!is.na(meth_A) & !is.na(meth_B)]
+if(nrow(merged) == 0) stop("Merged = 0 usable CpGs (no overlap or all NA)")
+
+delta <- merged$meth_B - merged$meth_A
+
+# =========================
+# PLOT PDF (2 pages, each has 3 panels)
+# =========================
+pdf(out_pdf, width = 16, height = 6, colormodel = "rgb", useDingbats = FALSE)
+par(mfrow = c(1, 3), mar = c(4, 4, 4, 1))
+
+# Page 1: mm0to2
+plot_all(merged, delta, thr, paste0(labelA, "  vs  ", labelB, "\nAll CpGs (mm0to2 page)"))
+plot_motif_red(merged, delta, thr, merged$probe %in% motif_cpgs$NRF1_mm0to2, "NRF1_mm0to2 CpGs")
+plot_motif_red(merged, delta, thr, merged$probe %in% motif_cpgs$BANP_mm0to2, "BANP_mm0to2 CpGs")
+
+# Page 2: noCGmm_mm0to2
+plot_all(merged, delta, thr, paste0(labelA, "  vs  ", labelB, "\nAll CpGs (noCGmm page)"))
+plot_motif_red(merged, delta, thr, merged$probe %in% motif_cpgs$NRF1_noCGmm_mm0to2, "NRF1_mm0to2_noCGmm CpGs")
+plot_motif_red(merged, delta, thr, merged$probe %in% motif_cpgs$BANP_noCGmm_mm0to2, "BANP_mm0to2_noCGmm CpGs")
+
+dev.off()
+cat("DONE -> ", out_pdf, "\n", sep="")
+'
+
+
+###########################################################################################################################
+# QUANTIFICATION OF % OF CpGs WITH |DELTA| >= 20% IN NRF1 AND BANP MOTIFS (mm0to2 vs noCGmm mm0to2) AND IN ATAC PEAKS
+###########################################################################################################################
+Rscript -e '
+suppressPackageStartupMessages({library(data.table)})
+
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+thr <- 20
+
+# motif ∩ peaks CpG sets (from  bedtools intersect outputs)
+motif_peak_files <- list(
+  NRF1_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/NRF1_mm0to2_intersected_methylation.bed",
+  NRF1_mm0to2_noCGmm = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/NRF1_mm0to2_noCGmm_intersected_methylation.bed",
+  BANP_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/BANP_mm0to2_intersected_methylation.bed",
+  BANP_mm0to2_noCGmm = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/BANP_mm0to2_noCGmm_intersected_methylation.bed"
+)
+
+out_tsv <- "./results/summarys/count_CpGs_motifPeaks_delta20_per_pair.tsv"
+dir.create(dirname(out_tsv), recursive=TRUE, showWarnings=FALSE)
+
+read_bed_gz <- function(path) fread(cmd=paste("zcat", shQuote(path)), header=FALSE, showProgress=FALSE)
+
+pairs <- fread(pairs_file)
+
+# load probe IDs for each motif∩peaks set (column 4 = probe id in PROBES bed)
+motif_peak_cpgs <- lapply(motif_peak_files, function(f){
+  if(!file.exists(f)) stop(paste("Missing:", f))
+  unique(fread(f, header=FALSE)[[4]])
+})
+
+res <- vector("list", nrow(pairs))
+for(i in seq_len(nrow(pairs))){
+
+  tf <- pairs$tumor_file[i]
+  nf <- pairs$healthy_file[i]
+  if(!file.exists(tf) || !file.exists(nf)){
+    res[[i]] <- data.table(cancer=pairs$cancer[i], patient=pairs$patient[i])
+    next
+  }
+  tumor  <- read_bed_gz(tf)
+  normal <- read_bed_gz(nf)
+  tumor_dt  <- data.table(probe=tumor[[4]],  meth_tumor=as.numeric(tumor[[5]]))
+  normal_dt <- data.table(probe=normal[[4]], meth_normal=as.numeric(normal[[5]]))
+  merged <- merge(tumor_dt, normal_dt, by="probe")
+  merged <- merged[!is.na(meth_tumor) & !is.na(meth_normal)]
+  merged[, delta := meth_tumor - meth_normal]
+  merged[, big := abs(delta) >= thr]
+
+  row <- data.table(cancer=pairs$cancer[i], patient=pairs$patient[i])
+
+  # counts for each motif∩peaks set
+  for(nm in names(motif_peak_cpgs)){
+    row[[paste0(nm, "_nCpGs")]] <- sum(merged$probe %in% motif_peak_cpgs[[nm]])
+    row[[paste0(nm, "_nDelta20")]] <- sum((merged$probe %in% motif_peak_cpgs[[nm]]) & merged$big)}
+
+  # optional: overall context
+  row[["AllCpGs_nDelta20"]] <- sum(merged$big)
+
+  res[[i]] <- row
+}
+
+res_dt <- rbindlist(res, fill=TRUE)
+fwrite(res_dt, out_tsv, sep="\\t")
+
+# totals across all pairs
+num_cols <- setdiff(names(res_dt), c("cancer","patient"))
+tot <- res_dt[, lapply(.SD, function(x) sum(as.numeric(x), na.rm=TRUE)), .SDcols=num_cols]
+fwrite(tot, sub("\\\\.tsv$", "_TOTALS.tsv", out_tsv), sep="\\t")
+
+cat("DONE ->", out_tsv, "\\n")
+'
+# boxplot for the % of CpGs with |delta| >= 20% in each motif∩peaks set across all pairs.
+Rscript -e '
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(Polychrome)
+})
+
+in_tsv  <- "./results/summarys/count_CpGs_motifPeaks_delta20_per_pair.tsv"
+out_pdf <- "./results/summarys/boxplot_per_cancer_motifPeaks_delta20.pdf"
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+df <- read_tsv(in_tsv, show_col_types = FALSE)
+
+# Keep only the columns we need
+keep_cols <- c(
+  "cancer","patient",
+  "NRF1_mm0to2_nCpGs","NRF1_mm0to2_nDelta20",
+  "NRF1_mm0to2_noCGmm_nCpGs","NRF1_mm0to2_noCGmm_nDelta20",
+  "BANP_mm0to2_nCpGs","BANP_mm0to2_nDelta20",
+  "BANP_mm0to2_noCGmm_nCpGs","BANP_mm0to2_noCGmm_nDelta20"
+)
+df <- df %>% select(any_of(keep_cols))
+
+# Long format with nCpGs + nDelta20 directly 
+long <- df %>%
+  pivot_longer(
+    cols = -c(cancer, patient),
+    names_to = c("TF", "nocg", ".value"),
+    names_pattern = "(NRF1|BANP)_mm0to2(_noCGmm)?_(nCpGs|nDelta20)",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    set = ifelse(is.na(nocg) | nocg == "", "mm0to2", "mm0to2_noCGmm"),
+    nCpGs = as.numeric(nCpGs),
+    nDelta20 = as.numeric(nDelta20),
+    pct = 100 * nDelta20 / nCpGs
+  ) %>%
+  mutate(
+    panel = paste(TF, set, sep = " | "),
+    cancer = factor(cancer)
+  )
+
+# ---- Polychrome palette  ----
+n_c <- nlevels(long$cancer)
+poly_cols <- createPalette(n_c, seedcolors = c("#3B4992", "#EE0000", "#008B45"))
+cancer_cols <- setNames(poly_cols, levels(long$cancer))
+
+make_panel <- function(dat, title_txt){
+  ggplot(dat, aes(x = cancer, y = pct, fill = cancer, color = cancer)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.25) +
+    geom_jitter(width = 0.2, size = 1.8, alpha = 0.8) +
+    coord_flip() +
+    theme_bw() +
+    scale_fill_manual(values = cancer_cols) +
+    scale_color_manual(values = cancer_cols) +
+    labs(
+      x = NULL,
+      y = "% CpGs with |DeltaBeta| ≥ 20",
+      title = title_txt,
+      caption = paste0(
+        "Each dot represents one patient with matched tumor and normal samples.\n",
+        "Y-axis: percentage of CpGs within the TF motif ∩ ATAC-peak set\n",
+        "showing an absolute methylation difference |DeltaBeta| ≥ 20% (tumor vs normal).\n",
+        "Boxplots summarize the distribution across patients for each cancer type."
+      )
+    ) +
+    theme(
+      plot.title   = element_text(size = 11, face = "bold"),
+      plot.caption = element_text(size = 9, hjust = 0),
+      legend.position = "none"
+    )
+}
+
+p1 <- make_panel(filter(long, TF=="NRF1", set=="mm0to2"),        "NRF1 | mm0to2 (motif ∩ peaks)")
+p2 <- make_panel(filter(long, TF=="NRF1", set=="mm0to2_noCGmm"), "NRF1 | mm0to2_noCGmm (motif ∩ peaks)")
+p3 <- make_panel(filter(long, TF=="BANP", set=="mm0to2"),        "BANP | mm0to2 (motif ∩ peaks)")
+p4 <- make_panel(filter(long, TF=="BANP", set=="mm0to2_noCGmm"), "BANP | mm0to2_noCGmm (motif ∩ peaks)")
+
+# One page PDF with 4 plots (2x2)
+pdf(out_pdf, width = 16, height = 10, useDingbats = FALSE)
+par(mfrow = c(2,2), mar = c(4, 8, 3, 1))
+print(p1)
+print(p2)
+print(p3)
+print(p4)
+dev.off()
+
+cat("DONE -> ", out_pdf, "\n", sep="")
+'
+
+# write out the unique CpG probe IDs that have |delta| >= 20% in each motif∩peaks set across all pairs (one file per set). Cg in the output file are in atleast one pair with |delta| >= 20% and are in the motif∩peaks set. 
+Rscript -e 'q
+suppressPackageStartupMessages({library(data.table)})
+
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+thr <- 20
+
+motif_peak_files <- list(
+  NRF1_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/NRF1_mm0to2_intersected_methylation.bed",
+  NRF1_mm0to2_noCGmm = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/NRF1_mm0to2_noCGmm_intersected_methylation.bed",
+  BANP_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/BANP_mm0to2_intersected_methylation.bed",
+  BANP_mm0to2_noCGmm = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/BANP_mm0to2_noCGmm_intersected_methylation.bed"
+)
+
+out_dir <- "./methylation/delta20_cg_lists"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+read_bed_gz <- function(path){
+  fread(cmd=paste("zcat", shQuote(path)),
+        header=FALSE, showProgress=FALSE)
+}
+
+pairs <- fread(pairs_file)
+
+# load CpG probe IDs for each motif∩peaks set (col 4 = probe id)
+motif_peak_cpgs <- lapply(motif_peak_files, function(f){
+  if(!file.exists(f)) stop(paste("Missing:", f))
+  unique(fread(f, header=FALSE, showProgress=FALSE)[[4]])
+})
+
+# store CpGs passing threshold per set (collect in lists for speed)
+hit_sets <- setNames(vector("list", length(motif_peak_cpgs)), names(motif_peak_cpgs))
+for(nm in names(hit_sets)) hit_sets[[nm]] <- character(0)
+
+n_pairs <- nrow(pairs)
+for(i in seq_len(n_pairs)){
+
+  if(i %% 20 == 0) cat("[", i, "/", n_pairs, "]\n")
+
+  tf <- pairs$tumor_file[i]
+  nf <- pairs$healthy_file[i]
+  if(!file.exists(tf) || !file.exists(nf)) next
+
+  tumor  <- read_bed_gz(tf)
+  normal <- read_bed_gz(nf)
+
+  # BED columns: chr, start, end, probe, beta
+  tumor_dt  <- data.table(probe=tumor[[4]],  meth_tumor = as.numeric(tumor[[5]]))
+  normal_dt <- data.table(probe=normal[[4]], meth_normal= as.numeric(normal[[5]]))
+
+  merged <- merge(tumor_dt, normal_dt, by="probe")
+  merged <- merged[!is.na(meth_tumor) & !is.na(meth_normal)]
+  merged[, delta := meth_tumor - meth_normal]
+
+  # CpGs with |Δβ| >= thr
+  big_probes <- merged[abs(delta) >= thr, probe]
+  if(length(big_probes) == 0) next
+
+  # add to each set (use %chin% for speed)
+  for(nm in names(motif_peak_cpgs)){
+    hit_sets[[nm]] <- c(hit_sets[[nm]], big_probes[big_probes %chin% motif_peak_cpgs[[nm]]])
+  }
+}
+
+# write unique IDs per set
+for(nm in names(hit_sets)){
+  ids <- sort(unique(hit_sets[[nm]]))
+  out <- file.path(out_dir, paste0(nm, "_delta20_cg_ids.txt"))
+  fwrite(data.table(probe=ids), out, sep="\t", col.names=FALSE)
+  cat("WROTE", length(ids), "CpGs ->", out, "\n")
+}
+'
+# add the motif associated with each cg in the above output files (one file per set). This is for downstream use when we want to check the motif associated with each cg in the list of cg with |delta| >= 20% and in the motif∩peaks set. The output file will have two columns: probe and motif and chr start end.
+PROBES="./methylation/annotated_methylation_data_probes_filtered.bed"
+MOTIF_DIR="./motifs"
+OUTDIR="./motifs/overlaps/intersected_motifs2mm_HM450"
+mkdir -p "$OUTDIR"
+
+# ensure probes are sorted once
+sort -k1,1 -k2,2n "$PROBES" > "$OUTDIR/probes.sorted.bed"
+
+for MF in "$MOTIF_DIR"/*mm0to2*.bed.gz; do
+  echo "[INFO] Processing $MF ..."
+  base=$(basename "$MF" .bed.gz)
+  # Decompress + sort motif bed (bedtools likes sorted input)
+  zcat "$MF" \
+    | sort -k1,1 -k2,2n \
+    | bedtools intersect -wa -wb \
+        -a "$OUTDIR/probes.sorted.bed" \
+        -b stdin \
+    > "$OUTDIR/${base}_probeXmotif.tsv"
+done
+
+# Build a matrix  of presence/absence (0/1) of each cg (rows) with |delta| >= 20% in each cancer-patient pair (columns) for the CpGs in the list of cg with |delta| >= 20% and in the motif∩peaks set. We will have one matrix per cancer type (with all patients of that cancer as columns).
+Rscript -e '
+suppressPackageStartupMessages({library(data.table)})
+
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+thr <- 20
+
+cg_list_file <- "./methylation/delta20_cg_lists/BANP_mm0to2_noCGmm_delta20_cg_ids.txt"
+set_name <- sub("_delta20_cg_ids[.]txt$", "", basename(cg_list_file))
+
+out_dir <- file.path("./methylation/delta20_cg_lists/cg_presence_matrices", set_name)
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+read_bed_gz <- function(path){
+  fread(cmd=paste("zcat", shQuote(path)), header=FALSE, showProgress=FALSE)
+}
+
+pairs <- fread(pairs_file)
+stopifnot(all(c("cancer","patient","tumor_file","healthy_file") %in% names(pairs)))
+
+cgs <- fread(cg_list_file, header=FALSE, col.names=c("probe"))
+cgs <- unique(cgs)
+cat("[INFO] CpGs in list:", nrow(cgs), "\n")
+
+for (C in sort(unique(pairs$cancer))) {
+
+  subp <- pairs[cancer == C]
+  if (nrow(subp) == 0) next
+  cat("[CANCER]", C, "pairs:", nrow(subp), "\n")
+
+  long_list <- vector("list", nrow(subp))
+  k <- 0L
+
+  for (i in seq_len(nrow(subp))) {
+
+    pat <- subp$patient[i]
+    tf <- subp$tumor_file[i]
+    nf <- subp$healthy_file[i]
+    if (!file.exists(tf) || !file.exists(nf)) next
+
+    tumor  <- read_bed_gz(tf)
+    normal <- read_bed_gz(nf)
+
+    tumor_dt  <- data.table(probe=as.character(tumor[[4]]),  meth_tumor = as.numeric(tumor[[5]]))
+    normal_dt <- data.table(probe=as.character(normal[[4]]), meth_normal= as.numeric(normal[[5]]))
+
+    merged <- merge(tumor_dt, normal_dt, by="probe")
+    merged <- merged[!is.na(meth_tumor) & !is.na(meth_normal)]
+    if (nrow(merged) == 0) next
+
+    merged[, delta := meth_tumor - meth_normal]
+
+    merged <- merged[probe %chin% cgs$probe]
+    if (nrow(merged) == 0) next
+
+    hits <- merged[abs(delta) >= thr, .(probe)]
+    if (nrow(hits) == 0) next
+
+    hits[, `:=`(patient = pat, value = 1L)]
+    k <- k + 1L
+    long_list[[k]] <- hits
+  }
+
+  long <- rbindlist(long_list[seq_len(k)], fill=TRUE)
+
+  if (nrow(long) == 0) {
+    mat <- copy(cgs)
+    out_file <- file.path(out_dir, paste0("matrix_", C, ".tsv"))
+    fwrite(mat, out_file, sep="\t")
+    cat("[WARN] No hits found for", C, "-> wrote probe-only file\n")
+    next
+  }
+
+  # build CpG x patient matrix (fill missing with 0 directly)
+  mat <- dcast(long, probe ~ patient, value.var="value", fill=0L)
+
+  # ensure all CpGs are present as rows
+  mat <- merge(cgs, mat, by="probe", all.x=TRUE)
+  for (j in 2:ncol(mat)) set(mat, which(is.na(mat[[j]])), j, 0L)
+
+  out_file <- file.path(out_dir, paste0("matrix_", C, ".tsv"))
+  fwrite(mat, out_file, sep="\t")
+  cat("[DONE] Wrote", out_file, " (rows:", nrow(mat), " cols:", ncol(mat), ")\n")
+}
+'
+# plot heatmap of the above matrices (one per cancer type) to visualize the presence/absence of each cg with |delta| >= 20% in each patient for the CpGs in the list of cg with |delta| >= 20% and in the motif∩peaks set. 
+# This script does : For each CpG-set folder, it reads each cancer’s CpG×patient 0/1 matrix, keeps CpGs present at least once, optionally keeps the top 521 most frequent CpGs, and writes heatmaps for all cancers into a single PDF.
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+in_root <- "./methylation/delta20_cg_lists/cg_presence_matrices"
+out_dir <- "./results/heatmap_delta20_cg_motifnpeak"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+wrap_label <- function(x, width=35) paste(strwrap(x, width=width), collapse="\n")
+TOP_N <- 521
+
+for (setdir in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
+
+  set_name <- basename(setdir)
+
+  # NO backslash regex
+  mats <- list.files(setdir, pattern="^matrix_.*[.]tsv$", full.names=TRUE)
+  if (length(mats) == 0) next
+
+  pdf(file.path(out_dir, paste0("HEATMAP_", set_name, "_per_cancer.pdf")),
+      width=24, height=16)
+
+  for (f in mats) {
+
+    # NO backslash regex
+    cancer <- sub("^matrix_", "", sub("[.]tsv$", "", basename(f)))
+
+    dt <- fread(f)
+
+    cg_ids <- dt[[1]]
+    m <- as.matrix(dt[, -1, with=FALSE])
+    colnames(m) <- names(dt)[-1]
+    rownames(m) <- cg_ids
+    storage.mode(m) <- "numeric"
+    m[is.na(m)] <- 0
+
+    if (ncol(m) == 0 || nrow(m) == 0) next
+
+    keep <- rowSums(m) > 0
+    m <- m[keep, , drop=FALSE]
+    cg_ids <- cg_ids[keep]
+    if (nrow(m) == 0) next
+
+    rs <- rowSums(m)
+    if (nrow(m) > TOP_N) {
+      o <- order(rs, decreasing=TRUE)[1:TOP_N]
+      m <- m[o, , drop=FALSE]
+      cg_ids <- cg_ids[o]
+    }
+
+    n_samples <- ncol(m)
+    n_cgs <- nrow(m)
+    lab <- vapply(cg_ids, wrap_label, character(1), width=35)
+
+    pheatmap(
+      m,
+      color = c("skyblue", "yellow"),
+      breaks = c(-0.5, 0.5, 1.5),
+      labels_row = lab,
+      show_rownames = TRUE,
+      show_colnames = TRUE,
+      fontsize_row = 2,
+      fontsize_col = 3.7,
+      cluster_rows = FALSE,
+      cluster_cols = FALSE,
+      border_color = "grey60",
+      legend_breaks = c(0, 1),
+      legend_labels = c("absent (0)", "present (1)"),
+      main = paste0(set_name, " — ", cancer,
+                    " | patients=", n_samples,
+                    " | CpGs in motifnpeaks=", n_cgs)
+    )
+  }
+
+  dev.off()
+}
+'
+
+# Combine all matrixes into one big matrix (rows = unique CpGs across all cancers, cols = all patients across all cancers) for the CpGs in the list of cg with |delta| >= 20% and in the motif∩peaks set. Also write a separate metadata file with patient and cancer info for each column in the big matrix.
+Rscript -e '
+suppressPackageStartupMessages({library(data.table)})
+
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+out_meta   <- "./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm/big_matrix_colmeta.tsv"
+
+pairs <- fread(pairs_file)
+meta <- unique(pairs[, .(patient, cancer)])
+setorder(meta, cancer, patient)
+
+fwrite(meta, out_meta, sep="\t")
+cat("[DONE] wrote -> ", out_meta, "\n", sep="")
+'
+
+Rscript -e '
+suppressPackageStartupMessages({library(data.table)})
+
+set_dir <- "./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm"
+set_name <- basename(set_dir)
+
+out_gz <- file.path("./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm", paste0("big_matrix_", set_name, ".tsv.gz"))
+tmp_tsv <- sub("[.]gz$", "", out_gz)
+dir.create("./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm", recursive=TRUE, showWarnings=FALSE)
+
+files <- list.files(set_dir, pattern="^matrix_.*[.]tsv$", full.names=TRUE)
+if(length(files) == 0) stop("No matrix files found")
+
+long_list <- vector("list", length(files))
+
+for(i in seq_along(files)){
+  f <- files[[i]]
+  dt <- fread(f)
+  if(ncol(dt) < 2) next
+
+  mdt <- melt(dt,
+              id.vars=names(dt)[1],
+              variable.name="patient",
+              value.name="value")
+  setnames(mdt, names(mdt)[1], "probe")
+  mdt[, patient := as.character(patient)]
+  long_list[[i]] <- mdt[, .(probe, patient, value)]
+}
+
+long <- rbindlist(long_list, fill=TRUE)
+mat <- dcast(long, probe ~ patient, value.var="value", fill=0L)
+
+# write then gzip (compatible with older data.table)
+fwrite(mat, tmp_tsv, sep="\\t")
+system(paste("gzip -f", shQuote(tmp_tsv)))
+
+cat("[DONE] big matrix -> ", out_gz, "\\n", sep="")
+'
+# plot heatmap of the big matrix (rows = unique CpGs across all cancers, cols = all patients across all cancers) for the CpGs in the list of cg with |delta| >= 20% and in the motif∩peaks set. The columns (patients) should be renamed to include cancer type info from the metadata file.
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+in_root <- "./methylation/delta20_cg_lists/cg_presence_matrices"
+out_dir <- "./results/heatmap_delta20_cg_motifnpeak"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+wrap_label <- function(x, width=35) paste(strwrap(x, width=width), collapse="\n")
+TOP_N <- 521
+
+for (setdir in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
+  set_name <- basename(setdir)
+  # read the big matrix
+  big_file <- file.path(setdir, paste0("big_matrix_", set_name, ".tsv.gz"))
+  if (!file.exists(big_file)) next
+  dt <- fread(cmd=paste("zcat", shQuote(big_file)))
+  cg_ids <- dt[[1]]
+  m <- as.matrix(dt[, -1, with=FALSE])
+  colnames(m) <- names(dt)[-1]
+  rownames(m) <- cg_ids
+  storage.mode(m) <- "numeric"
+  m[is.na(m)] <- 0
+  if (ncol(m) == 0 || nrow(m) == 0) next
+  keep <- rowSums(m) > 0
+  m <- m[keep, , drop=FALSE]
+  cg_ids <- cg_ids[keep]
+  if (nrow(m) == 0) next
+  rs <- rowSums(m)
+  if (nrow(m) > TOP_N) {
+    o <- order(rs, decreasing=TRUE)[1:TOP_N]
+    m <- m[o, , drop=FALSE]
+    cg_ids <- cg_ids[o]
+  }
+  n_samples <- ncol(m)
+  n_cgs <- nrow(m)
+  lab <- vapply(cg_ids, wrap_label, character(1), width=35)
+  cairo_pdf(file.path(out_dir, paste0("HEATMAP_big_", set_name, ".pdf")),width=35, height=38)
+
+  # read cancer mapping
+  pairs <- fread("./methylation/sample_pairs_files/methylation_pairs_filtered.tsv")
+  meta <- unique(pairs[, .(patient, cancer)])
+
+  # keep only patients present in matrix
+  meta <- meta[patient %in% colnames(m)]
+
+  # create named vector: old_name -> new_name
+  new_names <- setNames(
+    paste0(meta$cancer, "-", meta$patient),
+    meta$patient
+  )
+
+  # rename columns
+  colnames(m) <- new_names[colnames(m)]
+
+  pheatmap(
+    m,
+    color = c("skyblue", "yellow"),
+    breaks = c(-0.5, 0.5, 1.5),
+    labels_row = lab,
+    show_rownames = TRUE,
+    show_colnames = TRUE,
+    fontsize_row = 3,
+    fontsize_col = 3,
+    cluster_rows = FALSE,
+    cluster_cols = TRUE,
+    border_color = "grey60",
+    legend_breaks = c(0, 1),
+    legend_labels = c("absent (0)", "present (1)"),
+    main = paste0(set_name,
+                  " | patients=", n_samples,
+                  " | CpGs in motifnpeaks=", n_cgs)
+  )
+
+  dev.off()
+}
+'
+##################################################################################################################################################
+# Barplot of the number of CpGs with |delta| >= 20% in each motif∩peaks set across all pairs, grouped by cancer type.
+##################################################################################################################################################
+Rscript -e '
+library(data.table)
+
+# ===== INPUT =====
+big_mat_file <- "./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm/big_matrix_NRF1_mm0to2_noCGmm.tsv.gz"
+pairs_file   <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+
+out_file <- "./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm/CpG_counts_per_cancer_NRF1_mm0to2_noCGmm.tsv"
+
+# ===== LOAD MATRIX =====
+dt <- fread(cmd=paste("zcat", shQuote(big_mat_file)))
+setnames(dt, 1, "probe")
+
+# ===== LOAD META =====
+pairs <- fread(pairs_file)
+meta <- unique(pairs[, .(patient, cancer)])
+
+# ===== MELT MATRIX =====
+long <- melt(dt,
+             id.vars="probe",
+             variable.name="patient",
+             value.name="value")
+
+# keep only CpGs present (value == 1)
+long <- long[value == 1]
+
+# attach cancer type
+long <- merge(long, meta, by="patient")
+
+# ===== COUNT PER CpG PER CANCER =====
+counts <- long[, .(n_samples = .N), by=.(probe, cancer)]
+
+# optional: reshape to CpG x Cancer matrix
+counts_mat <- dcast(counts, probe ~ cancer, value.var="n_samples", fill=0L)
+
+fwrite(counts_mat, out_file, sep="\t")
+
+cat("[DONE] -> ", out_file, "\n", sep="")
+'
+
+# plot barplot of the above counts (one per cancer type) to visualize the number of samples with |delta| >= 20% for each CpG in the list of cg with |delta| >= 20% and in the motif∩peaks set. Bars should be ordered by the most frequent CpGs across all cancers.
+
+Rscript -e '
+library(data.table)
+
+# ===== INPUT =====
+TF <- "NRF1"
+
+in_file    <- "./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm/CpG_counts_per_cancer_NRF1_mm0to2_noCGmm.tsv"
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+dist_file  <- "./methylation/dist_to_tss/HM450_TCGA-ACC-TCGA-OR-A5J2-01A_1_annotated_methylation_filtered_cpg_dist_tss.tsv"
+out_pdf    <- "./results/heatmap_delta20_cg_motifnpeak/BARPLOT_per_CpG_NRF1_mm0to2_noCGmm.pdf"
+
+PROX_BP <- 2000
+
+dt <- fread(in_file)
+cancers <- names(dt)[-1]
+
+pairs <- fread(pairs_file)
+tot_dt <- pairs[, .(total_samples = uniqueN(patient)), by=cancer]
+tot_vec <- setNames(tot_dt$total_samples, tot_dt$cancer)
+
+dist_dt <- fread(dist_file)
+setnames(dist_dt, 1:2, c("probe","dist_to_tss"))
+dist_dt[, dist_to_tss := as.numeric(dist_to_tss)]
+dist_map <- setNames(dist_dt$dist_to_tss, dist_dt$probe)
+
+dt[, total_presence := rowSums(dt[, -1, with=FALSE])]
+dt <- dt[order(-total_presence)]
+
+pdf(out_pdf, width=10, height=10)
+par(mar = c(10, 4, 4, 2))
+
+for(i in 1:nrow(dt)){
+  cg <- dt$probe[i]
+  counts <- as.numeric(dt[i, ..cancers])
+
+  o <- order(counts, decreasing=TRUE)
+  counts_sorted  <- counts[o]
+  cancers_sorted <- cancers[o]
+  ymax <- max(counts_sorted, na.rm=TRUE)
+
+  bp <- barplot(
+    counts_sorted,
+    names.arg = cancers_sorted,
+    las = 2,
+    col = "steelblue",
+    ylab = "Number of samples with DeltaBeta > 20%",
+    ylim = c(0, ymax * 1.20 + 1)
+  )
+
+  totals_sorted <- tot_vec[cancers_sorted]
+  pct <- ifelse(totals_sorted > 0, 100 * counts_sorted / totals_sorted, NA_real_)
+
+  labs <- ifelse(is.na(pct),
+                 paste0(counts_sorted, "/", totals_sorted),
+                 paste0(counts_sorted, "/", totals_sorted, "\n", sprintf("%.1f%%", pct)))
+
+  text(x = bp, y = counts_sorted + ymax*0.03 + 0.2, labels = labs, cex = 0.65)
+
+  d <- dist_map[[cg]]
+  pd <- ifelse(is.na(d), "NA", ifelse(abs(d) < PROX_BP, "proximal", "distal"))
+
+  title(main = paste0(TF, " | ", cg,
+                      " (", pd, ", distTSS=", ifelse(is.na(d),"NA",d), "bp) : samples per cancer"))
+
+  grid()
+}
+
+dev.off()
+cat("[DONE] -> ", out_pdf, "\n", sep="")
+'
+
+# count how many CpGs with |delta| >= 20% in each motif∩peaks set are proximal (< 2000bp) vs distal (>= 2000bp) to TSS. This is for the CpGs in the list of cg with |delta| >= 20% and in the motif∩peaks set. We will use the distance to TSS file we generated before and check the distance for each CpG in the list of cg with |delta| >= 20% and in the motif∩peaks set. We will then count how many of these CpGs are proximal vs distal to TSS.
+
+Rscript -e '
+library(data.table)
+
+# files
+counts_file <- "./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm/CpG_counts_per_cancer_NRF1_mm0to2_noCGmm.tsv"
+dist_file   <- "./methylation/dist_to_tss/HM450_TCGA-ACC-TCGA-OR-A5J2-01A_1_annotated_methylation_filtered_cpg_dist_tss.tsv"
+
+PROX_BP <- 2000
+
+# load CpGs in your set
+dt <- fread(counts_file)
+cg_set <- dt$probe
+
+# load distances
+dist_dt <- fread(dist_file)
+setnames(dist_dt, 1:2, c("probe","dist_to_tss"))
+dist_dt[, dist_to_tss := as.numeric(dist_to_tss)]
+
+# keep only CpGs in your set
+dist_sub <- dist_dt[probe %in% cg_set]
+
+# counts
+n_prox <- sum(abs(dist_sub$dist_to_tss) < PROX_BP, na.rm=TRUE)
+n_dist <- sum(abs(dist_sub$dist_to_tss) >= PROX_BP, na.rm=TRUE)
+
+cat("Proximal CpGs (<", PROX_BP, "bp): ", n_prox, "\n", sep="")
+cat("Distal CpGs (≥", PROX_BP, "bp): ", n_dist, "\n", sep="")
+'
+
+# Proximal CpGs (<2000bp): 1264
+# Distal CpGs (≥2000bp): 529
+
+
 ###########################################################################################
 # SMOOTH SCATTER PLOT FOR REPLICATES for 6 mer motifs
 ###########################################################################################
@@ -3753,8 +4646,6 @@ dev.off()
 cat("DONE -> ", out_pdf, "\n", sep="")
 '
 
-
-#!!!Done!!
 ###########################################################################################
 # DELTA BOXPLOT PLOT FOR ALL CANCER-HEALTHY TYPES PAIRS FILTERED WITH ALL CPG AND CPG IN TF --> PER CANCER TYPE
 ###########################################################################################
@@ -3930,7 +4821,6 @@ dev.off()
 cat("Wrote:", out_pdf, "\n")
 '
 
-## !!! Done !!!
 ###############################################################################
 # SECTION 9 — Distance OF CpG PROBES IN 6 mer MOTIFS TO TSS
 ###############################################################################
@@ -3949,7 +4839,7 @@ for file in ./methylation/filtered_methylation/HM450*_annotated_methylation_filt
 
   echo "Wrote: $out"
 done
-##!! DONE !!
+
 # for each tsv file in ./methylation/dist_to_tss/ filter only those in motif of NRF1 and make a histogram of distances to TSS for each sample
 # NRF1 
 mkdir -p ./results/summarys/methylation_motifs_TSS/NRF1
@@ -3984,7 +4874,7 @@ for f in ./methylation/dist_to_tss/*_cpg_dist_tss.tsv; do
     ./methylation/overlaps/intersected_motifs_HM450/BANP_probes.txt \
     "$f" > "$out"
 done
-#!! DONE!!!
+
 # Plot histogram of distances to TSS for NRF1 and BANP motifs per cancer type
 Rscript -e '
 library(data.table)
@@ -4078,7 +4968,6 @@ cat("Wrote:", out_pdf, "\n")
 # SECTION 9 — Distance OF CpG PROBES IN 2mm MOTIFS TO TSS
 ###############################################################################
 # Look into the distance of CpG probes in motifs to othe TSS to see if they are proximal or distal
-#!!doNE!!
 # for each tsv file in ./methylation/dist_to_tss/ filter only those in motif of NRF1 and make a histogram of distances to TSS for each sample
 # NRF1_mm0to2 
 mkdir -p ./results/summarys/methylation_motifs_TSS/NRF1_mm0to2
@@ -4291,7 +5180,6 @@ END{
 ' | sort > ./methylation/cancer_types_with_tumor_and_normal.txt
 
 
-#!!! Done !!
 # CREATE NOOB NORMALIZED MATRICES FOR METHYLATION DATA PER CANCER TYPE :
 #This script takes **filtered HM450 methylation files** from the input directory `./methylation/filtered_methylation` and generates **one normalized methylation matrix per cancer type**, saving the results to the output directory `./methylation/noob_normalized_matrices`. For each cancer listed, it collects all corresponding methylation files, reads the CpG identifiers and beta values, and constructs a matrix where **rows correspond to CpG sites and columns to samples**, using a consistent CpG order across samples. Cancer types with fewer than two samples are skipped. Each per-cancer matrix (`myNorm`) is saved as an `.RData` file in the output directory for downstream pan-cancer analyses.
 #!/usr/bin/env Rscript
@@ -4343,7 +5231,7 @@ for (cancer in cancers) {
   save(myNorm,file = file.path(out_dir,paste0("TCGA-", cancer,"_cancer_normalization_noob.RData")))
 }
 '
-#!! DONE !!
+
 # Merges all per-cancer filtered myNorm_filt matrices into a single pan-cancer matrix with only common CpGs across all cancers.
 # Saves the pan-cancer matrix to an RData file.
 Rscript -e '
@@ -4406,7 +5294,7 @@ save(pan_mat, file = out_rdata)
 cat(">>> DONE\n")
 '
 
-#!! DONE !!
+
 # Load the pan-cancer matrix 
 library(matrixStats)
 
@@ -4777,13 +5665,49 @@ mkdir -p "$OUT_DIR"
 
 # Extract cancer type from filename SNV_TCGA-<CANCER>-..., count occurrences
 ls "${VCF_DIR}"/SNV_TCGA-*.vcf.gz 2>/dev/null \
-  | sed -E 's|.*/SNV_TCGA-([A-Z0-9]+)-.*|\1|' \
+  | sed -E 's|.*/SNV_(TCGA-[A-Z0-9]+)-.*|\1|' \
   | sort \
   | uniq -c \
   | awk -v OFS="\t" '{print $2, $1}' \
   > "$OUT_FILE"
 
 echo "[DONE] Wrote: $OUT_FILE"
+
+# barplot 
+Rscript -e '
+data <- read.table("./snv/snv_sample_counts_per_cancer/samples_per_cancer.tsv",header=FALSE, sep="\t", stringsAsFactors=FALSE)
+colnames(data) <- c("cancer","sample_count")
+data <- data[order(data$sample_count, decreasing=FALSE), ]
+
+cols <- read.table("./results/cancer_color_order_with_defined_colours.tsv",header=FALSE, sep="\t", stringsAsFactors=FALSE, quote="", comment.char="")
+colnames(cols) <- c("cancer","color")
+
+palette <- setNames(cols$color, cols$cancer)
+bar_colors <- unname(palette[data$cancer])
+
+# validate colors (will error if any are not valid)
+bad <- which(!is.na(bar_colors) & tryCatch(is.na(col2rgb(bar_colors)), error=function(e) TRUE))
+if (length(bad) > 0) {
+  cat("[ERROR] These colors are invalid:\n")
+  print(unique(bar_colors[bad]))
+  quit(status=1)
+}
+
+pdf("./results/summarys/samples_with_snvs_per_cancer_barplot.pdf", width=9, height=9, bg="white")
+nice_max <- max(pretty(data$sample_count))
+labels <- sub("^TCGA-", "", data$cancer)
+
+barplot(data$sample_count, names.arg=labels, horiz=TRUE, las=1,
+        col=bar_colors, border="black",
+        main="Samples per Cancer Type",
+        cex.main=3, cex.lab=1.5, xlab="Number of samples",
+        xlim=c(0, nice_max))
+
+dev.off()
+'
+
+
+
 
 ###############################################################################
 # Frequency of variants found within each cancer type after filtering structural variants
@@ -4808,8 +5732,7 @@ for cancer in $(ls ./snv/snv_filtered_without_structural_variants/SNV_TCGA-*.vcf
   > ./snv/within_cancer_freq/${cancer}_variant_samplefreq.tsv
 
 done
-#!!IM HERE!!
-# plot heatmap per cancer type to see if samples have shared variants across the same cancer type. 
+
 
 
 
@@ -4913,7 +5836,7 @@ cat("DONE →", out_pdf, "\n")
 ###############################################################################
 # 4) UNIQUE FILTERED SNVs ACROSS ALL CANCERS
 ###############################################################################
-#!!!Done!!!
+
 # Create a unique list of SNVs across all cancer types (after filtering structural variants)
 zcat ./snv/snv_filtered_without_structural_variants/*.vcf.gz \
 | awk 'BEGIN{OFS="\t"} !/^#/ {
@@ -4923,7 +5846,7 @@ zcat ./snv/snv_filtered_without_structural_variants/*.vcf.gz \
 | sort -k1,1 -k2,2n -k3,3n -k4,4 \
 | uniq \
 > ./snv/all_unique_variants_across_cancers.bed
-#!!!DONE!!
+
 ###############################################################################
 # 5) SNV ∩ ATAC PEAKS
 ###############################################################################
@@ -4954,7 +5877,7 @@ for snv_file in ./snv/snv_filtered_without_structural_variants/SNV_TCGA-*.vcf.gz
         echo "No peak file for $snv_base (looked for $peak_file), skipping."
     fi
 done
-#!! Done!!
+
 # plot barplot of number of SNV in ATAC peak data
 Rscript -e '
 library(ggplot2)
@@ -5040,7 +5963,7 @@ for snv_file in ./snv/snv_filtered_without_structural_variants/SNV_TCGA-*_vs_*_1
         echo "No methylation file for $snv_base (expected $methylation_file)"
     fi
 done
-#!! DONE !!!
+
 # plot barplot of number of filtered SNV in methylation data
 Rscript -e '
 library(ggplot2)
@@ -5130,7 +6053,7 @@ mkdir -p ./motifs/overlaps/motif2mm_snv_overlaps
 mkdir -p ./motifs/overlaps/motifs2mm_in_peaks_snv
 
 # -------------------------
-# 1) SNVs that are in 2mm motifs  (SNV output) !!Done!!
+# 1) SNVs that are in 2mm motifs  (SNV output)
 # -------------------------
 # NRF1 
 bedtools intersect -u \
@@ -5167,13 +6090,13 @@ bedtools intersect -u \
   -a <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motif2mm_snv_overlaps/NRF1_mm0to2_noCGmm_motifs_with_SNVs.bed
-#!!Done!!
+
 # BANP
 bedtools intersect -u \
   -a <(zcat ./motifs/BANP_mm0to2.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motif2mm_snv_overlaps/BANP_mm0to2_motifs_with_SNVs.bed
-#!!Done!!
+
 bedtools intersect -u \
   -a <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
@@ -5207,23 +6130,23 @@ bedtools intersect -u \
 # -------------------------
 # 4) Motifs-in-peaks that contain SNVs (motif output)
 # -------------------------
-# NRF1 #!! Done !!
+# NRF1 
 bedtools intersect -u \
   -a ./motifs/overlaps/motif2mm_peak_overlaps/NRF1_mm0to2_peak_overlaps.bed \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motifs2mm_in_peaks_snv/NRF1_mm0to2_motifs_in_peaks_with_SNVs.bed
-#!! Done !!
+
 bedtools intersect -u \
   -a ./motifs/overlaps/motif2mm_peak_overlaps/NRF1_mm0to2_noCGmm_peak_overlaps.bed \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motifs2mm_in_peaks_snv/NRF1_mm0to2_noCGmm_motifs_in_peaks_with_SNVs.bed
-#!! Done !!
+
 # BANP
 bedtools intersect -u \
   -a ./motifs/overlaps/motif2mm_peak_overlaps/BANP_mm0to2_peak_overlaps.bed \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motifs2mm_in_peaks_snv/BANP_mm0to2_motifs_in_peaks_with_SNVs.bed
-#!!Done!!
+
 bedtools intersect -u \
   -a ./motifs/overlaps/motif2mm_peak_overlaps/BANP_mm0to2_noCGmm_peak_overlaps.bed \
   -b ./snv/all_unique_variants_across_cancers.bed \
@@ -5302,7 +6225,6 @@ rm ./peaks/cancer_types_with_peaks.txt
 ###############################################################################
 # 9) SNV HEATMAP ACROSS CANCER TYPES for 6 mer motifs
 ###############################################################################
-##!!! DONE 3 !!!
 # Heatmap to show SNVs across differents cancer types 
 # 1)Build a list of unique SNVs per cancer type
 mkdir -p ./snv/snv_filtered_unique_per_cancer/
@@ -5323,7 +6245,7 @@ for cancer in $cancers; do
 
     echo "Done $cancer"
 done
-# !!Done!! 
+
 # 2) Build a presence/absence matrix of SNVs (rows = SNVs, columns = cancer types)
 outfile="./snv/snv_presence_matrix.tsv"
 
@@ -5337,7 +6259,6 @@ echo "" >> $outfile # add a newline at the end of the header
 
 # 3) Keep only the motifs that have SNV inside (instead of keeping the SNV that overlap with motifs) and plot the number of motifs that have SNV inside for NRF1 and BANP
 # transform the SNV data file to a bed file but intersecting with the motif bed keeping the motif that have SNV inside
-#!!DONE!!
 # count number of SNVs that overlap with NRF1 and BANP motifs
 cat ./motifs/overlaps/motifs_snv_overlap/NRF1_filtered_SNVs_in_motifskept.bed  | wc -l > ./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs_count_kept.tsv 
 cat ./motifs/overlaps/motifs_snv_overlap/BANP_filtered_SNVs_in_motifskept.bed  | wc -l > ./snv/overlaps/snv_motifs_overlap/BANP_intersected_SNVs_count_kept.tsv
@@ -5399,10 +6320,10 @@ ggsave("./results/summarys/SNV_counts_in_motifs_NRF1_BANP_kept.pdf",plot = p, wi
 # transform the intersection of SNV in motifs bed file to a list of SNV ids only
 # note that the SNV id is in the 4th column of the bed file and that it will generate a unique list of SNV ids only so less lines than the bed file
 # presence and absence matrix separtly for each type of cancer type for NRF1 and BANP motifs
-#!! DONE!!
+
 # 1) make a list of SNV ids that overlap with NRF1 and BANP motifs
 cut -f4 ./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs.bed | sort -u > ./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs_ids.txt
-#!! DONE!!
+
 snv_ids_NRF1="./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs_ids.txt"
 # folder for intermediate columns
 mkdir -p ./snv/snv_presence_columns_NRF1/
@@ -5631,7 +6552,7 @@ pheatmap(pct_shared,
 
 dev.off()
 '
-#!!DONE 3!!
+
 ###############################################################################
 # SNV HEATMAP ACROSS CANCER TYPES for 2mm motifs
 ###############################################################################
@@ -6115,12 +7036,837 @@ for vcf in $VCF_GLOB; do
 done
 echo "[DONE] Outputs in $OUT_DIR/<CANCER>/"
 
+# 3) For each hit, get the beta values for the mutated sample and a non-mutated sample (if available) from the methylation files, and compile into a TSV for statistical testing.
+#!/usr/bin/env bash
+set -euo pipefail
+HITS_ROOT="./results/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
+METH_DIR="./methylation/filtered_methylation"
+OUT="./results/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv"
+mkdir -p "$(dirname "$OUT")"
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+echo -e "cancer\tsample_mut\tsample_nomut\tmotif_chr\tmotif_start\tmotif_end\tcg\tvar_chr\tvar_pos\tref_alt\tbeta_nomut\tbeta_mut" > "$OUT"
+extract_cancer_from_sample() {
+  echo "$1" | sed -n 's/^SNV_TCGA-\([A-Za-z0-9]\+\)-.*/\1/p'
+}
 
-# 3) Create a list of pairs of two samples per cancer type, one with the SNV in the motif and one without, to compare their methylation levels at the overlapping probes (boxplot or similar)
+extract_tumor_id_01A() {
+  local base
+  base=$(echo "$1" | grep -oE 'TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-01A' | head -n 1 || true)
+  [[ -n "${base:-}" ]] && echo "${base}_1" || echo ""
+}
+
+find_meth_file() {
+  local cancer="$1"
+  local tumor_id="$2"
+  ls -1 "$METH_DIR"/HM450_TCGA-"$cancer"-"$tumor_id"_annotated_methylation_filtered.bed.gz 2>/dev/null | head -n 1 || true
+}
+
+# Build cached cg->beta map for a methylation file (no sorting randomness: keep first seen)
+build_beta_map() {
+  local meth="$1"
+  local key out
+  key=$(basename "$meth" .bed.gz)
+  out="$TMPDIR/${key}.cg_beta.tsv"
+  [[ -s "$out" ]] && { echo "$out"; return; }
+
+  zcat "$meth" | awk 'BEGIN{FS=OFS="\t"}
+    {
+      # Find cg anywhere in line, then pick the numeric beta immediately after it
+      cg=""; beta=""
+      for(i=1;i<=NF;i++){
+        if($i ~ /^cg[0-9]+$/){ cg=$i; cg_i=i; break }
+      }
+      if(cg!=""){
+        for(j=cg_i+1;j<=NF;j++){
+          if($j ~ /^[0-9]*\.?[0-9]+$/){ beta=$j; break }
+        }
+      }
+      if(cg!="" && beta!="" && !seen[cg]++){ print cg,beta }
+    }' > "$out"
+  echo "$out"
+}
+
+lookup_beta() {
+  local map="$1"
+  local cg="$2"
+  awk -v cg="$cg" 'BEGIN{FS="\t"} $1==cg {print $2; exit}' "$map"
+}
+
+for cancer_dir in "$HITS_ROOT"/*; do
+  [[ -d "$cancer_dir" ]] || continue
+  cancer=$(basename "$cancer_dir")
+  echo "[CANCER] $cancer"
+  mapfile -t files < <(ls -1 "$cancer_dir"/*.tsv 2>/dev/null | sort)
+  [[ ${#files[@]} -ge 2 ]] || { echo "  [SKIP] <2 samples"; continue; }
+  found=0
+
+  # Try mutated sample files first (non-empty)
+  for mut_file in "${files[@]}"; do
+    [[ -s "$mut_file" ]] || continue
+    sample_mut=$(basename "$mut_file" .tsv)
+    # Find methylation file for the mutated sample (01A)
+    c_mut=$(extract_cancer_from_sample "$sample_mut")
+    id_mut=$(extract_tumor_id_01A "$sample_mut")
+    mut_meth=$(find_meth_file "$c_mut" "$id_mut")
+    [[ -n "${mut_meth:-}" ]] || continue
+    mut_map=$(build_beta_map "$mut_meth")
+
+    # Candidate non-mutated files: simplest definition = empty hit file
+    for nomut_file in "${files[@]}"; do
+      [[ "$nomut_file" == "$mut_file" ]] && continue
+      [[ ! -s "$nomut_file" ]] || continue
+      sample_nomut=$(basename "$nomut_file" .tsv)
+      c_nomut=$(extract_cancer_from_sample "$sample_nomut")
+      id_nomut=$(extract_tumor_id_01A "$sample_nomut")
+      nomut_meth=$(find_meth_file "$c_nomut" "$id_nomut")
+      [[ -n "${nomut_meth:-}" ]] || continue
+      nomut_map=$(build_beta_map "$nomut_meth")
+
+      # Now iterate over hits in mutated file until we find a cg with non-NA beta in both
+      while IFS=$'\t' read -r motif_chr motif_start motif_end cg var_chr var_pos ref_alt; do
+        [[ -n "${cg:-}" ]] || continue
+        beta_mut=$(lookup_beta "$mut_map" "$cg" || true)
+        beta_nomut=$(lookup_beta "$nomut_map" "$cg" || true)
+        [[ -n "${beta_mut:-}" && -n "${beta_nomut:-}" ]] || continue
+        echo -e "${cancer}\t${sample_mut}\t${sample_nomut}\t${motif_chr}\t${motif_start}\t${motif_end}\t${cg}\t${var_chr}\t${var_pos}\t${ref_alt}\t${beta_nomut}\t${beta_mut}" >> "$OUT"
+        echo "  [OK] pair chosen: $sample_mut vs $sample_nomut (cg=$cg)"
+        found=1
+        break
+      done < "$mut_file"
+      [[ "$found" -eq 1 ]] && break
+    done
+    [[ "$found" -eq 1 ]] && break
+  done
+  [[ "$found" -eq 0 ]] && echo "  [WARN] no valid pair with beta found for $cancer"
+done
+
+echo "[DONE] Wrote $OUT"
+
+# plot the difference in beta values between mutated and non-mutated samples for the cg sites in the motifs, per cancer type (boxplot or similar)
+Rscript -e '
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+df <- read_tsv("./results/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv") %>%
+  mutate(
+    beta_mut   = as.numeric(beta_mut),
+    beta_nomut = as.numeric(beta_nomut),
+    delta = beta_mut - beta_nomut
+  )
+
+p <- ggplot(df, aes(x = reorder(cancer, delta), y = delta)) +
+  geom_hline(yintercept = 0) +
+  geom_point() +
+  coord_flip() +
+  theme_bw() +
+  labs(x = NULL, y = "deltabeta = beta_mut - beta_nomut",title = "Difference in DNA methylation at TF binding motifs when a mutation is present")
+
+ggsave("./results/methylation_motif_mutation_overlap/NRF1_delta_beta_per_cancer.pdf", plot = p, width = 12, height = 12)
+'
 
 
+###############################################################################
+# RNAseq script 
+###############################################################################
+
+###############################################################################
+# 1) Link RNAseq files from papers to a expression directory. --> 11,505 files
+###############################################################################
+# link the expression files from the /data/papers/tcga/ to this folder :
+mkdir -p ./expression/expression_files/
+for file in /data/papers/tcga/TCGA*/*/RNA_TCGA*.augmented_star_gene_counts.tsv; do
+    ln -s "$file" ./expression/expression_files/
+done
+
+###############################################################################
+# 2) Count Number of RNAseq data per cancer type
+###############################################################################
+echo -e "Cancer_type\tNumber_of_RNAseq_files" > ./expression/number_of_rnaseq_per_cancer.txt
+ls ./expression/expression_files/ | cut -d'_' -f2 | cut -d'-' -f2 | sort | uniq -c | awk '{print $2 "\t" $1}' >> ./expression/number_of_rnaseq_per_cancer.txt
+mkdir -p ./results/expression/
+# Plot the number of RNAseq data per cancer type (barplot)
+Rscript -e '
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(dplyr)
+  library(readr)
+})
+
+in_file <- "./expression/number_of_rnaseq_per_cancer.txt"
+out_pdf <- "./results/expression/number_of_rnaseq_per_cancer.pdf"
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# Read tab-delimited file
+df <- read.delim(in_file, header = TRUE, stringsAsFactors = FALSE) %>%
+  rename(
+    Count  = Number_of_RNAseq_files,
+    Cancer = Cancer_type
+  )
+
+# ---- total number of RNA-seq files
+total_files <- sum(df$Count, na.rm = TRUE)
+
+# Load canonical cancer list/order
+cancer_order <- scan("./results/summarys/cancer_color_order.txt", what = "", quiet = TRUE)
+
+# Same palette as peaks plot
+palette_main <- rainbow(length(cancer_order))
+names(palette_main) <- cancer_order
+
+# Keep all cancers (unknown ones will be grey)
+palette_plot <- c(
+  palette_main,
+  setNames(
+    rep("grey70", length(setdiff(unique(df$Cancer), cancer_order))),
+    setdiff(unique(df$Cancer), cancer_order)
+  )
+)
+
+# Order bars by count (biggest → smallest)
+df <- df %>% arrange(Count)
+df$Cancer <- factor(df$Cancer, levels = df$Cancer)
+
+p <- ggplot(df, aes(x = Cancer, y = Count, fill = Cancer)) +
+  geom_col(color = "black") +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_manual(values = palette_plot) +
+  theme(legend.position = "none") +
+  labs(
+    x = NULL,
+    y = "Number of RNA-seq files",
+    title = paste0("RNA-seq files per cancer type (total = ", total_files, ")")
+  )
+
+ggsave(out_pdf, plot = p, width = 10, height = 8)
+'
+
+###############################################################################
+# 3) Count Number of RNAseq data per cancer type per healthy and cancer samples
+###############################################################################
+
+mkdir -p ./expression/expression_counts
+out=./expression/expression_counts/expression_presence.tsv
+
+echo -e "cancer\ttumor_count(01-09A)\thealthy_count(10-19A)" > "$out"
+
+# get cancer list using the SAME parsing you used before
+cancers=$(ls -1 ./expression/expression_files/ \
+  | cut -d'_' -f2 \
+  | cut -d'-' -f2 \
+  | sort -u)
+
+for cancer in $cancers; do
+  # tumor: 01A..09A
+  tumor_count=$(ls -1 ./expression/expression_files/ \
+    | grep -E "_TCGA-${cancer}-.*-0[1-9]A" \
+    | wc -l)
+
+  # healthy: 10A..19A
+  healthy_count=$(ls -1 ./expression/expression_files/ \
+    | grep -E "_TCGA-${cancer}-.*-1[0-9]A" \
+    | wc -l)
+
+  printf "%s\t%d\t%d\n" "$cancer" "$tumor_count" "$healthy_count" >> "$out"
+done
+
+echo "[DONE] Wrote $out"
+
+# Plot the number of RNAseq data per cancer type for tumor vs healthy samples (grouped barplot)
+Rscript -e '
+library(ggplot2)
+library(reshape2)
+
+# Load RNA-seq counts
+df <- read.table("./expression/expression_counts/expression_presence.tsv",header = TRUE, sep = "\t")
+colnames(df) <- c("cancer", "tumor", "healthy")
+
+# Flag cancers with no healthy samples
+df$no_healthy <- df$healthy == 0
+
+# Total samples per cancer
+df$total <- df$tumor + df$healthy
+
+# Reorder cancers by total (descending)
+df$cancer <- factor(df$cancer, levels = df$cancer[order(-df$total)])
+
+# Label dataframe (after reordering)
+label_df <- df[, c("cancer", "no_healthy")]
+
+# Long format (tumor + healthy only)
+df_long <- melt(df,
+                id.vars = "cancer",
+                measure.vars = c("tumor", "healthy"),
+                variable.name = "type",
+                value.name = "count")
+
+pdf("./results/expression/expression_counts_healthy_cancer_per_cancer_type_barplot.pdf",width = 12, height = 8)
+
+ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(
+    values = c("tumor" = "salmon", "healthy" = "steelblue"),
+    name = ""
+  ) +
+  labs(
+    title   = "Tumor (0XA) vs Healthy (1XA) RNA-seq Sample Counts per Cancer Type",
+    x       = "Cancer Type",
+    y       = "Number of Samples",
+    caption = "Red cancer names = cancer types with no healthy samples"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title   = element_text(hjust = 0.5),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.caption = element_text(hjust = 0.5, color = "red", size = 12),
+    plot.margin  = margin(t = 10, r = 20, b = 60, l = 20)
+  ) +
+  coord_cartesian(clip = "off") +
+  geom_text(
+    data = label_df,
+    aes(
+      x     = cancer,
+      y     = 0,
+      label = cancer,
+      color = no_healthy
+    ),
+    angle       = 45,
+    hjust       = 1,
+    vjust       = 1.2,
+    inherit.aes = FALSE,
+    size        = 4
+  ) +
+  scale_color_manual(
+    values = c(`TRUE` = "red", `FALSE` = "black"),
+    guide  = "none"
+  )
+
+dev.off()
+'
+
+###############################################################################
+# 4) Count Number of patients with RNA seq data 
+###############################################################################
+ls -1 ./expression/expression_files/*.tsv 2>/dev/null \
+| sed 's#.*/##' \
+| grep -oE 'TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}' \
+| sort -u \
+| wc -l
+
+# 10091
+
+###############################################################################
+# 5) Count Number of GENE TYPE IN EACH FILE RNAseq data 
+###############################################################################
+awk -F'\t' 'NR>1 && $1 ~ /^ENS/ {print $3}' ./expression/expression_files/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv | sort | uniq -c 
+# plot the distribution of gene types in the RNA-seq files (barplot)
+Rscript -e '
+library(data.table)
+
+infile <- "./expression/expression_files/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv"
+outpdf <- "./results/expression/barplot_gene_types_RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.pdf"
+dir.create(dirname(outpdf), recursive=TRUE, showWarnings=FALSE)
+
+dt <- fread(infile)
+# keep gene rows only (those that start with ENS)
+dt <- dt[grepl("^ENS", dt[[1]])]
+
+# gene_type is column 3
+cnt <- dt[, .N, by=.(gene_type = dt[[3]])]
+setorder(cnt, -N)
+
+# -----  colors + y-axis scaling -----
+n <- nrow(cnt)
+cols <- grDevices::hcl.colors(n, palette="Dark2", alpha=0.9)
+
+ymax <- max(cnt$N, na.rm=TRUE)
+ylim <- c(0, ymax * 1.12)  # headroom for text labels
+# ---------------------------------------
+
+pdf(outpdf, width=10, height=8)
+par(mar=c(10,4,4,2))
+bp <- barplot(
+  cnt$N,
+  names.arg=cnt$gene_type,
+  las=2,
+  ylab="Number of genes",
+  main="Gene biotypes in file",
+  col=cols,
+  border=NA,
+  ylim=ylim,
+  cex.names = 0.6
+)
+
+text(bp, cnt$N, labels=cnt$N, pos=3, cex=0.5)
+grid(nx=NA, ny=NULL)
+dev.off()
+
+cat("[DONE] -> ", outpdf, "\n", sep="")
+'
+#!!LAUNCHED!!
+###############################################################################
+# 6) Range of tpm_unstranded 
+###############################################################################
+
+echo -e "tpm_unstranded_values" > ./expression/tpm_unstranded_values.txt
+
+for f in ./expression/expression_files/*; do
+  awk '$1 ~ /^ENS/ && $3 ~ /^protein_coding$/ {print $7}' "$f" >> ./expression/tpm_unstranded_values.txt
+done
+sort -un ./expression/tpm_unstranded_values.txt > ./expression/tpm_unstranded_values_unique.txt 
+
+##########################################################################################################################################################################################
+# Create a summary table of presence/absence of omics data types (methylation, SNV, RNA-seq) for each sample, to know which samples have which data types available for later analyses.
+##########################################################################################################################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+# list of all samples from tcga --> samples_id cancer_type
+ls -d /data/papers/tcga/TCGA-*/*/ 2>/dev/null | awk -F'/' '{c=$(NF-2); sub(/^TCGA-/,"",c); s=$(NF-1); print s"\t"c}' > ./all_tcga_samples_with_cancer.tsv
+
+# DATA SUMMARY FOR EACH SAMPLE
+# For each sample, check if there is a SNV file, a methylation file, and an RNA-seq file, and compile into a summary TSV.
+set -euo pipefail
+OUT="./results/sample_data_summary.tsv"
+mkdir -p "$(dirname "$OUT")"
+echo -e "sample\tcancer\tsnv\tmethylation\trnaseq\tatac" > "$OUT"
+
+while IFS=$'\t' read -r sample_id cancer; do
+  [[ -n "$sample_id" ]] || continue
+  snv_file=$(ls -1 ./snv/snv_filtered_without_structural_variants/SNV_*"${sample_id}"*.vcf.gz 2>/dev/null || true)
+  meth_file=$(ls -1 ./methylation/filtered_methylation/HM450_*"${sample_id}"*_annotated_methylation_filtered.bed.gz 2>/dev/null || true)
+  rnaseq_file=$(ls -1 ./expression/expression_files/RNA_*"${sample_id}"*.augmented_star_gene_counts.tsv 2>/dev/null || true)
+  atac_file=$(ls -1 ./peaks/ATAC_TCGA*"${sample_id}"* 2>/dev/null || true)
+  echo -e "${sample_id}\t${cancer}\t$( [[ -n "$snv_file" ]] && echo 1 || echo 0 )\t$( [[ -n "$meth_file" ]] && echo 1 || echo 0 )\t$( [[ -n "$rnaseq_file" ]] && echo 1 || echo 0 )\t$( [[ -n "$atac_file" ]] && echo 1 || echo 0 )" >> "$OUT"
+done < ./all_tcga_samples_with_cancer.tsv
+
+# Barplot of data availability per cancer type
+Rscript -e '
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+infile  <- "./results/sample_data_summary.tsv"
+outfile <- "./results/barplot_sample_data_by_cancer_by_datatype.pdf"
+df <- read_tsv(infile, show_col_types = FALSE) %>%
+  mutate(across(c(snv, methylation, rnaseq, atac), as.integer))
+
+# totals per cancer (unique samples)
+totals_cancer <- df %>%
+  group_by(cancer) %>%
+  summarise(N = n(), .groups="drop")
+
+# counts per cancer per datatype
+wide <- df %>%
+  group_by(cancer) %>%
+  summarise(
+    RNA  = sum(rnaseq == 1, na.rm = TRUE),
+    ATAC = sum(atac   == 1, na.rm = TRUE),
+    SNV  = sum(snv    == 1, na.rm = TRUE),
+    METH = sum(methylation == 1, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(totals_cancer, by="cancer")
+
+# order cancers by N SAMPLES (descending) 
+wide <- wide %>% mutate(TOTAL = RNA + ATAC + SNV + METH)
+cancer_levels <- wide$cancer[order(-wide$TOTAL)]
+
+# caption lines (two columns like before)
+cap_tbl <- wide %>%
+  mutate(
+    cancer_chr = as.character(cancer),
+    line = paste0(cancer_chr,
+                  ": N=", N,
+                  "; RNA=", RNA,
+                  "; ATAC=", ATAC,
+                  "; SNV=", SNV,
+                  "; METH=", METH)
+  ) %>%
+  arrange(factor(cancer_chr, levels = cancer_levels))
+lines <- cap_tbl$line
+if (length(lines) %% 2 == 1) lines <- c(lines, "")
+caption_text <- paste(
+  paste(lines[c(TRUE, FALSE)], lines[c(FALSE, TRUE)], sep="    |    "),
+  collapse="\n"
+)
+
+# long format for plotting
+counts <- wide %>%
+  select(cancer, RNA, ATAC, SNV, METH) %>%
+  pivot_longer(cols = c(RNA, ATAC, SNV, METH), names_to="datatype", values_to="n") %>%
+  mutate(
+    cancer = factor(cancer, levels = cancer_levels),
+    datatype = factor(datatype, levels = c("RNA","ATAC","SNV","METH"))
+  )
+cols <- c(
+  RNA  = "#4E79A7",  # blue
+  ATAC = "#59A14F",  # green
+  SNV  = "#EF6E48",  # red
+  METH = "#FFB900"   # orange
+)
+
+p <- ggplot(counts, aes(x = cancer, y = n, fill = datatype)) +
+  geom_col() +
+  scale_fill_manual(values = cols,
+                    labels = c(RNA="RNA-seq", ATAC="ATAC-seq", SNV="SNV", METH="Methylation")) +
+  labs(
+    title = "Omics availability per cancer type",
+    subtitle = paste0("Total samples: ", sum(wide$N)),
+    x = "Cancer type",
+    y = "Number of samples",
+    fill = "",
+    caption = caption_text
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1),
+    plot.caption = element_text(size = 9, hjust = 0.5),
+    plot.caption.position = "plot",
+    plot.title = element_text(face = "bold")
+  )
+
+ggsave(outfile, p, width = 14, height = 10)
+cat("[DONE] Wrote ", outfile, "\n", sep = "")
+'
+
+########################################################
+# Expression of NRF1 and BANP in the different samples 
+########################################################
+# grep -w --> to find matches of the while word (gene name) and not partial matches
+for files in ./expression/expression_files/RNA_TCGA-*-*.augmented_star_gene_counts.tsv; do
+  sample=$(basename "$files" .augmented_star_gene_counts.tsv)
+  out="./expression/expression_of_NRF1_BANP/${sample}_NRF1_BANP_expression.tsv"
+  mkdir -p "$(dirname "$out")"
+  echo -e "gene_id\tgene_name\tgene_type\tunstranded\tstranded_first\tstranded_second\ttpm_unstranded\tfpkm_unstranded\tfpkm_uq_unstranded" > "$out"
+  grep -w 'NRF1' "$files"  >> "$out"
+  grep -w 'BANP' "$files"  >> "$out"
+done
+
+##################################################################################################################################################
+# plot  the expression of NRF1 and BANP in the different samples, grouped by cancer type one page for healthy and one for tumor samples (boxplot)
+##################################################################################################################################################
+Rscript -e '
+library(readr); library(dplyr); library(stringr); library(ggplot2)
+
+cat("[INFO] Reading mapping file...\n")
+map <- read_tsv("./all_tcga_samples_with_cancer.tsv", col_names=c("sample_id","cancer"), show_col_types=FALSE)
+
+cat("[INFO] Listing NRF1/BANP per-sample files...\n")
+files <- list.files("./expression/expression_of_NRF1_BANP",
+                    pattern = "_NRF1_BANP_expression.tsv$",
+                    full.names = TRUE)
+cat("[INFO] Found ", length(files), " files\n", sep="")
+if (length(files) == 0) quit(status=1)
+
+cat("[INFO] Reading expression files...\n")
+df <- bind_rows(lapply(files, function(f){
+  cat("[READ] ", basename(f), "\n", sep="")
+  read_tsv(f, show_col_types=FALSE) %>%
+    mutate(sample_id = str_extract(basename(f), "TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-[0-9]{2}[A-Za-z]"))
+}))
+
+cat("[INFO] Preparing table + joining cancer...\n")
+map <- map %>% mutate(case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""))
+
+df <- df %>%
+  select(sample_id, gene_name, tpm_unstranded) %>%
+  filter(gene_name %in% c("NRF1","BANP")) %>%
+  mutate(
+    tpm_unstranded = as.numeric(tpm_unstranded),
+    case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""),
+    code = str_match(sample_id, "-([0-9]{2})[A-Za-z]$")[,2],
+    sample_type = case_when(
+      str_detect(code, "^0") ~ "Tumor",   # 0X
+      str_detect(code, "^1") ~ "Normal",  # 1X
+      TRUE ~ "Other"
+    )
+  ) %>%
+  left_join(map %>% select(case_id, cancer), by="case_id") %>%
+  filter(!is.na(cancer), !is.na(tpm_unstranded)) %>%
+  filter(sample_type %in% c("Normal","Tumor"))
+
+cat("[INFO] Samples Tumor (0X):  ", length(unique(df$sample_id[df$sample_type=="Tumor"])), "\n", sep="")
+cat("[INFO] Samples Normal (1X): ", length(unique(df$sample_id[df$sample_type=="Normal"])), "\n", sep="")
+cat("[INFO] Cancers: ", length(unique(df$cancer)), "\n", sep="")
+
+make_plot <- function(d, title_txt) {
+  ggplot(d, aes(cancer, tpm_unstranded, color = gene_name)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width = 0.2, alpha = 0.5, size = 0.7) +
+    facet_wrap(~gene_name, scales="free_y") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle=60, hjust=1)) +
+    labs(title = title_txt, x="Cancer type", y="TPM", color="Gene")
+}
+
+cat("[INFO] Building plots...\n")
+p_normal <- make_plot(filter(df, sample_type=="Normal"), "NRF1/BANP TPM — Normal (1X)")
+p_tumor  <- make_plot(filter(df, sample_type=="Tumor"),  "NRF1/BANP TPM — Tumor (0X)")
+
+out <- "./results/expression/boxplot_TPM_NRF1_BANP_by_cancer_Normal_vs_Tumor.pdf"
+dir.create(dirname(out), recursive=TRUE, showWarnings=FALSE)
+
+cat("[INFO] Writing 2-page PDF...\n")
+pdf(out, width=14, height=6)
+if (nrow(filter(df, sample_type=="Normal")) > 0) print(p_normal) else {plot.new(); title("No Normal (1X) samples found")}
+if (nrow(filter(df, sample_type=="Tumor"))  > 0) print(p_tumor)  else {plot.new(); title("No Tumor (0X) samples found")}
+dev.off()
+
+cat("[DONE] Wrote ", out, "\n", sep="")
+'
+
+##################################################################################################
+# Boxplot the distribution of gene expression of NRF1 and BANP between healthy and tumor samples -per pairs
+##################################################################################################
+# 1) Build one tsv with all samples expression of NRF1 and BANP with columns : samples cancer gene tpm_unstranded
+echo -e 'samples\tcancer\tsample_type\tgene\ttpm_unstranded' > ./expression/all_samples_NRF1_BANP_expression.tsv
+OUT="./expression/all_samples_NRF1_BANP_expression.tsv"
+for f in ./expression/expression_of_NRF1_BANP/RNA_TCGA-*.tsv; do
+  echo "[READ] $f"
+  sample_id=$(basename "$f" _NRF1_BANP_expression.tsv)     
+  sample_id=${sample_id#RNA_TCGA-}          
+  cancer=$(echo "$sample_id" | cut -d'-' -f1) 
+  sample_type=$(echo "$sample_id" | cut -d'-' -f5)
+  awk -v sid="$sample_id" -v c="$cancer" -v type="$sample_type" 'BEGIN{OFS="\t"} NR>1 {print sid, c,type, $2, $7}' "$f" >> "$OUT"
+done
+# 2) List the samples for which we have both tumor and healthy samples, and their expression of NRF1 and BANP (for later plotting)
+OUT="./expression/patients_with_both_tumor_and_healthy_samples_with_tpm.tsv"
+echo -e "case_id\tcancer\tgene\ttumor_sample\ttumor_tpm\tnormal_sample\tnormal_tpm" > "$OUT"
+tail -n +2 ./expression/all_samples_NRF1_BANP_expression.tsv \
+| awk -F'\t' 'BEGIN{OFS="\t"}
+{
+  cancer = $2
+  st = substr($3,1,2); if(st!="01" && st!="11") next;
+  split($1,a,"-");
+  case_id = a[1] "-" a[2] "-" a[3] "-" a[4];   
+  g = $4
+  tpm = $5
+  if(!(case_id in c_of)) c_of[case_id] = cancer
+  if(st=="01"){ tum[case_id]=$1; tt[case_id,g]=tpm }
+  if(st=="11"){ nor[case_id]=$1; nt[case_id,g]=tpm }
+}
+END{
+  for (k in tt) {
+    split(k,b,SUBSEP); cid=b[1]; g=b[2];
+    if ((cid in nor) && ((cid SUBSEP g) in nt)) {
+      print cid, c_of[cid], g, tum[cid], tt[cid,g], nor[cid], nt[cid,g]
+    }
+  }
+}' | sort >> "$OUT"
+
+# 3) Plot the distribution of TPM values for NRF1 and BANP in tumor vs healthy samples (boxplot)
+Rscript -e '
+library(data.table)
+library(ggplot2)
+IN  <- "./expression/patients_with_both_tumor_and_healthy_samples_with_tpm.tsv"
+OUT <- "./results/expression/boxplot_distribution_NRF1_BANP_tumor_vs_healthy_per_cancer_wilcox.pdf"
+df <- fread(IN)
+
+# Long format
+d <- rbind(
+  df[, .(case_id, cancer, gene, group="tumor",   tpm=as.numeric(tumor_tpm))],
+  df[, .(case_id, cancer, gene, group="healthy", tpm=as.numeric(normal_tpm))])
+
+d[, group := factor(group, levels=c("healthy","tumor"))]
+d[, expr := log2(tpm + 1)]
+
+# Paired table
+tum <- d[group=="tumor",   .(case_id, cancer, gene, tumor=expr)]
+hea <- d[group=="healthy", .(case_id, cancer, gene, healthy=expr)]
+pair <- merge(tum, hea, by=c("case_id","cancer","gene"))
+
+# Wilcoxon paired p-values per (cancer, gene)
+pvals <- pair[, .(p = wilcox.test(tumor, healthy, paired=TRUE)$p.value), by=.(cancer, gene)]
+
+# p-value -> stars (blank if not significant)
+p_to_stars <- function(p){
+  if (is.na(p)) return("NA")
+  if (p < 1e-4) return("****")
+  if (p < 1e-3) return("***")
+  if (p < 1e-2) return("**")
+  if (p < 5e-2) return("*")
+  return("")}
+pvals[, stars := vapply(p, p_to_stars, character(1))]
+
+# Plotting data restricted to paired set only
+dplot <- merge(d, pair[, .(case_id, cancer, gene)], by=c("case_id","cancer","gene"))
+
+# Add n per cancer (paired cases) and facet label
+n_df <- pair[, .(n=.N), by=.(cancer, gene)]
+dplot <- merge(dplot, n_df, by=c("cancer","gene"))
+dplot[, cancer_lab := paste0(cancer, " (n=", n, ")")]
+
+# Annotation positions (top of each facet) + SAME facet label column
+ymax <- dplot[, .(y=max(expr, na.rm=TRUE)), by=.(cancer, gene, cancer_lab)]
+ann  <- merge(pvals, ymax, by=c("cancer","gene"))
+ann  <- merge(ann, n_df, by=c("cancer","gene"))
+ann[, cancer_lab := paste0(cancer, " (n=", n, ")")]
+ann[, `:=`(x=1.5, y=y+0.15)]
+
+# Colors
+fill_cols <- c(healthy="#4C78A8", tumor="#E45756")
+pdf(OUT, width=14, height=8)
+
+for (g in sort(unique(dplot$gene))) {
+  p <- ggplot(dplot[gene==g], aes(x=group, y=expr, fill=group)) +
+    geom_violin(trim=FALSE, alpha=0.35, color=NA) +
+    geom_boxplot(width=0.22, outlier.shape=NA, alpha=0.85) +
+    geom_jitter(width=0.12, size=0.9, alpha=0.45) +
+    facet_wrap(~cancer_lab, scales="free_y") +
+    geom_text(data=ann[gene==g], aes(x=x, y=y, label=stars), inherit.aes=FALSE, size=4) +
+    scale_fill_manual(values=fill_cols) +
+    theme_classic(base_size=13) +
+    theme(
+      legend.position="top",
+      strip.background = element_rect(fill="grey95", color=NA),
+      strip.text = element_text(face="bold")
+    ) +
+    labs(
+      title = paste0(g, ": Tumor vs Healthy per cancer type (paired Wilcoxon)"),
+      subtitle = "Each facet is a cancer type. Each dot is one patient (paired tumor and normal). Boxes show median and IQR; violins show distribution.",
+      x = NULL,
+      y = "log2(TPM + 1) expression",
+      fill = "Sample type",
+      caption = "Stars indicate paired Wilcoxon significance (* p<0.05, ** p<0.01, *** p<0.001, **** p<1e-4)."
+    )
+  print(p)
+}
+dev.off()
+'
+
+#!!IM HERE!!
+##################################################################################################################################################
+# PCA of the expression of top 2000 variable genes across all samples, to see if they cluster by cancer type or by healthy vs tumor status
+##################################################################################################################################################
+# create a file with the color order for the cancers (to use the same colors as before in the PCA plot)
+Rscript -e '
+library(data.table)
+
+in_map  <- "./all_tcga_samples_with_cancer.tsv"
+out_col <- "./results/cancer_color_order_with_defined_colours.tsv"
+dir.create(dirname(out_col), recursive=TRUE, showWarnings=FALSE)
+
+m <- fread(in_map, header=FALSE)
+setnames(m, c("sample_id","cancer"))
+
+cancers <- sort(unique(paste0("TCGA-", m$cancer)))
+
+# nice 4-color set repeated (simple + readable)
+base_cols <- c("#4E79A7", "#59A14F", "#F28E2B", "#B07AA1")
+cols <- rep(base_cols, length.out=length(cancers))
+
+dt <- data.table(cancer=cancers, color=cols)
+fwrite(dt, out_col, sep="\t", col.names=FALSE)
+
+cat("[DONE] Wrote ", out_col, " with ", nrow(dt), " cancers\n", sep="")
+'
+# PCA of the expression of top 10k variable genes across all samples, colored by cancer type and shaped by healthy vs tumor status
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+# ===== INPUTS =====
+col_file <- "./results/cancer_color_order_with_defined_colours.tsv"   # cancer<TAB>#hex
+out_pdf  <- "./results/expression/PCA_TPM_topVar_test.pdf"
+
+cat("[INFO] Loading cancer color order...\n")
+col_dt <- fread(col_file, header=FALSE, sep="auto")
+if (ncol(col_dt) < 2) stop("color order file must have >=2 columns: cancer and color")
+col_dt <- col_dt[, 1:2]
+setnames(col_dt, c("cancer","color"))
+col_dt[, cancer := as.character(cancer)]
+col_dt[, color  := as.character(color)]
+cancer_levels <- col_dt$cancer
+cancer_cols   <- setNames(col_dt$color, col_dt$cancer)
+cat("[INFO] Listing RNA files...\n")
+files <- list.files("./expression/expression_files",pattern = "[.]augmented_star_gene_counts[.]tsv$",full.names=TRUE)
+
+cat("[INFO] Using", length(files), "files\n")
+
+cat("[INFO] Reading gene list from first file:\n  ", files[1], "\n", sep="")
+g0 <- fread(files[1], showProgress=FALSE)[, gene_name]
+G <- length(g0); S <- length(files)
+cat("[INFO] Genes:", G, " | Samples(files):", S, "\n")
+
+cat("[INFO] Allocating matrix (genes x samples)...\n")
+m <- matrix(0, nrow=G, ncol=S)
+rownames(m) <- g0
+
+skipped <- 0L
+for(i in seq_along(files)){
+  if(i %% 25 == 0) cat("[READ]", i, "/", S, "\n")
+  x <- fread(files[i], showProgress=FALSE)[, as.numeric(tpm_unstranded)]
+  if(length(x) != G){
+    cat("[SKIP] gene count mismatch:", basename(files[i]), " (", length(x), "!= ", G, ")\n", sep="")
+    skipped <- skipped + 1L
+    next
+  }
+  m[, i] <- x
+}
+cat("[INFO] Done reading. Skipped:", skipped, "\n")
+
+cat("[INFO] Setting sample names...\n")
+sids <- sub("^RNA_", "", sub("[.]augmented_star_gene_counts[.]tsv$", "", basename(files)))
+colnames(m) <- sids
+m[is.na(m)] <- 0
+cat("[INFO] log2(TPM+1) transform...\n")
+x <- log2(m + 1)
+cat("[INFO] Selecting top variable genes...\n")
+vars <- apply(x, 1, var)
+topN <- 60660
+keep <- order(vars, decreasing=TRUE)[1:min(topN, length(vars))]
+cat("[INFO] topN =", topN, " | using =", length(keep), "genes\n")
+xs <- t(x[keep, , drop=FALSE])
+cat("[INFO] Running PCA...\n")
+pca <- prcomp(xs, scale.=TRUE)
+df <- data.frame(sample=rownames(pca$x), PC1=pca$x[,1], PC2=pca$x[,2], stringsAsFactors=FALSE)
+
+# ===== cancer: sample looks like TCGA-ACC-TCGA-OR-A5J7-01A_1  =====
+tok <- strsplit(df$sample, "-", fixed=TRUE)
+df$cancer <- vapply(tok, function(v) paste0("TCGA-", v[2]), character(1))
+
+# ===== type: take last token after "-" => "01A_1", then first 2 chars => "01" / "11" =====
+last_tok <- vapply(tok, function(v) v[length(v)], character(1))   # e.g. "01A_1"
+code2 <- substr(last_tok, 1, 2)                                   # "01" / "11"
+df$type <- ifelse(substr(code2, 1, 1) == "0", "Tumor",
+           ifelse(substr(code2, 1, 1) == "1", "Normal", "Other"))
+df$type <- factor(df$type, levels=c("Tumor","Normal","Other"))
+
+# sanity checks
+cat("[INFO] type counts:\n"); print(table(df$type))
+cat("[INFO] unique cancers in PCA:", length(unique(df$cancer)), "\n")
+cat("[INFO] cancers with a defined color:",
+    sum(unique(df$cancer) %in% names(cancer_cols)), "/", length(unique(df$cancer)), "\n")
+
+# keep cancer order from file; cancers not in file become NA (we show them in grey)
+df$cancer <- factor(df$cancer, levels=cancer_levels)
+
+dir.create(dirname(out_pdf), recursive=TRUE, showWarnings=FALSE)
+cat("[INFO] Writing PDF -> ", out_pdf, "\n", sep="")
+
+pdf(out_pdf, width=10, height=7)
+print(
+  ggplot(df, aes(PC1, PC2, color=cancer, shape=type)) +
+    geom_point(size=2, alpha=0.85) +
+    scale_shape_manual(values=c(Tumor=16, Normal=17, Other=4)) +
+    scale_color_manual(values=cancer_cols, breaks=cancer_levels, drop=FALSE, na.value="grey70") +
+    theme_bw() +
+    labs(
+      title="PCA on RNA-seq log2(TPM+1) — top variable genes",
+      subtitle=paste0("Genes used=", length(keep), " | Samples=", nrow(df)),
+      color="Cancer", shape="Type"
+    )
+)
+dev.off()
+
+cat("[DONE] ", out_pdf, "\n", sep="")
+'
 
 
-
-
-
+######
+# TSNE
+######

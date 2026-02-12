@@ -1,4 +1,4 @@
-#!!IM HERE LAUNCHED CHECK OUTPUT!!
+# This script processes filtered SNV VCF files to generate presence/absence matrices of SNVs in NRF1 motif regions across different cancer types, and then creates heatmaps to visualize the results.
 #!/usr/bin/env bash
 set -euo pipefail
 # 1. For each filtered SNV VCF file, extract unique variant IDs in the format CHROM:POS:REF:ALT
@@ -228,6 +228,7 @@ for (cdir in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
 '
 
 # nb_cancers : the number of cancer types where that SNV appears in the top 30 most recurrent SNVs (within the filtered columns) for that cancer and that TF.
+# This script generates a TSV file with columns: TF, snv_id, nb_cancers, where each row corresponds to a unique SNV that appears in the top 30 most recurrent SNVs for at least one cancer type and one TF. The nb_cancers column indicates how many different cancer types that SNV appears in within the top 30 list for that TF.
 Rscript -e '
 library(data.table)
 in_root <- "./snv/heatmap"
@@ -278,4 +279,144 @@ setorder(shared, TF, -nb_cancers, snv_id)
 out_file <- file.path(out_dir, paste0("shared_across_cancers_top", TOP_N, "_nbCancersOnly.tsv"))
 fwrite(shared, out_file, sep="\t")
 cat("DONE: wrote ", out_file, "\n", sep="")
+'
+# Plot barplots for the most shared SNVs across cancers, faceted by TF. Each bar is one SNV, and the height is the number of cancer types in which that SNV appears among the top 30 most recurrent SNVs (per cancer) within the motif-filtered set for that TF.
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+in_file <- "./snv/top30_panCancer/shared_across_cancers_top30_nbCancersOnly.tsv"
+out_pdf <- "./results/summarys/SNV_shared_top30_cancer_barplots.pdf"
+
+dt <- fread(in_file)
+
+topK <- 30
+top <- dt[, head(.SD[order(-nb_cancers, snv_id)], topK), by=TF]
+
+pdf(out_pdf, width=20, height=14)
+for(tf in unique(top$TF)){
+  d <- top[TF==tf]
+  p <- ggplot(d, aes(x=reorder(snv_id, nb_cancers), y=nb_cancers)) +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    labs(
+      title = paste0(tf, ": most shared Variations across cancers"),
+      subtitle = paste0(
+        "Each bar is one Variation. The height is the number of cancer types in which this Variant appears ",
+        "among the top ", topK, " most frequent Variants (per cancer) within the ", tf, " motif-filtered set."
+      ),
+      x = "Variant id",
+      y = "# cancer types"
+    ) +
+    theme(
+      plot.title = element_text(face="bold",hjust=0.5),
+      plot.subtitle = element_text(size=10,hjust=0)
+    )
+  print(p)
+}
+dev.off()
+
+cat("DONE -> ", out_pdf, "\n", sep="")
+'
+# Create a TSV file with columns: cancer, TF, snv_id, n_samples, n_total_samples, where each row corresponds to a unique SNV that appears in the top 30 most recurrent SNVs for that cancer type and that TF. The n_samples column indicates in how many samples (columns) that SNV is present within the filtered columns (tumor 01A paired with normal 10A), and n_total_samples is the total number of such filtered columns for that cancer and TF.
+#!/usr/bin/env bash
+set -euo pipefail
+IN_ROOT=./snv/heatmap
+OUT=./snv/top30_panCancer/top30_SNV_nSamples_perCancer_perTF.tsv
+SHARED=./snv/top30_panCancer/shared_across_cancers_top30_nbCancersOnly.tsv
+TF_LIST=("BANP_mm0to2_noCGmm" "BANP_mm0to2" "NRF1_mm0to2_noCGmm" "NRF1_mm0to2")
+TOPK=30
+mkdir -p "$(dirname "$OUT")"
+echo -e "cancer\tTF\tsnv_id\tn_samples\tn_total_samples" > "$OUT"
+for cdir in "$IN_ROOT"/*; do
+  cancer=$(basename "$cdir")
+  for TF in "${TF_LIST[@]}"; do
+    f="$cdir/MATRIX_${cancer}_in_${TF}_motif.tsv"
+    [[ -f "$f" ]] || continue
+    awk -F'\t' -v OFS='\t' -v cancer="$cancer" -v TF="$TF" -v K="$TOPK" -v S="$SHARED" '
+      BEGIN{
+        n=0
+        while((getline < S)>0){
+          if($1==TF){
+            n++
+            if(n<=K){ top[$2]=1; top_list[n]=$2 }
+            else break
+          }
+        }
+        close(S)
+      }
+      NR==1{
+        nk=0
+        for(i=2;i<=NF;i++){
+          if($i ~ /-01A_vs_/ && $i ~ /_vs_.*-10A_1_in_/ && $i !~ /-(01B|10B|10C|11B|11C)/ && $i ~ /_1_in_/){
+            keep[i]=1; nk++
+          }
+        }
+        next
+      }
+      ($1 in top){
+        c=0
+        for(i=2;i<=NF;i++) if(keep[i] && ($i+0)>0) c++
+        cnt[$1]=c
+      }
+      END{
+        for(i=1;i<=n && i<=K;i++){
+          snv=top_list[i]
+          val = (snv in cnt) ? cnt[snv] : "NA"
+          print cancer, TF, snv, val, nk
+        }
+      }
+    ' "$f" >> "$OUT"
+  done
+done
+
+# Barplot showing the percentage of samples with each SNV present (after filtering columns to keep only 01A vs 10A pairs), per cancer type, faceted by TF. Each bar is one SNV, and the height is the percentage of samples with that SNV present within the filtered columns for that cancer and TF. The count of samples with the SNV present (n_samples) and the total number of filtered samples (n_total_samples) are also shown as labels on the bars. Cancers types with no samples will not be plotted for that SNV. Only SNVs that are present in at least one sample (after filtering) will be plotted. The pages are ordered by the total number of samples with that SNV present across all cancers across all TF (most shared SNVs first).
+Rscript -e '
+library(data.table)
+library(ggplot2)
+in_tsv  <- "./snv/top30_panCancer/top30_SNV_nSamples_perCancer_perTF.tsv"
+out_pdf <- "./results/summarys/barplot_top30_SNV_nSamples_perCancer_perTF.pdf"
+dt <- fread(in_tsv)
+dt[, n_samples := suppressWarnings(as.numeric(n_samples))]
+dt[, n_total_samples := suppressWarnings(as.numeric(n_total_samples))]
+keep_vars <- dt[!is.na(n_samples) & n_samples > 0, unique(snv_id)]
+dt <- dt[snv_id %in% keep_vars]
+tmp <- dt[, .(tot = sum(n_samples, na.rm=TRUE)), by=snv_id]
+setorder(tmp, -tot, snv_id)
+var_order <- tmp[["snv_id"]]
+
+pdf(out_pdf, width=16, height=9, useDingbats=FALSE)
+
+for (v in var_order) {
+  d <- dt[snv_id == v]
+  d <- d[!is.na(n_samples) & n_samples > 0 & !is.na(n_total_samples) & n_total_samples > 0]
+  if (nrow(d) == 0) next
+  d[, pct := 100 * n_samples / n_total_samples]
+  ord <- d[, .(tot = sum(n_samples, na.rm=TRUE)), by=cancer]
+  setorder(ord, -tot, cancer)  
+  d[, cancer := factor(cancer, levels = ord[["cancer"]])]
+
+  p <- ggplot(d, aes(x=reorder(cancer, pct, FUN=mean), y=pct)) +
+    geom_col() +
+    coord_flip() +
+    facet_wrap(~TF, ncol=2, scales="free_x") +
+    theme_bw() +
+    labs(
+      title = paste0("Variant: ", v),
+      subtitle = "Bar height = % of samples with this variant present (after filtering columns to keep only 01A vs 10A pairs), per cancer type.",
+      x = "Cancer type",
+      y = "% samples with variant"
+    ) +
+    theme(
+      plot.title = element_text(face="bold", hjust=0),
+      plot.subtitle = element_text(hjust=0),
+      strip.text = element_text(face="bold")
+    ) +
+    geom_text(aes(label = paste0(n_samples, "/", n_total_samples)),hjust = -0.05, size = 3) +
+    expand_limits(y = max(d$pct, na.rm=TRUE) * 1.12)
+  print(p)
+}
+dev.off()
+cat("DONE -> ", out_pdf, "\n", sep="")
 '
