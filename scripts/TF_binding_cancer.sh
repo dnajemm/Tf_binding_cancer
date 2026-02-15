@@ -427,7 +427,7 @@ ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
   theme(plot.title = element_text(hjust = 0.7 , size = 12),
       plot.subtitle = element_text(hjust = 0.7 , size = 9))
 # Save plot
-ggsave("./results/summarys/motif_counts_before_after_6mer_filtering.pdf", width = 6, height = 4, dpi = 300, bg = "white")
+ggsave("./results/motifs/motif_counts_before_after_6mer_filtering.pdf", width = 6, height = 4, dpi = 300, bg = "white")
 '
 ###############################################################################
 # MOTIF COUNT BEFORE / AFTER FILTERING Allowing 2 mismatches
@@ -464,7 +464,7 @@ df$Status <- factor(df$Status, levels = statuses)
 df$StatusWithin <- paste(df$Status, df$Motif, sep="__")
 lev <- with(df, StatusWithin[order(Motif, -Count)])
 df$StatusWithin <- factor(df$StatusWithin, levels = unique(lev))
-out_pdf <- "./results/summarys/motif_counts_NRF1_BANP_barplot_mm0to2mm.pdf"
+out_pdf <- "./results/motifs/motif_counts_NRF1_BANP_barplot_mm0to2mm.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 p <- ggplot(df, aes(x = Motif, y = Count, fill = Status, group = StatusWithin)) +
@@ -513,7 +513,7 @@ ggplot(df, aes(x = Motif, y = Count, fill = Motif)) +
       plot.subtitle = element_text(hjust = 0.7 , size = 9),
       legend.position = "none")
 # Save plot
-ggsave("./results/summarys/motif_counts_after_6mer_filtering.pdf", width = 5, height = 4, dpi = 300, bg = "white")
+ggsave("./results/motifs/motif_counts_after_6mer_filtering.pdf", width = 5, height = 4, dpi = 300, bg = "white")
 '
 
 ###############################################################################
@@ -554,7 +554,7 @@ files <- list(
 NRF1motif <- "GCGCATGCGC"   # length 10
 BANPmotif <- "TCTCGCGAGA"     # length 10
 
-out_pdf <- "./results/summarys/motif_variant_mismatch_visual_summary_TEST.pdf"
+out_pdf <- "./results/motifs/motif_variant_mismatch_visual_summary_TEST.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 # ===============================
@@ -771,7 +771,7 @@ dist_files <- dist_files[endsWith(dist_files, "_dist_tss.txt")]
 
 if(length(dist_files) == 0) stop("No *_dist_tss.txt files found in ./motifs/dist_to_tss/")
 
-pdf("./results/summarys/dist_tss_motifs_hist.pdf")
+pdf("./results/motifs/dist_tss_motifs_hist.pdf")
 par(bg = "white")
 
 for (dist_file in dist_files) {
@@ -798,7 +798,7 @@ for (dist_file in dist_files) {
 }
 
 dev.off()
-cat("[DONE] Wrote: ./results/summarys/dist_tss_motifs_hist.pdf\n")
+cat("[DONE] Wrote: ./results/motifs/dist_tss_motifs_hist.pdf\n")
 '
 
 
@@ -816,7 +816,7 @@ bedtools intersect -u -a ./motifs/NRF1_filtered_6mer.MA0506.3.bed -b ./methylati
 bedtools intersect -u -a ./motifs/BANP_filtered_6mer.MA2503.1.bed -b ./methylation/annotated_methylation_data_probes_filtered.bed > ./motifs/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed
 
 # Summarize the intersected results : 1   NRF1 29401 BANP 2919
-mkdir -p ./results/summarys
+mkdir -p ./results/motifs
 
 # Count lines in bash and save to variables
 n_NRF1=$(cat ./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed | wc -l)
@@ -838,7 +838,7 @@ bedtools intersect -u -a <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) -b ./methyla
 bedtools intersect -u -a <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) -b ./methylation/annotated_methylation_data_probes_filtered.bed > ./motifs/overlaps/intersected_motifs2mm_HM450/BANP_noCGmm_intersected_methylation.bed
 
 # Summarize the intersected results :  NRF1mm0to2 7099 BANPmm0to2 2531 NRF1mm0to2_noCGmm 3245 BANPmm0to2_noCGmm 919
-mkdir -p ./results/summarys
+mkdir -p ./results/motifs
 
 # Count lines in bash and save to variables
 n_NRF1_2mm=$(wc -l < ./motifs/overlaps/intersected_motifs2mm_HM450/NRF1_intersected_methylation.bed)
@@ -884,7 +884,7 @@ probes <- as.numeric(
 )
 
 # -------------------- OUTPUT PDF --------------------
-out_pdf <- "./results/summarys/NRF1_BANP_motifs_vs_methylation_venn.pdf"
+out_pdf <- "./results/motifs/NRF1_BANP_motifs_vs_methylation_venn.pdf"
 pdf(out_pdf, width = 13, height = 13)
 
 # ==================== PAGE 1: NRF1 ====================
@@ -972,7 +972,7 @@ probes <- as.numeric(
 variants <- c("mm0to2", "mm0to2_noCGmm")
 
 # Output
-out_pdf <- "./results/summarys/NRF1_BANP_motifs_2mm_vs_methylation_venn.pdf"
+out_pdf <- "./results/motifs/NRF1_BANP_motifs_2mm_vs_methylation_venn.pdf"
 pdf(out_pdf, width = 13, height = 13)
 
 for (motif in c("NRF1","BANP")) {
@@ -1163,7 +1163,7 @@ print(tab)
 Rscript -e '
 library(ggplot2)
 
-out_pdf <- "./results/summarys/NRF1_BANP_3D_vs_peaks_vs_HM450_barplots.pdf"
+out_pdf <- "./results/motifs/NRF1_BANP_3D_vs_peaks_vs_HM450_barplots.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 10, height = 8)
@@ -1278,7 +1278,7 @@ Rscript -e '
 library(ggplot2)
 library(scales)
 
-out_pdf <- "./results/summarys/NRF1_BANP_mm0to2_variants_vs_peaks_vs_HM450_SNV_barplots.pdf"
+out_pdf <- "./results/motifs/NRF1_BANP_mm0to2_variants_vs_peaks_vs_HM450_SNV_barplots.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 10, height = 8)
@@ -1407,7 +1407,7 @@ tf_files <- list(
   )
 )
 
-out_pdf <- "./results/summarys/BANP_NRF1_motif_peaks_probes_snv_barplots.pdf"
+out_pdf <- "./results/motifs/BANP_NRF1_motif_peaks_probes_snv_barplots.pdf"
 pdf(out_pdf, width = 10, height = 8)
 
 for (tf in names(tf_files)) {
@@ -1491,7 +1491,7 @@ cat("DONE →", out_pdf, "\n")
 Rscript -e '
 library(eulerr)
 
-out_pdf <- "./results/summarys/Euler_VENN_NRF1_BANP_Motifs_ATAC_HM450_SNV.pdf"
+out_pdf <- "./results/motifs/Euler_VENN_NRF1_BANP_Motifs_ATAC_HM450_SNV.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 10, height = 10)
@@ -1629,7 +1629,7 @@ cat("DONE →", out_pdf, "\n")
 Rscript -e '
 library(eulerr)
 
-out_pdf <- "./results/summarys/Euler_VENN_NRF1_BANP_mm0to2_Motifs_ATAC_HM450_SNV.pdf"
+out_pdf <- "./results/motifs/Euler_VENN_NRF1_BANP_mm0to2_Motifs_ATAC_HM450_SNV.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 14, height = 14)
@@ -1738,7 +1738,6 @@ for file in ./motifs/*_mm0to2*_closest_genes.bed; do
 done
 
 
-
 ###############################################################################
 
 ###############################################################################
@@ -1801,7 +1800,7 @@ cat ./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv \
     ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv \
     | cut -f1 \
     | sort -u \
-    > ./results/summarys/cancer_color_order.txt
+    > ./results/multi_omics/cancer_color_order.txt
 
 ###############################################################################
 # HISTOGRAM OF NBR OF PEAKS PER CANCER TYPE
@@ -1854,12 +1853,12 @@ peak_counts  <- rev(peak_counts)
 # Convert to thousands
 peak_thousands <- peak_counts / 1e3
 # Build consistent colors
-all_cancers <- scan("./results/summarys/cancer_color_order.txt", what = "")
+all_cancers <- scan("./results/multi_omics/cancer_color_order.txt", what = "")
 palette <- rainbow(length(all_cancers))
 names(palette) <- all_cancers
 bar_colors <- palette[cancer_names]
 
-pdf("./results/summarys/peaks_per_cancer_type_barplot.pdf", width=12, height=9 , bg = "white")
+pdf("./results/peaks/peaks_per_cancer_type_barplot.pdf", width=12, height=9 , bg = "white")
 
 barplot(
   peak_thousands,
@@ -1895,7 +1894,7 @@ Rscript -e '
 library(ggplot2)
 
 in_tsv  <- "./peaks/peak_counts_per_sample/peak_counts_per_sample.tsv"
-out_pdf <- "./results/summarys/ATAC_peak_counts_per_sample_by_cancer.pdf"
+out_pdf <- "./results/peaks/ATAC_peak_counts_per_sample_by_cancer.pdf"
 
 df <- read.table(in_tsv, header=FALSE, sep="\t", stringsAsFactors=FALSE)
 colnames(df) <- c("sample","cancer","n_peaks")
@@ -1953,7 +1952,7 @@ done
 Rscript -e 'library(ggplot2);
 peak_files <- list.files("peaks/filtered_peaks", pattern = "_peaks_macs.bed$", full.names = TRUE);
 samples <- sub("_peaks_macs.bed$", "", basename(peak_files));
-pdf("./results/summarys/dist_tss_peaks_hist.pdf", width = 11.7, height = 8.3);
+pdf("./results/peaks/dist_tss_peaks_hist.pdf", width = 11.7, height = 8.3);
 par(bg = "white");
 for (sample in samples) {
   dist_file <- paste0("./peaks/dist_to_tss/", sample, "_dist_tss.txt");
@@ -2009,7 +2008,7 @@ for (sample in samples) {
   df <- rbind(df,data.frame(sample = sample, region = "Proximal", percent = pct_prox),data.frame(sample = sample, region = "Distal",percent = pct_dist))}
 
 # Boxplot of percentages 
-pdf("./results/summarys/boxplot_ATAC_peaks_proximal_distal.pdf", width = 7, height = 5)
+pdf("./results/peaks/boxplot_ATAC_peaks_proximal_distal.pdf", width = 7, height = 5)
 ggplot(df, aes(x = region, y = percent, fill = region)) +
   geom_boxplot() +
   geom_jitter(width = 0.1, alpha = 0.5) +
@@ -2134,7 +2133,7 @@ done
 Rscript -e '
 library(data.table)
 
-out_pdf <- "./results/summarys/ATAC_motifs_TSS/dist_tss_ATAC_NRF1_BANP_byCancer.pdf"
+out_pdf <- "./results/peaks/ATAC_motifs_TSS/dist_tss_ATAC_NRF1_BANP_byCancer.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 11.7, height = 8.3)
@@ -2146,7 +2145,7 @@ par(bg = "white")
 for (TF in c("NRF1", "BANP")) {
 
   dist_dir <- paste0("./peaks/dist_to_tss_motifs/", TF)
-  out_tsv  <- paste0("./results/summarys/ATAC_motifs_TSS/", TF,"/summary_", TF, "_byCancer.tsv")
+  out_tsv  <- paste0("./results/peaks/ATAC_motifs_TSS/", TF,"/summary_", TF, "_byCancer.tsv")
 
   files <- list.files(dist_dir, pattern = paste0("_", TF, "_dist_tss.txt$"),full.names = TRUE)
   if (!length(files)) {
@@ -2289,7 +2288,7 @@ done
 Rscript -e '
 library(data.table)
 
-out_pdf <- "./results/summarys/ATAC_motifs_TSS/dist_tss_ATAC_NRF1_BANP_mm0to2_byCancer.pdf"
+out_pdf <- "./results/peaks/ATAC_motifs_TSS/dist_tss_ATAC_NRF1_BANP_mm0to2_byCancer.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 11.7, height = 8.3)
@@ -2309,7 +2308,7 @@ for (target in targets) {
   TF <- sub("_mm0to2(_noCGmm)?$", "", target)   # "NRF1" or "BANP"
   dist_dir <- file.path("./peaks/dist_to_tss_motifs", target)
 
-  out_tsv <- file.path("./results/summarys/ATAC_motifs_TSS", target,
+  out_tsv <- file.path("./results/peaks/ATAC_motifs_TSS", target,
                        paste0("summary_", target, "_byCancer.tsv"))
   dir.create(dirname(out_tsv), recursive = TRUE, showWarnings = FALSE)
 
@@ -2399,10 +2398,10 @@ mkdir -p ./methylation
 ###############################################################################
 
 # Linking the methylation data from /data/papers/tcga to the methylation folder 
-mkdir -p ./methylation/methylation_data/
+mkdir -p ./methylation/
 
 for file in /data/papers/tcga/TCGA*/*/HM450*.txt; do
-    ln -s "$file" ./methylation/methylation_data/
+    ln -s "$file" ./methylation/
 done
 
 ###############################################################################
@@ -2669,7 +2668,7 @@ df_long <- melt(df,
                 value.name = "count")
 
 # Create the barplot
-pdf("./results/summarys/methylation_counts_barplot.pdf", width=12, height=8)
+pdf("./results/methylation/methylation_counts_barplot.pdf", width=12, height=8)
 
 ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
   geom_bar(stat = "identity", position = "dodge") +
@@ -2707,7 +2706,6 @@ dev.off()
 '
 
 # Statistics methylation probes per sample : 
-#!!! DONE !!!
 ###############################################################################
 # HISTOGRAM OF METHYLATION PERCENTAGE FOR ALL SAMPLES
 ###############################################################################
@@ -2715,7 +2713,7 @@ dev.off()
 Rscript -e '
 # One PDF with all samples, one per page — same plot logic
 
-out_pdf <- "./results/summarys/Methylation_distribution_UMR_LMR_FMR_ALL_samples_histogram.pdf"
+out_pdf <- "./results/methylation/Methylation_distribution_UMR_LMR_FMR_ALL_samples_histogram.pdf"
 dir.create(dirname(out_pdf), recursive=TRUE, showWarnings=FALSE)
 
 files <- list.files("./methylation/filtered_methylation/",
@@ -2865,7 +2863,7 @@ df_long$Cancer <- factor(df_long$Cancer, levels = sort(unique(df_long$Cancer)))
 # color palette
 palette <- brewer.pal(n = length(unique(df_long$region)), "Set2")
 
-pdf("./results/summarys/methylation_region_percentages_barplot.pdf",width = 14, height = 8)
+pdf("./results/methylation/methylation_region_percentages_barplot.pdf",width = 14, height = 8)
 
 ggplot(df_long, aes(x = Cancer, y = percentage, fill = region)) +
   geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
@@ -2906,7 +2904,7 @@ df_long <- melt(df,
 df_long$cancer_type <- factor(df_long$cancer_type,levels = sort(unique(df_long$cancer_type)))
 
 # 4) Boxplot + jitter per region to see outliers ; jitter soo the points do not overlap and are visible
-pdf("./results/summarys/methylation_region_percentages_boxplot_per_sample.pdf",width = 16, height = 9)
+pdf("./results/methylation/methylation_region_percentages_boxplot_per_sample.pdf",width = 16, height = 9)
 
 ggplot(df_long, aes(x = cancer_type, y = percentage, color = region)) +
   geom_boxplot(outlier.colour = NA) +
@@ -2945,7 +2943,7 @@ Rscript -e '
 dist_file <- "./methylation/dist_to_tss/probes_dist_tss.txt"
 distances <- read.table(dist_file)[,1]
 
-pdf("./results/summarys/dist_tss_methylation_histogram.pdf", width=10, height=10)
+pdf("./results/methylation/dist_tss_methylation_histogram.pdf", width=10, height=10)
 par(bg = "white")
 
 # compute proximal/distal percentages
@@ -2970,7 +2968,7 @@ dev.off()
 ###############################################################################
 # SECTION 8 — DELTA METHYLATION (ALL CpGs after filtering))
 ###############################################################################
-#!!!Done!!!
+
 ###########################################################################################
 # SMOOTH SCATTER PLOT FOR ALL CANCER-HEALTHY SAMPLE PAIRS FILTERED with 6mer motif
 ###########################################################################################
@@ -2993,7 +2991,7 @@ motif_files <- list(
   BANP = "./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed"
 )
 
-out_pdf <- "./results/summarys/smoothScatter_vs_NRF1_vs_BANP_per_pair.pdf"
+out_pdf <- "./results/methylation/smoothScatter_vs_NRF1_vs_BANP_per_pair.pdf"
 thr <- 20
 
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
@@ -3180,7 +3178,7 @@ if (nrow(pairs) == 0) {
   }
 }
 
-# If literally nothing got plotted (should not happen now), add a diagnostic page
+# If literally nothing got plotted , add a diagnostic page
 if (pages_written == 0L) {
   plot.new()
   title(main = paste0(
@@ -3281,7 +3279,7 @@ motif_files <- list(
   BANP_noCGmm_mm0to2 = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_intersected_methylation.bed"
 )
 
-out_pdf <- "./results/summarys/smoothScatter_mm0to2_vs_noCGmm_mm0to2_per_pair.pdf"
+out_pdf <- "./results/methylation/smoothScatter_mm0to2_vs_noCGmm_mm0to2_per_pair.pdf"
 thr <- 20
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
@@ -3471,7 +3469,7 @@ labelA <- "BLCA | BL-A13J | 11A_1"
 labelB <- "BLCA | BT-A20U | 11A_1"
 
 thr <- 20
-out_pdf <- "./results/summarys/smoothScatter_HEALTHY_vs_HEALTHY_one_cancer_type.pdf"
+out_pdf <- "./results/methylation/smoothScatter_HEALTHY_vs_HEALTHY_one_cancer_type.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 # motif CpG sets
@@ -3609,7 +3607,7 @@ motif_peak_files <- list(
   BANP_mm0to2_noCGmm = "./methylation/overlaps/intersected_motifs2mm_HM450_peaks/BANP_mm0to2_noCGmm_intersected_methylation.bed"
 )
 
-out_tsv <- "./results/summarys/count_CpGs_motifPeaks_delta20_per_pair.tsv"
+out_tsv <- "./results/methylation/count_CpGs_motifPeaks_delta20_per_pair.tsv"
 dir.create(dirname(out_tsv), recursive=TRUE, showWarnings=FALSE)
 
 read_bed_gz <- function(path) fread(cmd=paste("zcat", shQuote(path)), header=FALSE, showProgress=FALSE)
@@ -3673,8 +3671,8 @@ suppressPackageStartupMessages({
   library(Polychrome)
 })
 
-in_tsv  <- "./results/summarys/count_CpGs_motifPeaks_delta20_per_pair.tsv"
-out_pdf <- "./results/summarys/boxplot_per_cancer_motifPeaks_delta20.pdf"
+in_tsv  <- "./results/methylation/count_CpGs_motifPeaks_delta20_per_pair.tsv"
+out_pdf <- "./results/methylation/boxplot_per_cancer_motifPeaks_delta20.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 df <- read_tsv(in_tsv, show_col_types = FALSE)
@@ -3941,7 +3939,7 @@ library(data.table)
 library(pheatmap)
 
 in_root <- "./methylation/delta20_cg_lists/cg_presence_matrices"
-out_dir <- "./results/heatmap_delta20_cg_motifnpeak"
+out_dir <- "./results/methylation/heatmap_delta20_cg_motifnpeak"
 dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
 
 wrap_label <- function(x, width=35) paste(strwrap(x, width=width), collapse="\n")
@@ -4073,7 +4071,7 @@ library(data.table)
 library(pheatmap)
 
 in_root <- "./methylation/delta20_cg_lists/cg_presence_matrices"
-out_dir <- "./results/heatmap_delta20_cg_motifnpeak"
+out_dir <- "./results/methylation/heatmap_delta20_cg_motifnpeak"
 dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
 
 wrap_label <- function(x, width=35) paste(strwrap(x, width=width), collapse="\n")
@@ -4132,7 +4130,7 @@ for (setdir in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
     show_colnames = TRUE,
     fontsize_row = 3,
     fontsize_col = 3,
-    cluster_rows = FALSE,
+    cluster_rows = TRUE,
     cluster_cols = TRUE,
     border_color = "grey60",
     legend_breaks = c(0, 1),
@@ -4199,7 +4197,7 @@ TF <- "NRF1"
 in_file    <- "./methylation/delta20_cg_lists/cg_presence_matrices/NRF1_mm0to2_noCGmm/CpG_counts_per_cancer_NRF1_mm0to2_noCGmm.tsv"
 pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
 dist_file  <- "./methylation/dist_to_tss/HM450_TCGA-ACC-TCGA-OR-A5J2-01A_1_annotated_methylation_filtered_cpg_dist_tss.tsv"
-out_pdf    <- "./results/heatmap_delta20_cg_motifnpeak/BARPLOT_per_CpG_NRF1_mm0to2_noCGmm.pdf"
+out_pdf    <- "./results/methylation/heatmap_delta20_cg_motifnpeak/BARPLOT_per_CpG_NRF1_mm0to2_noCGmm.pdf"
 
 PROX_BP <- 2000
 
@@ -4316,7 +4314,7 @@ motif_files <- list(
   BANP = "./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed"
 )
 
-out_pdf <- "./results/summarys/smoothScatter_ALL_vs_NRF1_vs_BANP_per_pair_replicates_cancer.pdf"
+out_pdf <- "./results/methylation/smoothScatter_ALL_vs_NRF1_vs_BANP_per_pair_replicates_cancer.pdf"
 thr <- 20
 
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
@@ -4496,7 +4494,7 @@ motif_files <- list(
   BANP_mm0to2_noCGmm = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_intersected_methylation.bed"
 )
 
-out_pdf <- "./results/summarys/smoothScatter_replicates_mm0to2_vs_noCGmm_mm0to2.pdf"
+out_pdf <- "./results/methylation/smoothScatter_replicates_mm0to2_vs_noCGmm_mm0to2.pdf"
 thr <- 20
 
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
@@ -4663,7 +4661,7 @@ library(ggplot2)
 # INPUTS
 # =========================
 pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
-out_pdf    <- "./results/summarys/stacked_median_composition_delta_methylation_per_cancer.pdf"
+out_pdf    <- "./results/methylation/stacked_median_composition_delta_methylation_per_cancer.pdf"
 thr <- 10
 
 # =========================
@@ -4842,7 +4840,7 @@ done
 
 # for each tsv file in ./methylation/dist_to_tss/ filter only those in motif of NRF1 and make a histogram of distances to TSS for each sample
 # NRF1 
-mkdir -p ./results/summarys/methylation_motifs_TSS/NRF1
+mkdir -p ./results/methylation/methylation_motifs_TSS/NRF1
 mkdir -p ./methylation/dist_to_tss_motif/NRF1
 
 awk 'BEGIN{FS=OFS="\t"} {print $4}' \
@@ -4859,7 +4857,7 @@ for f in ./methylation/dist_to_tss/*_cpg_dist_tss.tsv; do
     "$f" > "$out"
 done
 # BANP 
-mkdir -p ./results/summarys/methylation_motifs_TSS/BANP
+mkdir -p ./results/methylation/methylation_motifs_TSS/BANP
 mkdir -p ./methylation/dist_to_tss_motif/BANP
 
 awk 'BEGIN{FS=OFS="\t"} {print $4}' \
@@ -4879,7 +4877,7 @@ done
 Rscript -e '
 library(data.table)
 
-out_pdf <- "./results/summarys/methylation_motifs_TSS/dist_tss_methylation_NRF1_BANP_byCancer.pdf"
+out_pdf <- "./results/methylation/methylation_motifs_TSS/dist_tss_methylation_NRF1_BANP_byCancer.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 11.7, height = 8.3)
@@ -4891,7 +4889,7 @@ par(bg = "white")
 for (TF in c("NRF1", "BANP")) {
 
   dist_dir <- paste0("./methylation/dist_to_tss_motif/", TF)
-  out_tsv  <- paste0("./results/summarys/methylation_motifs_TSS/", TF,"/summary_", TF, "_byCancer.tsv")
+  out_tsv  <- paste0("./results/methylation/methylation_motifs_TSS/", TF,"/summary_", TF, "_byCancer.tsv")
 
   files <- list.files(dist_dir, pattern = paste0("_", TF, "_dist_tss.txt$"),full.names = TRUE)
   if (!length(files)) {
@@ -4970,7 +4968,7 @@ cat("Wrote:", out_pdf, "\n")
 # Look into the distance of CpG probes in motifs to othe TSS to see if they are proximal or distal
 # for each tsv file in ./methylation/dist_to_tss/ filter only those in motif of NRF1 and make a histogram of distances to TSS for each sample
 # NRF1_mm0to2 
-mkdir -p ./results/summarys/methylation_motifs_TSS/NRF1_mm0to2
+mkdir -p ./results/methylation/methylation_motifs_TSS/NRF1_mm0to2
 mkdir -p ./methylation/dist_to_tss_motif/NRF1_mm0to2
 
 awk 'BEGIN{FS=OFS="\t"} {print $4}' \
@@ -4987,7 +4985,7 @@ for f in ./methylation/dist_to_tss/*_cpg_dist_tss.tsv; do
     "$f" > "$out"
 done
 # BANP_mm0to2 
-mkdir -p ./results/summarys/methylation_motifs_TSS/BANP_mm0to2
+mkdir -p ./results/methylation/methylation_motifs_TSS/BANP_mm0to2
 mkdir -p ./methylation/dist_to_tss_motif/BANP_mm0to2
 
 awk 'BEGIN{FS=OFS="\t"} {print $4}' \
@@ -5005,7 +5003,7 @@ for f in ./methylation/dist_to_tss/*_cpg_dist_tss.tsv; do
 done
 
 # NRF1_mm0to2_noCGmm 
-mkdir -p ./results/summarys/methylation_motifs_TSS/NRF1_mm0to2_noCGmm
+mkdir -p ./results/methylation/methylation_motifs_TSS/NRF1_mm0to2_noCGmm
 mkdir -p ./methylation/dist_to_tss_motif/NRF1_mm0to2_noCGmm
 
 awk 'BEGIN{FS=OFS="\t"} {print $4}' \
@@ -5022,7 +5020,7 @@ for f in ./methylation/dist_to_tss/*_cpg_dist_tss.tsv; do
     "$f" > "$out"
 done
 # BANP_mm0to2_noCGmm 
-mkdir -p ./results/summarys/methylation_motifs_TSS/BANP_mm0to2_noCGmm
+mkdir -p ./results/methylation/methylation_motifs_TSS/BANP_mm0to2_noCGmm
 mkdir -p ./methylation/dist_to_tss_motif/BANP_mm0to2_noCGmm
 
 awk 'BEGIN{FS=OFS="\t"} {print $4}' \
@@ -5043,7 +5041,7 @@ done
 Rscript -e '
 library(data.table)
 
-out_pdf <- "./results/summarys/methylation_motifs_TSS/dist_tss_methylation_NRF1_BANP_mm0to2_byCancer.pdf"
+out_pdf <- "./results/methylation/methylation_motifs_TSS/dist_tss_methylation_NRF1_BANP_mm0to2_byCancer.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 pdf(out_pdf, width = 11.7, height = 8.3)
@@ -5059,7 +5057,7 @@ cases <- c(
 for (CASE in cases) {
 
   dist_dir <- file.path("./methylation/dist_to_tss_motif", CASE)
-  out_tsv  <- file.path("./results/summarys/methylation_motifs_TSS", CASE,
+  out_tsv  <- file.path("./results/methylation/methylation_motifs_TSS", CASE,
                         paste0("summary_", CASE, "_byCancer.tsv"))
 
   files <- list.files(dist_dir, pattern = paste0("_", CASE, "_dist_tss.txt$"),
@@ -5338,7 +5336,7 @@ done
 Rscript -e '
 data <- read.table("./snv/snv_counts/snv_per_sample.tsv", header=FALSE)
 snv_counts <- data[,3]   # 3rd column = SNV counts
-pdf("./results/summarys/snv_per_sample_hist.pdf", width=10, height=8)
+pdf("./results/snv/snv_per_sample_hist.pdf", width=10, height=8)
 par(bg = "white")
 
 hist(log10(snv_counts + 1),
@@ -5391,7 +5389,7 @@ p <- ggplot(df, aes(y = reorder(cancer, max))) +
     x = "Variation length (bp)",
     y = "Cancer type")
 # Save plot
-ggsave("./results/summarys/snv_min_max_dumbbell.pdf",plot = p, width = 7, height = 9, dpi = 300, bg = "white")'
+ggsave("./results/snv/snv_min_max_dumbbell.pdf",plot = p, width = 7, height = 9, dpi = 300, bg = "white")'
 
 
 ##############################################################################
@@ -5434,12 +5432,12 @@ snv_counts  <- rev(snv_counts)
 
 snv_millions <- snv_counts / 1e6
 # Build consistent colors
-all_cancers <- scan("./results/summarys/cancer_color_order.txt", what = "")
+all_cancers <- scan("./results/multi_omics/cancer_color_order.txt", what = "")
 palette <- rainbow(length(all_cancers))
 names(palette) <- all_cancers
 bar_colors <- palette[cancer_names]
 
-pdf("./results/summarys/snv_per_cancer_type_barplot.pdf",width=12, height=9, bg = "white")
+pdf("./results/snv/snv_per_cancer_type_barplot.pdf",width=12, height=9, bg = "white")
 
 nice_max <- max(pretty(snv_millions))
 barplot(
@@ -5528,7 +5526,7 @@ p <- ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
   )
 
 # Save
-ggsave("./results/summarys/stacked_mutation_types_log10.pdf",p,width = 12,height = 7,dpi = 300,bg = "white")'
+ggsave("./results/snv/stacked_mutation_types_log10.pdf",p,width = 12,height = 7,dpi = 300,bg = "white")'
 
 # Compare the variation distribution between samples of cancer types using boxplot for SNV, small indels, structural indels to visualize each point to see if we have outliers 
 # output file: snv_type_per_sample.tsv with columns: sample, cancer_type, SNV, small_indel, struct_indel
@@ -5588,7 +5586,7 @@ df_long$region <- factor(df_long$region,
 df_long$cancer_type <- factor(df_long$cancer_type,levels = sort(unique(df_long$cancer_type)))
 
 # 5) Boxplot + jitter 
-pdf("./results/summarys/variant_type_percentages_boxplot_per_sample.pdf",width = 16, height = 9)
+pdf("./results/snv/variant_type_percentages_boxplot_per_sample.pdf",width = 16, height = 9)
 
 ggplot(df_long, aes(x = cancer_type, y = percentage, color = region)) +
   geom_boxplot(outlier.colour = NA) +
@@ -5679,7 +5677,7 @@ data <- read.table("./snv/snv_sample_counts_per_cancer/samples_per_cancer.tsv",h
 colnames(data) <- c("cancer","sample_count")
 data <- data[order(data$sample_count, decreasing=FALSE), ]
 
-cols <- read.table("./results/cancer_color_order_with_defined_colours.tsv",header=FALSE, sep="\t", stringsAsFactors=FALSE, quote="", comment.char="")
+cols <- read.table("./results/multi_omics/cancer_color_order_with_defined_colours.tsv",header=FALSE, sep="\t", stringsAsFactors=FALSE, quote="", comment.char="")
 colnames(cols) <- c("cancer","color")
 
 palette <- setNames(cols$color, cols$cancer)
@@ -5693,7 +5691,7 @@ if (length(bad) > 0) {
   quit(status=1)
 }
 
-pdf("./results/summarys/samples_with_snvs_per_cancer_barplot.pdf", width=9, height=9, bg="white")
+pdf("./results/snv/samples_with_snvs_per_cancer_barplot.pdf", width=9, height=9, bg="white")
 nice_max <- max(pretty(data$sample_count))
 labels <- sub("^TCGA-", "", data$cancer)
 
@@ -5705,8 +5703,6 @@ barplot(data$sample_count, names.arg=labels, horiz=TRUE, las=1,
 
 dev.off()
 '
-
-
 
 
 ###############################################################################
@@ -5732,26 +5728,6 @@ for cancer in $(ls ./snv/snv_filtered_without_structural_variants/SNV_TCGA-*.vcf
   > ./snv/within_cancer_freq/${cancer}_variant_samplefreq.tsv
 
 done
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ###############################################################################
 # 3) DISTANCE TO TSS (FILTERED)
@@ -5792,7 +5768,7 @@ dist_files <- list.files(
   full.names = TRUE
 )
 
-out_pdf <- "./results/summarys/dist_tss_snv_histograms.pdf"
+out_pdf <- "./results/snv/dist_tss_snv_histograms.pdf"
 
 pdf(out_pdf, width = 10, height = 8)
 par(bg = "white")
@@ -5918,7 +5894,7 @@ p <- ggplot(df, aes(x = category, y = count, fill = category)) +
   labs(title = "Proportion of SNVs overlapping ATAC peaks",x = "", y = "Number of SNVs") +
   theme(axis.text.x = element_text(angle = 15, hjust = 1),legend.position = "none")
 
-ggsave("./results/summarys/SNV_in_vs_out_ATAC_barplot.pdf",p, width = 7, height = 5, bg = "white")
+ggsave("./results/snv/SNV_in_vs_out_ATAC_barplot.pdf",p, width = 7, height = 5, bg = "white")
 '
 ###############################################################################
 # 6) SNV ∩ METHYLATION
@@ -5999,7 +5975,7 @@ p <- ggplot(df, aes(x = category, y = count, fill = category)) +
   theme_minimal() +
   labs(title = "Proportion of SNVs overlapping Methylation probes",x = "", y = "Number of SNVs") +
   theme(axis.text.x = element_text(angle = 15, hjust = 1),legend.position = "none")
-ggsave("./results/summarys/SNV_in_vs_out_Methylation_barplot.pdf",p, width = 7, height = 5, bg = "white")
+ggsave("./results/snv/SNV_in_vs_out_Methylation_barplot.pdf",p, width = 7, height = 5, bg = "white")
 '
 ###############################################################################
 # 7) MOTIFS (NRF1 / BANP)
@@ -6158,7 +6134,7 @@ bedtools intersect -u \
 ###############################################################################
 
 # Counting cancer types with both peaks and SNV data
-mkdir -p ./results/summarys
+mkdir -p ./results/multi_omics
 
 # List of cancer types with methylation data (from the methylation file names) --> 33 cancer types
 ls ./methylation/filtered_methylation/ | grep -- 'annotated_methylation_filtered.bed.gz' | cut -d'-' -f2 | sort | uniq > ./methylation/cancer_types_with_methylation.txt
@@ -6216,7 +6192,7 @@ p <- ggplot(df_long, aes(x = dataset, y = cancer_type, fill = factor(available))
     panel.grid = element_blank()) +
   ggtitle("Availability of ATAC, SNV, and Methylation Data per Cancer Type")
 
-ggsave("./results/summarys/cancer_types_ATAC_SNV_Methylation_heatmap.pdf",p, width = 10, height = 10, dpi = 300, bg = "white")
+ggsave("./results/multi_omics/cancer_types_ATAC_SNV_Methylation_heatmap.pdf",p, width = 10, height = 10, dpi = 300, bg = "white")
 '
 # clean up intermediate files
 rm ./methylation/cancer_types_with_methylation.txt
@@ -6313,244 +6289,7 @@ p <- ggplot(df, aes(x = MotifLabel, y = SNV_count, fill = Motif)) +
 
 print(p)
 
-ggsave("./results/summarys/SNV_counts_in_motifs_NRF1_BANP_kept.pdf",plot = p, width = 10, height = 12, dpi = 300, bg = "white")
-'
-#!!DOESNT WORK ANYMORE SINCE FILTERING AND STOPPING USING THE 6MER MOTIF BELOW FOR THE 2 MM MOTIFS WORKS!!  
-# 4) Build presence/absence matrix of SNVs in NRF1 and BANP motifs per cancer type using these files ./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs.bed and ./snv/overlaps/snv_motifs_overlap/BANP_intersected_SNVs.bed
-# transform the intersection of SNV in motifs bed file to a list of SNV ids only
-# note that the SNV id is in the 4th column of the bed file and that it will generate a unique list of SNV ids only so less lines than the bed file
-# presence and absence matrix separtly for each type of cancer type for NRF1 and BANP motifs
-
-# 1) make a list of SNV ids that overlap with NRF1 and BANP motifs
-cut -f4 ./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs.bed | sort -u > ./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs_ids.txt
-
-snv_ids_NRF1="./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs_ids.txt"
-# folder for intermediate columns
-mkdir -p ./snv/snv_presence_columns_NRF1/
-
-build_column_NRF1() {
-    local snv_list="$1"      # BANP_intersected_SNVs_ids.txt
-    local cancer_file="$2"   # ACC_unique_SNVs.txt.gz
-    local out_file="$3"
-
-    local cancer
-    cancer=$(basename "$cancer_file" _unique_SNVs.txt.gz)
-    echo "  → building column for $cancer"
-
-    awk -v OFS='\t' '
-        NR==FNR { has[$1]=1; next }     # FIRST = cancer SNVs
-        {
-            val = ($1 in has ? 1 : 0);  # check if NRF1 SNV exists in cancer
-            print $1, val;
-        }
-    ' <(zcat "$cancer_file") "$snv_list" > "$out_file"
-}
-
-# 2) loop over cancers in parallel
-threads=5    # threads minimum to keep free 
-max_jobs=2   # max parallel jobs
-job_count=0
-
-for f in ./snv/snv_filtered_unique_per_cancer/*_unique_SNVs.txt.gz; do
-    cancer=$(basename "$f" _unique_SNVs.txt.gz)
-    out="./snv/snv_presence_columns_NRF1/${cancer}.col"
-
-    # check available CPU before launching a new job 
-    CPU=$(top -b -n 2 | awk '($1~"%Cpu"){cpu=$2}END{print int(48*(100-cpu)/100)}')
-    while [ "$CPU" -le "$threads" ]; do
-        echo "[$cancer] attente CPU : seulement $CPU CPU libres (min = $threads)"
-        sleep 60
-        CPU=$(top -b -n 2 | awk '($1~"%Cpu"){cpu=$2}END{print int(48*(100-cpu)/100)}')
-    done
-
-    echo "→ Lancement job pour $cancer (CPU libres = $CPU)"
-    build_column_NRF1 "$snv_ids_NRF1" "$f" "$out" &
-
-    job_count=$((job_count + 1))
-    if [ "$job_count" -ge "$max_jobs" ]; then
-        # wait for current jobs to finish before launching new ones
-        wait
-        job_count=0
-    fi
-done
-
-# final 
-wait
-echo "All jobs for NRF1 columns are done."
-#!!#!!! NOT  Done YET 3 !! 
-# 3) merge toutes les colonnes en une seule matrice
-set -euo pipefail
-
-first_file=./snv/snv_presence_columns_NRF1/ACC.col
-out=./snv/snv_presence_matrix_BANP.tsv
-
-tmp=./snv/tmp.matrix
-snv_ids=./snv/snv_ids.tmp
-header=./snv/header.tmp
-
-# 1) SNV IDs reference (from first file)
-awk '{print $1}' "$first_file" > "$snv_ids"
-
-# 2) Initialize matrix with SNV + first column values
-paste "$snv_ids" <(awk '{print $2}' "$first_file") > "$tmp"
-
-# 3) Append other cancers (skip first file)
-for f in ./snv/snv_presence_columns_BANP/*.col; do
-  [ "$f" = "$first_file" ] && continue
-  base=$(basename "$f" .col)
-  echo "→ Adding $base"
-
-  # Check SNV IDs match exactly (line-by-line)
-  if ! diff -q "$snv_ids" <(awk '{print $1}' "$f") >/dev/null; then
-    echo "ERROR: SNV list/order mismatch in $f (must match $first_file)" >&2
-    exit 1
-  fi
-
-  paste "$tmp" <(awk '{print $2}' "$f") > "${tmp}.2"
-  mv "${tmp}.2" "$tmp"
-done
-
-# 4) Header
-echo -ne "SNV" > "$header"
-for f in ./snv/snv_presence_columns_BANP/*.col; do
-  base=$(basename "$f" .col)
-  echo -ne "\t$base" >> "$header"
-done
-echo >> "$header"
-
-cat "$header" "$tmp" > "$out"
-
-rm -f "$tmp" "$snv_ids" "$header"
-echo "[DONE] Wrote: $out"
-
-#!!! NOT  Done YET 3 !!
-# Plot heatmap of raw shared SNVs between cancer types for TF motifs
-
-# heatmap of raw shared SNVs between cancer types IN A LOG10 SCALE
-# it also adds the clustering groups cancers that have similar patterns of shared NRF1-motif SNVs across all cancer types
-Rscript -e '
-library(pheatmap)
-
-pdf("./results/summarys/SNV_shared_NRF1_BANP_variants_between_cancer_types_heatmap_rescaled.pdf",
-    width = 10, height = 8, bg = "white")
-
-# ===================== NRF1 =====================
-data <- read.table("./snv/snv_presence_matrix_NRF1.tsv",
-                   header = TRUE, stringsAsFactors = FALSE)
-mat <- as.matrix(data[ , -1])
-rownames(mat) <- data$SNV
-
-shared <- t(mat) %*% mat
-shared_log <- log10(shared + 1)
-diag(shared_log) <- NA
-
-min_val <- min(shared_log, na.rm = TRUE)
-max_val <- max(shared_log, na.rm = TRUE)
-
-pheatmap(shared_log,
-         main = "Number of shared NRF1-motif variants\nbetween cancer types (log10 scale)",
-         cluster_cols = TRUE,
-         cluster_rows = TRUE,
-         show_rownames = TRUE,
-         show_colnames = TRUE,
-         color = colorRampPalette(c("white","steelblue","navy"))(200),
-         breaks = seq(min_val, max_val, length.out = 201),
-         na_col = "grey90")
-
-# ===================== BANP =====================
-data <- read.table("./snv/snv_presence_matrix_BANP.tsv",
-                   header = TRUE, stringsAsFactors = FALSE)
-mat <- as.matrix(data[ , -1])
-rownames(mat) <- data$SNV
-
-shared <- t(mat) %*% mat
-shared_log <- log10(shared + 1)
-diag(shared_log) <- NA
-
-min_val <- min(shared_log, na.rm = TRUE)
-max_val <- max(shared_log, na.rm = TRUE)
-
-pheatmap(shared_log,
-         main = "Number of shared BANP-motif variants\nbetween cancer types (log10 scale)",
-         cluster_cols = TRUE,
-         cluster_rows = TRUE,
-         show_rownames = TRUE,
-         show_colnames = TRUE,
-         color = colorRampPalette(c("white","steelblue","navy"))(200),
-         breaks = seq(min_val, max_val, length.out = 201),
-         na_col = "grey90")
-
-dev.off()
-'
-#!!! NOT  Done YET 3 !!
-# Plot heatmap of percentage of shared SNVs between cancer types for BANP motifs
-# Heatmap with the percentage oof shared variants between the different cancer types : 
-# Heatmap with the percentage of shared variants between cancer types
-Rscript -e '
-library(pheatmap)
-
-pdf("./results/summarys/SNV_shared_NRF1_BANP_percentage_between_cancer_types_heatmap.pdf",
-    width = 10, height = 8, bg = "white")
-
-# ===================== NRF1 =====================
-data <- read.table("./snv/snv_presence_matrix_NRF1.tsv",
-                   header = TRUE, stringsAsFactors = FALSE)
-
-cancer_cols  <- colnames(data)[-1]
-cancer_order <- sort(cancer_cols)
-
-mat <- as.matrix(data[, cancer_order])
-rownames(mat) <- data$SNV
-
-shared <- t(mat) %*% mat
-
-totals <- diag(shared)
-pct_shared <- sweep(shared, 1, totals, FUN = "/") * 100
-diag(pct_shared) <- NA
-
-min_val <- min(pct_shared, na.rm = TRUE)
-max_val <- max(pct_shared, na.rm = TRUE)
-cat("NRF1: percentage range:", min_val, "to", max_val, "\n")
-
-pheatmap(pct_shared,
-         main = "Percentage of shared NRF1-motif variants\nbetween cancer types",
-         cluster_cols = TRUE,
-         show_rownames = TRUE,
-         show_colnames = TRUE,
-         color = colorRampPalette(c("white","steelblue","navy"))(200),
-         breaks = seq(min_val, max_val, length.out = 201),
-         na_col = "grey90")
-
-# ===================== BANP =====================
-data <- read.table("./snv/snv_presence_matrix_BANP.tsv",
-                   header = TRUE, stringsAsFactors = FALSE)
-
-cancer_cols  <- colnames(data)[-1]
-cancer_order <- sort(cancer_cols)
-
-mat <- as.matrix(data[, cancer_order])
-rownames(mat) <- data$SNV
-
-shared <- t(mat) %*% mat
-
-totals <- diag(shared)
-pct_shared <- sweep(shared, 1, totals, FUN = "/") * 100
-diag(pct_shared) <- NA
-
-min_val <- min(pct_shared, na.rm = TRUE)
-max_val <- max(pct_shared, na.rm = TRUE)
-cat("BANP: percentage range:", min_val, "to", max_val, "\n")
-
-pheatmap(pct_shared,
-         main = "Percentage of shared BANP-motif variants\nbetween cancer types",
-         cluster_cols = TRUE,
-         show_rownames = TRUE,
-         show_colnames = TRUE,
-         color = colorRampPalette(c("white","steelblue","navy"))(200),
-         breaks = seq(min_val, max_val, length.out = 201),
-         na_col = "grey90")
-
-dev.off()
+ggsave("./results/snv/SNV_counts_in_motifs_NRF1_BANP_kept.pdf",plot = p, width = 10, height = 12, dpi = 300, bg = "white")
 '
 
 ###############################################################################
@@ -6563,7 +6302,7 @@ dev.off()
 vcf_dir="./snv/snv_filtered_without_structural_variants"
 per_cancer_dir="./snv/snv_filtered_unique_per_cancer"
 out_dir="./snv"
-results_dir="./results/summarys"
+results_dir="./results/snv"
 
 mkdir -p "$per_cancer_dir" "$results_dir"
 
@@ -6861,8 +6600,8 @@ plot_pair <- function(nrf1_mat, banp_mat, out_pdf_log, out_pdf_pct, tag){
 plot_pair(
   "./snv/snv_presence_matrix_NRF1_mm0to2.tsv",
   "./snv/snv_presence_matrix_BANP_mm0to2.tsv",
-  "./results/summarys/SNV_shared_NRF1_BANP_mm0to2_log10_heatmap.pdf",
-  "./results/summarys/SNV_shared_NRF1_BANP_mm0to2_percentage_heatmap.pdf",
+  "./results/snv/SNV_shared_NRF1_BANP_mm0to2_log10_heatmap.pdf",
+  "./results/snv/SNV_shared_NRF1_BANP_mm0to2_percentage_heatmap.pdf",
   "mm0to2"
 )
 
@@ -6870,8 +6609,8 @@ plot_pair(
 plot_pair(
   "./snv/snv_presence_matrix_NRF1_mm0to2_noCGmm.tsv",
   "./snv/snv_presence_matrix_BANP_mm0to2_noCGmm.tsv",
-  "./results/summarys/SNV_shared_NRF1_BANP_mm0to2_noCGmm_log10_heatmap.pdf",
-  "./results/summarys/SNV_shared_NRF1_BANP_mm0to2_noCGmm_percentage_heatmap.pdf",
+  "./results/snv/SNV_shared_NRF1_BANP_mm0to2_noCGmm_log10_heatmap.pdf",
+  "./results/snv/SNV_shared_NRF1_BANP_mm0to2_noCGmm_percentage_heatmap.pdf",
   "mm0to2_noCGmm"
 )
 '
@@ -6924,7 +6663,7 @@ set -euo pipefail
 PROBES_TXT="./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_probes.txt"
 ALL_CPG_BED="./methylation/annotated_methylation_data_probes_filtered.bed"
 MOTIF_BED="./motifs/NRF1_mm0to2_noCGmm.bed.gz"
-OUTDIR="./results/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes"
+OUTDIR="./results/methylation/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes"
 mkdir -p "$OUTDIR"
 
 # Output: chr  start  end  cg_id  motif_chr  motif_start  motif_end  
@@ -6945,7 +6684,7 @@ set -euo pipefail
 PROBES_TXT="./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probes.txt"
 ALL_CPG_BED="./methylation/annotated_methylation_data_probes_filtered.bed"
 MOTIF_BED="./motifs/BANP_mm0to2_noCGmm.bed.gz"
-OUTDIR="./results/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes"
+OUTDIR="./results/methylation/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes"
 mkdir -p "$OUTDIR"
 
 # Output: chr  start  end  cg_id  motif_chr  motif_start  motif_end  
@@ -6965,8 +6704,8 @@ bedtools intersect -wa -wb \
 #!/usr/bin/env bash
 set -euo pipefail
 VCF_GLOB="./snv/snv_filtered_without_structural_variants/*.vcf.gz"
-TSV="./results/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes/NRF1_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
-OUT_DIR="./results/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
+TSV="./results/methylation/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes/NRF1_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
+OUT_DIR="./results/methylation/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
 mkdir -p "$OUT_DIR"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -7002,8 +6741,8 @@ echo "[DONE] Outputs in $OUT_DIR/<CANCER>/"
 #!/usr/bin/env bash
 set -euo pipefail
 VCF_GLOB="./snv/snv_filtered_without_structural_variants/*.vcf.gz"
-TSV="./results/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes/BANP_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
-OUT_DIR="./results/methylation_motif_mutation_overlap/vcf_hits_in_BANP_mm0to2_noCGmm_motifs"
+TSV="./results/methylation/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes/BANP_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
+OUT_DIR="./results/methylation/methylation_motif_mutation_overlap/vcf_hits_in_BANP_mm0to2_noCGmm_motifs"
 mkdir -p "$OUT_DIR"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -7039,9 +6778,9 @@ echo "[DONE] Outputs in $OUT_DIR/<CANCER>/"
 # 3) For each hit, get the beta values for the mutated sample and a non-mutated sample (if available) from the methylation files, and compile into a TSV for statistical testing.
 #!/usr/bin/env bash
 set -euo pipefail
-HITS_ROOT="./results/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
+HITS_ROOT="./results/methylation/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
 METH_DIR="./methylation/filtered_methylation"
-OUT="./results/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv"
+OUT="./results/methylation/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv"
 mkdir -p "$(dirname "$OUT")"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -7149,7 +6888,7 @@ library(readr)
 library(dplyr)
 library(ggplot2)
 
-df <- read_tsv("./results/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv") %>%
+df <- read_tsv("./results/methylation/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv") %>%
   mutate(
     beta_mut   = as.numeric(beta_mut),
     beta_nomut = as.numeric(beta_nomut),
@@ -7163,7 +6902,7 @@ p <- ggplot(df, aes(x = reorder(cancer, delta), y = delta)) +
   theme_bw() +
   labs(x = NULL, y = "deltabeta = beta_mut - beta_nomut",title = "Difference in DNA methylation at TF binding motifs when a mutation is present")
 
-ggsave("./results/methylation_motif_mutation_overlap/NRF1_delta_beta_per_cancer.pdf", plot = p, width = 12, height = 12)
+ggsave("./results/methylation/methylation_motif_mutation_overlap/NRF1_delta_beta_per_cancer.pdf", plot = p, width = 12, height = 12)
 '
 
 
@@ -7175,17 +6914,17 @@ ggsave("./results/methylation_motif_mutation_overlap/NRF1_delta_beta_per_cancer.
 # 1) Link RNAseq files from papers to a expression directory. --> 11,505 files
 ###############################################################################
 # link the expression files from the /data/papers/tcga/ to this folder :
-mkdir -p ./expression/expression_files/
+mkdir -p ./expression/
 for file in /data/papers/tcga/TCGA*/*/RNA_TCGA*.augmented_star_gene_counts.tsv; do
-    ln -s "$file" ./expression/expression_files/
+    ln -s "$file" ./expression/
 done
 
 ###############################################################################
 # 2) Count Number of RNAseq data per cancer type
 ###############################################################################
 echo -e "Cancer_type\tNumber_of_RNAseq_files" > ./expression/number_of_rnaseq_per_cancer.txt
-ls ./expression/expression_files/ | cut -d'_' -f2 | cut -d'-' -f2 | sort | uniq -c | awk '{print $2 "\t" $1}' >> ./expression/number_of_rnaseq_per_cancer.txt
-mkdir -p ./results/expression/
+ls ./expression/ | grep augmented_star_gene_counts.tsv | cut -d'_' -f2 | cut -d'-' -f2 | sort | uniq -c | awk '{print $2 "\t" $1}' >> ./expression/number_of_rnaseq_per_cancer.txt
+
 # Plot the number of RNAseq data per cancer type (barplot)
 Rscript -e '
 suppressPackageStartupMessages({
@@ -7209,7 +6948,7 @@ df <- read.delim(in_file, header = TRUE, stringsAsFactors = FALSE) %>%
 total_files <- sum(df$Count, na.rm = TRUE)
 
 # Load canonical cancer list/order
-cancer_order <- scan("./results/summarys/cancer_color_order.txt", what = "", quiet = TRUE)
+cancer_order <- scan("./results/multi_omics/cancer_color_order.txt", what = "", quiet = TRUE)
 
 # Same palette as peaks plot
 palette_main <- rainbow(length(cancer_order))
@@ -7252,20 +6991,23 @@ out=./expression/expression_counts/expression_presence.tsv
 
 echo -e "cancer\ttumor_count(01-09A)\thealthy_count(10-19A)" > "$out"
 
-# get cancer list using the SAME parsing you used before
-cancers=$(ls -1 ./expression/expression_files/ \
+# get cancer list 
+cancers=$(ls -1 ./expression/ \
+  | grep augmented_star_gene_counts.tsv \
   | cut -d'_' -f2 \
   | cut -d'-' -f2 \
   | sort -u)
 
 for cancer in $cancers; do
   # tumor: 01A..09A
-  tumor_count=$(ls -1 ./expression/expression_files/ \
+  tumor_count=$(ls -1 ./expression/ \
+    | grep augmented_star_gene_counts.tsv \
     | grep -E "_TCGA-${cancer}-.*-0[1-9]A" \
     | wc -l)
 
   # healthy: 10A..19A
-  healthy_count=$(ls -1 ./expression/expression_files/ \
+  healthy_count=$(ls -1 ./expression/ \
+    | grep augmented_star_gene_counts.tsv \
     | grep -E "_TCGA-${cancer}-.*-1[0-9]A" \
     | wc -l)
 
@@ -7350,7 +7092,7 @@ dev.off()
 ###############################################################################
 # 4) Count Number of patients with RNA seq data 
 ###############################################################################
-ls -1 ./expression/expression_files/*.tsv 2>/dev/null \
+ls -1 ./expression/*augmented_star_gene_counts.tsv 2>/dev/null \
 | sed 's#.*/##' \
 | grep -oE 'TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}' \
 | sort -u \
@@ -7361,12 +7103,12 @@ ls -1 ./expression/expression_files/*.tsv 2>/dev/null \
 ###############################################################################
 # 5) Count Number of GENE TYPE IN EACH FILE RNAseq data 
 ###############################################################################
-awk -F'\t' 'NR>1 && $1 ~ /^ENS/ {print $3}' ./expression/expression_files/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv | sort | uniq -c 
+awk -F'\t' 'NR>1 && $1 ~ /^ENS/ {print $3}' ./expression/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv | sort | uniq -c 
 # plot the distribution of gene types in the RNA-seq files (barplot)
 Rscript -e '
 library(data.table)
 
-infile <- "./expression/expression_files/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv"
+infile <- "./expression/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv"
 outpdf <- "./results/expression/barplot_gene_types_RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.pdf"
 dir.create(dirname(outpdf), recursive=TRUE, showWarnings=FALSE)
 
@@ -7406,17 +7148,52 @@ dev.off()
 
 cat("[DONE] -> ", outpdf, "\n", sep="")
 '
-#!!LAUNCHED!!
+
 ###############################################################################
-# 6) Range of tpm_unstranded 
+# 6) Range of tpm_unstranded for protein_coding
 ###############################################################################
 
 echo -e "tpm_unstranded_values" > ./expression/tpm_unstranded_values.txt
 
-for f in ./expression/expression_files/*; do
+for f in ./expression/*augmented_star_gene_counts.tsv; do
   awk '$1 ~ /^ENS/ && $3 ~ /^protein_coding$/ {print $7}' "$f" >> ./expression/tpm_unstranded_values.txt
 done
-sort -un ./expression/tpm_unstranded_values.txt > ./expression/tpm_unstranded_values_unique.txt 
+cat ./expression/tpm_unstranded_values.txt | grep -v 'tpm' | sort -un > ./expression/tpm_unstranded_values_unique.txt 
+head -1 ./expression/tpm_unstranded_values_unique.txt
+# 0.0004
+tail -1 ./expression/tpm_unstranded_values_unique.txt
+# 337184.2864
+
+# LOOK IF THERE ARE ANY PROTEIN CODING GENES WITH NA TPM_UNSTRANDED VALUES : NOTE: THERE ARE NO PROTEIN CODING GENES WITH NA TPM_UNSTRANDED VALUES.
+for f in ./expression/*augmented_star_gene_counts.tsv; do
+  echo "processing $f"
+  awk '$3=="protein_coding" && $7=="NA" {print $0}' "$f" >> ./expression/protein_coding_genes_with_NA_tpm_unstranded.txt
+done
+cat ./expression/protein_coding_genes_with_NA_tpm_unstranded.txt | wc -l
+# 0
+rm ./expression/protein_coding_genes_with_NA_tpm_unstranded.txt
+
+
+###############################################################################
+# 7) Filter out genes on chrX,chrY
+###############################################################################
+# 1) Create a list of genes on chrX,chrY 
+cat /data/genome/annotations/hg38_genes.bed | awk '$1=="chrY" || $1=="chrX" {print $4}' > ./expression/genes_chrX_chrY_to_filter_out.txt
+
+# 2) Filter out genes that are on chrX,chrY from the expression files that I have:
+for files in ./expression/*.augmented_star_gene_counts.tsv; do
+  echo "Processing $files"
+  grep '^ENS' "$files" \
+    | awk 'NR==FNR {genes[$1]=1; next} !($2 in genes)' \
+        ./expression/genes_chrX_chrY_to_filter_out.txt - \
+    > "${files%.tsv}_filtered.tsv"
+done
+
+# 3) Check how many genes are left after filtering out chrX,chrY genes 
+cat ./expression/RNA_TCGA-ACC-TCGA-OR-A5J2-01A_1.augmented_star_gene_counts_filtered.tsv | grep '^ENS' | grep protein_coding | wc -l
+# 19117
+
+
 
 ##########################################################################################################################################################################################
 # Create a summary table of presence/absence of omics data types (methylation, SNV, RNA-seq) for each sample, to know which samples have which data types available for later analyses.
@@ -7430,7 +7207,7 @@ ls -d /data/papers/tcga/TCGA-*/*/ 2>/dev/null | awk -F'/' '{c=$(NF-2); sub(/^TCG
 # DATA SUMMARY FOR EACH SAMPLE
 # For each sample, check if there is a SNV file, a methylation file, and an RNA-seq file, and compile into a summary TSV.
 set -euo pipefail
-OUT="./results/sample_data_summary.tsv"
+OUT="./results/multi_omics/sample_data_summary.tsv"
 mkdir -p "$(dirname "$OUT")"
 echo -e "sample\tcancer\tsnv\tmethylation\trnaseq\tatac" > "$OUT"
 
@@ -7438,106 +7215,115 @@ while IFS=$'\t' read -r sample_id cancer; do
   [[ -n "$sample_id" ]] || continue
   snv_file=$(ls -1 ./snv/snv_filtered_without_structural_variants/SNV_*"${sample_id}"*.vcf.gz 2>/dev/null || true)
   meth_file=$(ls -1 ./methylation/filtered_methylation/HM450_*"${sample_id}"*_annotated_methylation_filtered.bed.gz 2>/dev/null || true)
-  rnaseq_file=$(ls -1 ./expression/expression_files/RNA_*"${sample_id}"*.augmented_star_gene_counts.tsv 2>/dev/null || true)
+  rnaseq_file=$(ls -1 ./expression/RNA_*"${sample_id}"*.augmented_star_gene_counts.tsv 2>/dev/null || true)
   atac_file=$(ls -1 ./peaks/ATAC_TCGA*"${sample_id}"* 2>/dev/null || true)
   echo -e "${sample_id}\t${cancer}\t$( [[ -n "$snv_file" ]] && echo 1 || echo 0 )\t$( [[ -n "$meth_file" ]] && echo 1 || echo 0 )\t$( [[ -n "$rnaseq_file" ]] && echo 1 || echo 0 )\t$( [[ -n "$atac_file" ]] && echo 1 || echo 0 )" >> "$OUT"
 done < ./all_tcga_samples_with_cancer.tsv
 
-# Barplot of data availability per cancer type
+# heatmap of data availability across samples (samples on x-axis, data types on y-axis, colored by presence/absence)
 Rscript -e '
-library(readr)
-library(dplyr)
-library(tidyr)
+library(data.table)
+library(pheatmap)
 library(ggplot2)
-infile  <- "./results/sample_data_summary.tsv"
-outfile <- "./results/barplot_sample_data_by_cancer_by_datatype.pdf"
-df <- read_tsv(infile, show_col_types = FALSE) %>%
-  mutate(across(c(snv, methylation, rnaseq, atac), as.integer))
-
-# totals per cancer (unique samples)
-totals_cancer <- df %>%
-  group_by(cancer) %>%
-  summarise(N = n(), .groups="drop")
-
-# counts per cancer per datatype
-wide <- df %>%
-  group_by(cancer) %>%
-  summarise(
-    RNA  = sum(rnaseq == 1, na.rm = TRUE),
-    ATAC = sum(atac   == 1, na.rm = TRUE),
-    SNV  = sum(snv    == 1, na.rm = TRUE),
-    METH = sum(methylation == 1, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  left_join(totals_cancer, by="cancer")
-
-# order cancers by N SAMPLES (descending) 
-wide <- wide %>% mutate(TOTAL = RNA + ATAC + SNV + METH)
-cancer_levels <- wide$cancer[order(-wide$TOTAL)]
-
-# caption lines (two columns like before)
-cap_tbl <- wide %>%
-  mutate(
-    cancer_chr = as.character(cancer),
-    line = paste0(cancer_chr,
-                  ": N=", N,
-                  "; RNA=", RNA,
-                  "; ATAC=", ATAC,
-                  "; SNV=", SNV,
-                  "; METH=", METH)
-  ) %>%
-  arrange(factor(cancer_chr, levels = cancer_levels))
-lines <- cap_tbl$line
-if (length(lines) %% 2 == 1) lines <- c(lines, "")
-caption_text <- paste(
-  paste(lines[c(TRUE, FALSE)], lines[c(FALSE, TRUE)], sep="    |    "),
-  collapse="\n"
+library(grid)
+library(gridExtra)
+in_tsv   <- "./results/multi_omics/sample_data_summary.tsv"
+col_file <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+out_pdf  <- "./results/multi_omics/sample_data_summary_heatmap.pdf"
+dt <- fread(in_tsv)
+mat <- t(as.matrix(dt[, .(snv, methylation, rnaseq, atac)]))
+colnames(mat) <- dt$sample
+rownames(mat) <- c("Variant data","Methylation data","RNAseq","ATACseq")
+ord <- order(dt$cancer, dt$sample)
+mat <- mat[, ord, drop=FALSE]
+ann <- data.frame(
+  Cancer = paste0("TCGA-", as.character(dt$cancer[ord])),
+  stringsAsFactors=FALSE
 )
+rownames(ann) <- colnames(mat)
+cols <- fread(col_file, header=FALSE)[, 1:2]
+setnames(cols, c("Cancer","Color"))
+cols[, Cancer := gsub("\r","", trimws(as.character(Cancer)))]
+cols[, Color  := gsub("\r","", trimws(as.character(Color)))]
+cancer_cols_all <- setNames(cols$Color, cols$Cancer)
+present <- sort(unique(ann$Cancer))
+cancer_cols <- cancer_cols_all[present]
+ann_colors <- list(Cancer = cancer_cols)
 
-# long format for plotting
-counts <- wide %>%
-  select(cancer, RNA, ATAC, SNV, METH) %>%
-  pivot_longer(cols = c(RNA, ATAC, SNV, METH), names_to="datatype", values_to="n") %>%
-  mutate(
-    cancer = factor(cancer, levels = cancer_levels),
-    datatype = factor(datatype, levels = c("RNA","ATAC","SNV","METH"))
-  )
-cols <- c(
-  RNA  = "#4E79A7",  # blue
-  ATAC = "#59A14F",  # green
-  SNV  = "#EF6E48",  # red
-  METH = "#FFB900"   # orange
-)
+# ===== summaries =====
+counts <- colSums(dt[, .(snv, methylation, rnaseq, atac)], na.rm=TRUE)
+counts_dt <- data.table(dataset=names(counts), n=as.integer(counts))
+counts_dt[, dataset := factor(dataset, levels=c("snv","methylation","rnaseq","atac"),labels=c("SNV","Methylation","RNA-seq","ATAC-seq"))]
 
-p <- ggplot(counts, aes(x = cancer, y = n, fill = datatype)) +
+p_counts <- ggplot(counts_dt, aes(x=dataset, y=n, fill=dataset)) +
   geom_col() +
-  scale_fill_manual(values = cols,
-                    labels = c(RNA="RNA-seq", ATAC="ATAC-seq", SNV="SNV", METH="Methylation")) +
-  labs(
-    title = "Omics availability per cancer type",
-    subtitle = paste0("Total samples: ", sum(wide$N)),
-    x = "Cancer type",
-    y = "Number of samples",
-    fill = "",
-    caption = caption_text
-  ) +
-  theme_bw(base_size = 12) +
-  theme(
-    axis.text.x = element_text(angle = 60, hjust = 1),
-    plot.caption = element_text(size = 9, hjust = 0.5),
-    plot.caption.position = "plot",
-    plot.title = element_text(face = "bold")
-  )
+  theme_bw() +
+  labs(title="Number of samples with each dataset", x=NULL, y="Samples") +
+  theme(axis.text.x = element_text(angle=30, hjust=1),
+        legend.title = element_blank()) +
+  scale_fill_brewer(palette="Set2")
 
-ggsave(outfile, p, width = 14, height = 10)
-cat("[DONE] Wrote ", outfile, "\n", sep = "")
+# combos (SNV Meth RNA ATAC)
+dt[, combo := paste0(snv, methylation, rnaseq, atac)]
+combo_counts <- dt[, .N, by=combo][order(-N)]
+setnames(combo_counts, "N", "n_samples")
+
+# ===== many distinct, vivid colors =====
+combo_levels <- combo_counts$combo
+combo_cols <- setNames(
+  hcl(h=seq(15, 375, length.out=length(combo_levels)+1)[1:length(combo_levels)],c=100, l=55),
+  combo_levels
+)
+
+p_combo <- ggplot(combo_counts,aes(x=reorder(combo, -n_samples), y=n_samples, fill=combo)) +
+  geom_col() +
+  theme_bw() +
+  labs(title="Sample counts per dataset combination (SNV Meth RNA ATAC)",
+       x="Combination code (SNV Meth RNA ATAC)", y="Samples") +
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        legend.title = element_blank()) +
+  scale_fill_manual(values=combo_cols)
+
+combo_counts[, combo_label := paste0("SNV=", substr(combo,1,1),
+                                    " Meth=", substr(combo,2,2),
+                                    " RNA=", substr(combo,3,3),
+                                    " ATAC=", substr(combo,4,4))]
+combo_tbl <- combo_counts[, .(combo, combo_label, n_samples)]
+tg <- tableGrob(combo_tbl, rows=NULL, theme=ttheme_minimal(base_size=10))
+
+# ===== one PDF, multiple pages =====
+pdf(out_pdf, width=24, height=10)
+
+# PAGE 1: heatmap
+ph <- pheatmap(mat,
+         cluster_rows=FALSE,
+         cluster_cols=FALSE,
+         annotation_col=ann,
+         annotation_colors=ann_colors,
+         show_colnames=FALSE,
+         fontsize_row=12,
+         border_color="grey90",
+         color=c("skyblue","yellow"),
+         breaks=c(-0.5, 0.5, 1.5),
+         silent=TRUE)
+grid.draw(ph$gtable)
+
+# PAGE 2: dataset counts
+grid.newpage()
+print(p_counts)
+
+# PAGE 3: combo barplot + table
+grid.newpage()
+grid.arrange(p_combo, tg, ncol=2, widths=c(1.1, 1.4))
+dev.off()
+cat("[DONE] ", out_pdf, "\n", sep="")
 '
 
 ########################################################
 # Expression of NRF1 and BANP in the different samples 
 ########################################################
 # grep -w --> to find matches of the while word (gene name) and not partial matches
-for files in ./expression/expression_files/RNA_TCGA-*-*.augmented_star_gene_counts.tsv; do
+for files in ./expression/RNA_TCGA-*-*.augmented_star_gene_counts.tsv; do
   sample=$(basename "$files" .augmented_star_gene_counts.tsv)
   out="./expression/expression_of_NRF1_BANP/${sample}_NRF1_BANP_expression.tsv"
   mkdir -p "$(dirname "$out")"
@@ -7554,14 +7340,9 @@ library(readr); library(dplyr); library(stringr); library(ggplot2)
 
 cat("[INFO] Reading mapping file...\n")
 map <- read_tsv("./all_tcga_samples_with_cancer.tsv", col_names=c("sample_id","cancer"), show_col_types=FALSE)
-
 cat("[INFO] Listing NRF1/BANP per-sample files...\n")
-files <- list.files("./expression/expression_of_NRF1_BANP",
-                    pattern = "_NRF1_BANP_expression.tsv$",
-                    full.names = TRUE)
+files <- list.files("./expression/expression_of_NRF1_BANP",pattern = "_NRF1_BANP_expression.tsv$",full.names = TRUE)
 cat("[INFO] Found ", length(files), " files\n", sep="")
-if (length(files) == 0) quit(status=1)
-
 cat("[INFO] Reading expression files...\n")
 df <- bind_rows(lapply(files, function(f){
   cat("[READ] ", basename(f), "\n", sep="")
@@ -7576,12 +7357,12 @@ df <- df %>%
   select(sample_id, gene_name, tpm_unstranded) %>%
   filter(gene_name %in% c("NRF1","BANP")) %>%
   mutate(
-    tpm_unstranded = as.numeric(tpm_unstranded),
+    tpm_unstranded = as.numeric(tpm_unstranded),   # raw TPM
     case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""),
     code = str_match(sample_id, "-([0-9]{2})[A-Za-z]$")[,2],
     sample_type = case_when(
-      str_detect(code, "^0") ~ "Tumor",   # 0X
-      str_detect(code, "^1") ~ "Normal",  # 1X
+      str_detect(code, "^0") ~ "Tumor",
+      str_detect(code, "^1") ~ "Normal",
       TRUE ~ "Other"
     )
   ) %>%
@@ -7589,31 +7370,62 @@ df <- df %>%
   filter(!is.na(cancer), !is.na(tpm_unstranded)) %>%
   filter(sample_type %in% c("Normal","Tumor"))
 
+# =====  gene-specific cutoffs + removed counts + filter =====
+df <- df %>%
+  mutate(cutoff = case_when(
+    gene_name == "NRF1" ~ 50,
+    gene_name == "BANP" ~ 30,
+    TRUE ~ Inf
+  ))
+removed <- df %>%
+  group_by(gene_name) %>%
+  summarise(n_removed = sum(tpm_unstranded > cutoff, na.rm=TRUE), .groups="drop")
+get_removed <- function(g) {
+  x <- removed$n_removed[removed$gene_name == g]
+  ifelse(length(x) == 0, 0, x)
+}
+
+df <- df %>% filter(tpm_unstranded <= cutoff)
+# ======================================================================
+
 cat("[INFO] Samples Tumor (0X):  ", length(unique(df$sample_id[df$sample_type=="Tumor"])), "\n", sep="")
 cat("[INFO] Samples Normal (1X): ", length(unique(df$sample_id[df$sample_type=="Normal"])), "\n", sep="")
 cat("[INFO] Cancers: ", length(unique(df$cancer)), "\n", sep="")
 
-make_plot <- function(d, title_txt) {
-  ggplot(d, aes(cancer, tpm_unstranded, color = gene_name)) +
+# ===== keep same y-scale across both plots  =====
+ymax <- max(df$tpm_unstranded, na.rm=TRUE)
+
+make_plot <- function(d, title_txt, removed_n) {
+  ggplot(d, aes(cancer, tpm_unstranded)) +
     geom_boxplot(outlier.shape = NA) +
-    geom_jitter(width = 0.2, alpha = 0.5, size = 0.7) +
-    facet_wrap(~gene_name, scales="free_y") +
+    geom_jitter(aes(color = sample_type), width = 0.2, alpha = 0.6, size = 0.7) +
+    geom_hline(yintercept = 1, color = "blue", linewidth = 0.8) +
+    scale_color_manual(values = c(Normal="black", Tumor="red")) +
+    coord_cartesian(ylim = c(0, ymax)) +
     theme_bw() +
     theme(axis.text.x = element_text(angle=60, hjust=1)) +
-    labs(title = title_txt, x="Cancer type", y="TPM", color="Gene")
+    labs(
+      title = title_txt,
+      x="Cancer type", y="TPM",
+      color = paste0("Sample type (removed above cutoff: ", removed_n, ")")
+    )
 }
 
 cat("[INFO] Building plots...\n")
-p_normal <- make_plot(filter(df, sample_type=="Normal"), "NRF1/BANP TPM — Normal (1X)")
-p_tumor  <- make_plot(filter(df, sample_type=="Tumor"),  "NRF1/BANP TPM — Tumor (0X)")
+p_nrf1 <- make_plot(filter(df, gene_name=="NRF1"),
+                    "NRF1 TPM — Normal (black) vs Tumor (red) | cutoff=50 removed",
+                    get_removed("NRF1"))
+p_banp <- make_plot(filter(df, gene_name=="BANP"),
+                    "BANP TPM — Normal (black) vs Tumor (red) | cutoff=30 removed",
+                    get_removed("BANP"))
 
 out <- "./results/expression/boxplot_TPM_NRF1_BANP_by_cancer_Normal_vs_Tumor.pdf"
 dir.create(dirname(out), recursive=TRUE, showWarnings=FALSE)
 
 cat("[INFO] Writing 2-page PDF...\n")
 pdf(out, width=14, height=6)
-if (nrow(filter(df, sample_type=="Normal")) > 0) print(p_normal) else {plot.new(); title("No Normal (1X) samples found")}
-if (nrow(filter(df, sample_type=="Tumor"))  > 0) print(p_tumor)  else {plot.new(); title("No Tumor (0X) samples found")}
+if (nrow(filter(df, gene_name=="NRF1")) > 0) print(p_nrf1) else {plot.new(); title("No NRF1 samples found")}
+if (nrow(filter(df, gene_name=="BANP")) > 0) print(p_banp) else {plot.new(); title("No BANP samples found")}
 dev.off()
 
 cat("[DONE] Wrote ", out, "\n", sep="")
@@ -7740,14 +7552,14 @@ dev.off()
 
 #!!IM HERE!!
 ##################################################################################################################################################
-# PCA of the expression of top 2000 variable genes across all samples, to see if they cluster by cancer type or by healthy vs tumor status
+# PCA of the expression of top 10000 variable genes across all samples, to see if they cluster by cancer type or by healthy vs tumor status
 ##################################################################################################################################################
 # create a file with the color order for the cancers (to use the same colors as before in the PCA plot)
 Rscript -e '
 library(data.table)
 
 in_map  <- "./all_tcga_samples_with_cancer.tsv"
-out_col <- "./results/cancer_color_order_with_defined_colours.tsv"
+out_col <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
 dir.create(dirname(out_col), recursive=TRUE, showWarnings=FALSE)
 
 m <- fread(in_map, header=FALSE)
@@ -7764,109 +7576,135 @@ fwrite(dt, out_col, sep="\t", col.names=FALSE)
 
 cat("[DONE] Wrote ", out_col, " with ", nrow(dt), " cancers\n", sep="")
 '
-# PCA of the expression of top 10k variable genes across all samples, colored by cancer type and shaped by healthy vs tumor status
+#!!LAUNCHED!!
+#!!LAUNCHED!!
 Rscript -e '
 library(data.table)
 library(ggplot2)
 
-# ===== INPUTS =====
-col_file <- "./results/cancer_color_order_with_defined_colours.tsv"   # cancer<TAB>#hex
-out_pdf  <- "./results/expression/PCA_TPM_topVar_test.pdf"
+cat("[INFO] Loading required packages...\n")
+if (!requireNamespace("irlba", quietly=TRUE)) stop("Install irlba: install.packages(\"irlba\")")
+if (!requireNamespace("Rtsne", quietly=TRUE)) stop("Install Rtsne: install.packages(\"Rtsne\")")
+if (!requireNamespace("plotly", quietly=TRUE)) stop("Install plotly: install.packages(\"plotly\")")
+if (!requireNamespace("htmlwidgets", quietly=TRUE)) stop("Install htmlwidgets: install.packages(\"htmlwidgets\")")
 
-cat("[INFO] Loading cancer color order...\n")
-col_dt <- fread(col_file, header=FALSE, sep="auto")
-if (ncol(col_dt) < 2) stop("color order file must have >=2 columns: cancer and color")
+TPM_COL <- 7  # <-- set to the column index of tpm_unstranded in your filtered files
+
+col_file <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+out_html <- "./results/expression/TSNE_TPM_protein_coding_ALL_rawTPM_interactive.html"
+
+cat("[INFO] Loading cancer colors from:", col_file, "\n")
+col_dt <- fread(col_file, header=FALSE)
+if (ncol(col_dt) < 2) stop("color file must have >=2 columns")
 col_dt <- col_dt[, 1:2]
 setnames(col_dt, c("cancer","color"))
-col_dt[, cancer := as.character(cancer)]
-col_dt[, color  := as.character(color)]
-cancer_levels <- col_dt$cancer
-cancer_cols   <- setNames(col_dt$color, col_dt$cancer)
-cat("[INFO] Listing RNA files...\n")
-files <- list.files("./expression/expression_files",pattern = "[.]augmented_star_gene_counts[.]tsv$",full.names=TRUE)
+cancer_levels <- as.character(col_dt$cancer)
+cancer_cols   <- setNames(as.character(col_dt$color), as.character(col_dt$cancer))
 
-cat("[INFO] Using", length(files), "files\n")
+cat("[INFO] Listing filtered expression files...\n")
+files <- list.files("./expression/expression_files",pattern="[.]augmented_star_gene_counts_filtered[.]tsv$",full.names=TRUE)
+cat("[INFO] Found", length(files), "files\n")
 
-cat("[INFO] Reading gene list from first file:\n  ", files[1], "\n", sep="")
-g0 <- fread(files[1], showProgress=FALSE)[, gene_name]
-G <- length(g0); S <- length(files)
-cat("[INFO] Genes:", G, " | Samples(files):", S, "\n")
+cat("[INFO] Reading first file (schema reference):\n  ", files[1], "\n", sep="")
+dt0 <- fread(files[1], header=FALSE, showProgress=FALSE)
+cat("[INFO] Columns detected:", ncol(dt0), " | Rows:", nrow(dt0), "\n")
+cat("[INFO] Assuming: V2=gene_name, V3=gene_type, TPM_COL=", TPM_COL, "\n", sep="")
 
-cat("[INFO] Allocating matrix (genes x samples)...\n")
+pc_idx <- which(dt0$V3 == "protein_coding")
+g0 <- dt0$V2[pc_idx]
+G <- length(g0)
+S <- length(files)
+cat("[INFO] Protein_coding genes:", G, " | Samples(files):", S, "\n")
+
+cat("[INFO] Allocating matrix...\n")
 m <- matrix(0, nrow=G, ncol=S)
 rownames(m) <- g0
 
 skipped <- 0L
-for(i in seq_along(files)){
-  if(i %% 25 == 0) cat("[READ]", i, "/", S, "\n")
-  x <- fread(files[i], showProgress=FALSE)[, as.numeric(tpm_unstranded)]
-  if(length(x) != G){
-    cat("[SKIP] gene count mismatch:", basename(files[i]), " (", length(x), "!= ", G, ")\n", sep="")
+used    <- 0L
+
+cat("[INFO] Reading TPM column across files...\n")
+for (i in seq_along(files)) {
+  if (i %% 25 == 0) cat("[READ]", i, "/", S, "\n")
+  dt <- fread(files[i], header=FALSE, showProgress=FALSE)
+
+  if (nrow(dt) != nrow(dt0)) {
+    cat("[SKIP] Row mismatch:", basename(files[i]), " rows=", nrow(dt), " ref=", nrow(dt0), "\n", sep="")
     skipped <- skipped + 1L
     next
   }
+
+  x <- suppressWarnings(as.numeric(dt[[TPM_COL]][pc_idx]))
+  if (length(x) != G) {
+    cat("[SKIP] protein_coding length mismatch:", basename(files[i]), " len=", length(x), " ref=", G, "\n", sep="")
+    skipped <- skipped + 1L
+    next
+  }
+
   m[, i] <- x
+  used <- used + 1L
 }
-cat("[INFO] Done reading. Skipped:", skipped, "\n")
+
+cat("[INFO] Done reading. Used:", used, " | Skipped:", skipped, "\n")
 
 cat("[INFO] Setting sample names...\n")
-sids <- sub("^RNA_", "", sub("[.]augmented_star_gene_counts[.]tsv$", "", basename(files)))
+sids <- sub("^RNA_", "", sub("[.]augmented_star_gene_counts_filtered[.]tsv$", "", basename(files)))
 colnames(m) <- sids
-m[is.na(m)] <- 0
-cat("[INFO] log2(TPM+1) transform...\n")
-x <- log2(m + 1)
-cat("[INFO] Selecting top variable genes...\n")
-vars <- apply(x, 1, var)
-topN <- 60660
-keep <- order(vars, decreasing=TRUE)[1:min(topN, length(vars))]
-cat("[INFO] topN =", topN, " | using =", length(keep), "genes\n")
-xs <- t(x[keep, , drop=FALSE])
-cat("[INFO] Running PCA...\n")
-pca <- prcomp(xs, scale.=TRUE)
-df <- data.frame(sample=rownames(pca$x), PC1=pca$x[,1], PC2=pca$x[,2], stringsAsFactors=FALSE)
 
-# ===== cancer: sample looks like TCGA-ACC-TCGA-OR-A5J7-01A_1  =====
+m[is.na(m)] <- 0
+xs <- t(m)
+cat("[INFO] Matrix dims:", nrow(xs), "samples x", ncol(xs), "genes\n")
+
+cat("[INFO] Removing zero-variance genes...\n")
+v <- apply(xs, 2, var)
+xs <- xs[, v > 0, drop=FALSE]
+cat("[INFO] Removed", sum(v == 0), "zero-variance genes; remaining:", ncol(xs), "\n")
+
+cat("[INFO] Running PCA (50 dims) with irlba...\n")
+set.seed(1)
+pca50 <- irlba::prcomp_irlba(xs, n=50, center=TRUE, scale.=TRUE)
+
+cat("[INFO] Running t-SNE...\n")
+n <- nrow(xs)
+perp <- min(30, floor((n - 1) / 3))
+if (perp < 5) perp <- 5
+cat("[INFO] t-SNE perplexity =", perp, " (n_samples =", n, ")\n")
+
+ts <- Rtsne::Rtsne(pca50$x, dims=2, perplexity=perp, pca=FALSE,check_duplicates=FALSE, verbose=TRUE)
+
+cat("[INFO] Building plot...\n")
+df <- data.frame(sample=rownames(xs), TSNE1=ts$Y[,1], TSNE2=ts$Y[,2], stringsAsFactors=FALSE)
+
 tok <- strsplit(df$sample, "-", fixed=TRUE)
 df$cancer <- vapply(tok, function(v) paste0("TCGA-", v[2]), character(1))
 
-# ===== type: take last token after "-" => "01A_1", then first 2 chars => "01" / "11" =====
-last_tok <- vapply(tok, function(v) v[length(v)], character(1))   # e.g. "01A_1"
-code2 <- substr(last_tok, 1, 2)                                   # "01" / "11"
-df$type <- ifelse(substr(code2, 1, 1) == "0", "Tumor",
-           ifelse(substr(code2, 1, 1) == "1", "Normal", "Other"))
+last_tok <- vapply(tok, function(v) v[length(v)], character(1))
+code2 <- substr(last_tok, 1, 2)
+df$type <- ifelse(substr(code2,1,1)=="0","Tumor",ifelse(substr(code2,1,1)=="1","Normal","Other"))
 df$type <- factor(df$type, levels=c("Tumor","Normal","Other"))
-
-# sanity checks
-cat("[INFO] type counts:\n"); print(table(df$type))
-cat("[INFO] unique cancers in PCA:", length(unique(df$cancer)), "\n")
-cat("[INFO] cancers with a defined color:",
-    sum(unique(df$cancer) %in% names(cancer_cols)), "/", length(unique(df$cancer)), "\n")
-
-# keep cancer order from file; cancers not in file become NA (we show them in grey)
 df$cancer <- factor(df$cancer, levels=cancer_levels)
 
-dir.create(dirname(out_pdf), recursive=TRUE, showWarnings=FALSE)
-cat("[INFO] Writing PDF -> ", out_pdf, "\n", sep="")
+# IMPORTANT: do NOT name this column "text" (collides with text() function)
+df$hover <- paste0("Sample: ", df$sample,
+                   "<br>Cancer: ", as.character(df$cancer),
+                   "<br>Type: ", as.character(df$type))
 
-pdf(out_pdf, width=10, height=7)
-print(
-  ggplot(df, aes(PC1, PC2, color=cancer, shape=type)) +
-    geom_point(size=2, alpha=0.85) +
-    scale_shape_manual(values=c(Tumor=16, Normal=17, Other=4)) +
-    scale_color_manual(values=cancer_cols, breaks=cancer_levels, drop=FALSE, na.value="grey70") +
-    theme_bw() +
-    labs(
-      title="PCA on RNA-seq log2(TPM+1) — top variable genes",
-      subtitle=paste0("Genes used=", length(keep), " | Samples=", nrow(df)),
-      color="Cancer", shape="Type"
-    )
-)
-dev.off()
+p <- ggplot(df, aes(TSNE1, TSNE2, color=cancer, shape=type)) +
+  geom_point(aes(tooltip = hover), size=2, alpha=0.85) +
+  scale_shape_manual(values=c(Tumor=16, Normal=17, Other=4)) +
+  scale_color_manual(values=cancer_cols, breaks=cancer_levels, drop=FALSE, na.value="grey70") +
+  theme_bw() +
+  labs(
+    title="Interactive t-SNE — protein_coding (no header files)",
+    subtitle=paste0("Genes used=", ncol(xs), " | Samples=", nrow(df),
+                    " | PCA dims=50 | perplexity=", perp),
+    color="Cancer", shape="Type"
+  )
 
-cat("[DONE] ", out_pdf, "\n", sep="")
+cat("[INFO] Saving HTML to:", out_html, "\n")
+g <- plotly::ggplotly(p, tooltip = "tooltip")
+dir.create(dirname(out_html), recursive=TRUE, showWarnings=FALSE)
+htmlwidgets::saveWidget(g, out_html, selfcontained=TRUE)
+
+cat("[DONE] Wrote ", out_html, "\n", sep="")
 '
-
-
-######
-# TSNE
-######

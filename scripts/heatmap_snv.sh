@@ -150,7 +150,7 @@ library(data.table)
 library(pheatmap)
 
 in_root <- "./snv/heatmap"
-out_dir <- "./results/heatmap_snv"
+out_dir <- "./results/snv/heatmap_snv"
 dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
 
 wrap_label <- function(x, width=35) paste(strwrap(x, width=width), collapse="\n")
@@ -286,7 +286,7 @@ library(data.table)
 library(ggplot2)
 
 in_file <- "./snv/top30_panCancer/shared_across_cancers_top30_nbCancersOnly.tsv"
-out_pdf <- "./results/summarys/SNV_shared_top30_cancer_barplots.pdf"
+out_pdf <- "./results/snv/SNV_shared_top30_cancer_barplots.pdf"
 
 dt <- fread(in_file)
 
@@ -376,7 +376,7 @@ Rscript -e '
 library(data.table)
 library(ggplot2)
 in_tsv  <- "./snv/top30_panCancer/top30_SNV_nSamples_perCancer_perTF.tsv"
-out_pdf <- "./results/summarys/barplot_top30_SNV_nSamples_perCancer_perTF.pdf"
+out_pdf <- "./results/snv/barplot_top30_SNV_nSamples_perCancer_perTF.pdf"
 dt <- fread(in_tsv)
 dt[, n_samples := suppressWarnings(as.numeric(n_samples))]
 dt[, n_total_samples := suppressWarnings(as.numeric(n_total_samples))]

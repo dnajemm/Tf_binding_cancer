@@ -19,9 +19,9 @@ infile      <- "./methylation/filtered_methylation_files_tumor11A_1.txt"
 top10k_file <- "./methylation/top10000_variable_CpGs_pan_cancer.txt"
 pan_mat_rds <- "./methylation/TCGA-all_cancer_pan_cancer_matrix.RData"
 
-outpdf <- "./results/summarys/tSNE_methylation_11A_top10k.pdf"
-out_tsv <- "./results/summarys/tSNE_methylation_11A_top10k_coords.tsv"
-out_rds <- "./results/summarys/tSNE_methylation_11A_top10k_coords.rds"
+outpdf <- "./results/methylation/tSNE_methylation/tSNE_methylation_11A_top10k.pdf"
+out_tsv <- "./results/methylation/tSNE_methylation/tSNE_methylation_11A_top10k_coords.tsv"
+out_rds <- "./results/methylation/tSNE_methylation/tSNE_methylation_11A_top10k_coords.rds"
 
 # ------------------ Parameters ------------------
 n_pcs         <- 30
@@ -213,9 +213,9 @@ pairs_tsv   <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
 top10k_file <- "./methylation/top10000_variable_CpGs_pan_cancer.txt"
 pan_mat_rds <- "./methylation/TCGA-all_cancer_pan_cancer_matrix.RData"
 
-outpdf  <- "./results/summarys/tSNE_methylation_01A_11A_top10k.pdf"
-out_tsv <- "./results/summarys/tSNE_methylation_01A_11A_top10k_coords.tsv"
-out_rds <- "./results/summarys/tSNE_methylation_01A_11A_top10k_coords.rds"
+outpdf  <- "./results/methylation/tSNE_methylation/tSNE_methylation_01A_11A_top10k.pdf"
+out_tsv <- "./results/methylation/tSNE_methylation/tSNE_methylation_01A_11A_top10k_coords.tsv"
+out_rds <- "./results/methylation/tSNE_methylation/tSNE_methylation_01A_11A_top10k_coords.rds"
 
 # ------------------ Parameters ------------------
 n_pcs         <- 30
@@ -390,9 +390,9 @@ infile      <- "./methylation/filtered_methylation_files_tumor01A_1.txt"
 top10k_file <- "./methylation/top10000_variable_CpGs_pan_cancer.txt"
 pan_mat_rds <- "./methylation/TCGA-all_cancer_pan_cancer_matrix.RData"
 
-outpdf <- "./results/summarys/tSNE_methylation_01A_epithelialColors_top10k.pdf"
-out_tsv <- "./results/summarys/tSNE_methylation_01A_epithelialCoords_top10k.tsv"
-out_rds <- "./results/summarys/tSNE_methylation_01A_epithelialCoords_top10k.rds"
+outpdf <- "./results/methylation/tSNE_methylation_01A_epithelialColors_top10k.pdf"
+out_tsv <- "./results/methylation/tSNE_methylation_01A_epithelialCoords_top10k.tsv"
+out_rds <- "./results/methylation/tSNE_methylation_01A_epithelialCoords_top10k.rds"
 
 # ------------------ Parameters ------------------
 n_pcs         <- 30

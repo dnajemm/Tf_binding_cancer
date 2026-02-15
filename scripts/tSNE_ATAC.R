@@ -21,8 +21,8 @@ library(Polychrome)
 peaks_dir <- "./peaks/filtered_peaks/"
 file_pattern <- "^ATAC_TCGA-[A-Z]+_.*_peaks_macs\\.bed$"
 
-out_pdf <- "./results/summarys/tSNE_ATAC_ALLCANCERS_peakPresence.pdf"
-out_tsv <- "./results/summarys/tSNE_ATAC_ALLCANCERS_coords.tsv"
+out_pdf <- "./results/peaks/tSNE_ATAC_ALLCANCERS_peakPresence.pdf"
+out_tsv <- "./results/peaks/tSNE_ATAC_ALLCANCERS_coords.tsv"
 
 top_k_peaks <- 3000
 n_pcs <- 30
@@ -181,8 +181,8 @@ suppressPackageStartupMessages({
 })
 
 # ------------------ inputs / outputs ------------------
-in_tsv  <- "./results/summarys/tSNE_ATAC_ALLCANCERS_coords.tsv"
-out_pdf <- "./results/summarys/tSNE_ATAC_3views.pdf"
+in_tsv  <- "./results/peaks/tSNE_ATAC_ALLCANCERS_coords.tsv"
+out_pdf <- "./results/peaks/tSNE_ATAC_3views.pdf"
 
 # ------------------ load tSNE coords ------------------
 dt <- fread(in_tsv)

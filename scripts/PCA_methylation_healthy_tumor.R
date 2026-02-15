@@ -76,7 +76,7 @@ process_one_cancer <- function(cancer_keep) {
   cat("\n=============================\n")
   cat("Cancer:", cancer_keep, "\n")
 
-  out_dir <- file.path("./results/PCA_methylation_one_cancer",
+  out_dir <- file.path("./results/methylation/PCA_methylation_one_cancer",
                        paste0("TCGA_", cancer_keep))
   out_pdf <- file.path(out_dir,
                        paste0("PCA_HM450_", cancer_keep, "_01A_vs_11A.pdf"))
@@ -179,7 +179,7 @@ library(ggplot2)
 meth_dir <- "./methylation/filtered_methylation"
 top_cpgs_file <- file.path("./methylation/top10000_variable_CpGs_pan_cancer.txt")
   
-out_dir <- "./results/PCA_methylation_pan_cancer"
+out_dir <- "./results/methylation/PCA_methylation_pan_cancer"
 out_pdf <- file.path(out_dir, "PCA_HM450_pan_cancer_01A_vs_11A_faceted.pdf")
 out_tsv <- file.path(out_dir, "PCA_HM450_pan_cancer_01A_vs_11A_faceted.tsv")
 
