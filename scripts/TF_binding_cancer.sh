@@ -6080,6 +6080,29 @@ bedtools intersect -u \
 
 
 # -------------------------
+# Motifs that contain SNVs snvidxmotif output
+# -------------------------
+# NRF1 
+bedtools intersect -wa -wb \
+  -a <(zcat ./motifs/NRF1_mm0to2.bed.gz) \
+  -b ./snv/all_unique_variants_across_cancers.bed \
+  > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_SNVs_in_motifs_SNVidxmotif.bed
+bedtools intersect -wa -wb\
+  -a <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) \
+  -b ./snv/all_unique_variants_across_cancers.bed \
+  > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif.bed
+# BANP
+bedtools intersect -wa -wb \
+  -a <(zcat ./motifs/BANP_mm0to2.bed.gz) \
+  -b ./snv/all_unique_variants_across_cancers.bed \
+  > ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_SNVs_in_motifs_SNVidxmotif.bed
+
+bedtools intersect -wa -wb \
+  -a <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) \
+  -b ./snv/all_unique_variants_across_cancers.bed \
+  > ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif.bed
+
+# -------------------------
 # 3) SNVs in motifs-in-peaks (SNV output)
 # -------------------------
 # NRF1 
@@ -6615,6 +6638,96 @@ plot_pair(
 )
 '
 echo "[DONE] Heatmaps written to ${results_dir}"
+
+###############################################################################
+# Number of SNVs in NRF1 and BANP motifs across all cancer types 
+###############################################################################
+#!/usr/bin/env bash
+set -euo pipefail
+
+IN_DIR="./snv/overlaps/snv_in_motifs2mm"
+OUT="./results/snv/SNV_counts_in_motifs_NRF1_BANP_mm0to2_noCGmm.tsv"
+mkdir -p "$(dirname "$OUT")"
+
+NRF1_BED="$IN_DIR/NRF1_mm0to2_noCGmm_SNVs_in_motifs.bed"
+BANP_BED="$IN_DIR/BANP_mm0to2_noCGmm_SNVs_in_motifs.bed"
+
+n_nrf1=$(wc -l < "$NRF1_BED" | tr -d " ")
+n_banp=$(wc -l < "$BANP_BED" | tr -d " ")
+
+echo -e "NRF1_mm0to2_noCGmm\tBANP_mm0to2_noCGmm" > "$OUoT"
+echo -e "${n_nrf1}\t${n_banp}" >> "$OUT"
+
+echo "[DONE] Wrote $OUT"
+
+# barplot snv counts in NRF1 and BANP motifs across all cancer types
+Rscript -e '
+library(ggplot2)
+# Read counts
+data <- read.table("./results/snv/SNV_counts_in_motifs_NRF1_BANP_mm0to2_noCGmm.tsv", header=TRUE, stringsAsFactors=FALSE)
+# Transform to long format
+df_long <- data.frame(
+  Motif = c("NRF1_mm0to2_noCGmm", "BANP_mm0to2_noCGmm"),
+  SNV_Count = c(data$NRF1_mm0to2_noCGmm, data$BANP_mm0to2_noCGmm)
+)
+# Plot
+p <- ggplot(df_long, aes(x=Motif, y=SNV_Count, fill=Motif)) +
+  geom_bar(stat="identity", width=0.6) +
+  theme_minimal() +
+  labs(title="Number of SNVs in NRF1 and BANP motifs (mm0to2_noCGmm)", y="Number of SNVs", x="Motif") +
+  theme(plot.title = element_text(hjust=0.5, size=12), axis.text=element_text(size=10), axis.title=element_text(size=11), legend.position="none")
+print(p)
+ggsave("./results/snv/SNV_counts_in_motifs_NRF1_BANP_mm0to2_noCGmm_barplot.pdf", plot=p, width=8, height=6, dpi=300, bg="white")
+' 
+cat ./results/snv/SNV_counts_in_motifs_NRF1_BANP_mm0to2_noCGmm.tsv
+# NRF1_mm0to2_noCGmm      BANP_mm0to2_noCGmm
+# 62436   20329
+
+
+###############################################################################
+# Number of SNVs in NRF1 and BANP motifs and in peaks across all cancer types 
+###############################################################################
+#!/usr/bin/env bash
+set -euo pipefail
+
+IN_DIR="./snv/overlaps/snv_in_motifs_in_peaks2mm"
+OUT="./results/snv/SNV_counts_in_motifsnpeaks_NRF1_BANP_mm0to2_noCGmm.tsv"
+mkdir -p "$(dirname "$OUT")"
+
+NRF1_BED="$IN_DIR/NRF1_mm0to2_noCGmm_SNVs_in_motifs_in_peaks.bed"
+BANP_BED="$IN_DIR/BANP_mm0to2_noCGmm_SNVs_in_motifs_in_peaks.bed"
+
+n_nrf1=$(wc -l < "$NRF1_BED" | tr -d " ")
+n_banp=$(wc -l < "$BANP_BED" | tr -d " ")
+
+echo -e "NRF1_mm0to2_noCGmm\tBANP_mm0to2_noCGmm" > "$OUT"
+echo -e "${n_nrf1}\t${n_banp}" >> "$OUT"
+
+echo "[DONE] Wrote $OUT"
+
+# barplot snv counts in NRF1 and BANP motifs across all cancer types
+Rscript -e '
+library(ggplot2)
+# Read counts
+data <- read.table("./results/snv/SNV_counts_in_motifsnpeaks_NRF1_BANP_mm0to2_noCGmm.tsv", header=TRUE, stringsAsFactors=FALSE)
+# Transform to long format
+df_long <- data.frame(
+  Motif = c("NRF1_mm0to2_noCGmm", "BANP_mm0to2_noCGmm"),
+  SNV_Count = c(data$NRF1_mm0to2_noCGmm, data$BANP_mm0to2_noCGmm)
+)
+# Plot
+p <- ggplot(df_long, aes(x=Motif, y=SNV_Count, fill=Motif)) +
+  geom_bar(stat="identity", width=0.6) +
+  theme_minimal() +
+  labs(title="Number of SNVs in NRF1 and BANP motifs and peaks (mm0to2_noCGmm)", y="Number of SNVs", x="Motifnpeaks") +
+  theme(plot.title = element_text(hjust=0.5, size=12), axis.text=element_text(size=10), axis.title=element_text(size=11), legend.position="none")
+print(p)
+ggsave("./results/snv/SNV_counts_in_motifsnpeaks_NRF1_BANP_mm0to2_noCGmm_barplot.pdf", plot=p, width=8, height=6, dpi=300, bg="white")
+' 
+cat ./results/snv/SNV_counts_in_motifsnpeaks_NRF1_BANP_mm0to2_noCGmm.tsv
+# NRF1_mm0to2_noCGmm      BANP_mm0to2_noCGmm
+# 34843   8787
+
 
 
 #!!! DONE SNV NOT FOUND !!
@@ -7332,6 +7445,74 @@ for files in ./expression/RNA_TCGA-*-*.augmented_star_gene_counts.tsv; do
   grep -w 'BANP' "$files"  >> "$out"
 done
 
+
+#############################################################################################################################################################################################################################################################
+# NRF1 and BANP are ubiquitously expressed across TCGA cancer types (definition: median TPM > 1, all sample types included) --> create a badge for each gene with the percentage of cancer types in which it is expressed, and a subtitle with the number of cancer types in which it is expressed out of the total number of cancer types. 
+#############################################################################################################################################################################################################################################################
+# This is for the presentation to show that these factors are ubiquitously expressed across all samples.
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+expr <- fread("./expression/gene_expression_matrix_protein_coding.tsv.gz")
+setnames(expr, 1, "sample")
+
+genes <- c("NRF1","BANP")
+THR_TPM <- 1
+
+dt <- expr[, c("sample", genes), with=FALSE]
+long <- melt(dt, id.vars="sample", variable.name="gene", value.name="TPM")
+long[, TPM := as.numeric(TPM)]
+
+# cancer type (ACC, BLCA, ...)
+long[, cancer := tstrsplit(sample, "-", fixed=TRUE)[[2]]]
+
+# expressed per cancer if median TPM > threshold
+med <- long[, .(median_TPM = median(TPM, na.rm=TRUE)), by=.(cancer, gene)]
+med[, expressed := median_TPM > THR_TPM]
+
+# summarize per gene
+sumdt <- med[, .(
+  n_cancers = .N,
+  n_expr    = sum(expressed, na.rm=TRUE),
+  pct       = round(100 * mean(expressed, na.rm=TRUE))
+), by=gene]
+
+sumdt[, subtitle := sprintf("Expressed in %d / %d cancer types", n_expr, n_cancers)]
+sumdt[, big := paste0(pct, "%")]
+sumdt[, gene := factor(gene, levels=genes)]
+
+# small helper to place two tiles nicely
+sumdt[, x := as.integer(gene)]
+sumdt[, y := 1]
+
+p <- ggplot(sumdt, aes(x=x, y=y)) +
+  # colorful cards
+  geom_tile(aes(fill=gene), width=0.9, height=0.55, color="white", linewidth=1.2) +
+  # big TF name
+  geom_text(aes(label=as.character(gene)), y=1.12, fontface="bold", size=10, color="white") +
+  # huge percent
+  geom_text(aes(label=big), y=1.00, fontface="bold", size=14, color="white") +
+  # subtitle
+  geom_text(aes(label=subtitle), y=0.86, size=4.2, color="white") +
+  # global headline
+  annotate("text", x=1.5, y=1.55,
+           label="Ubiquitously expressed across TCGA cancer types",
+           fontface="bold", size=6) +
+  annotate("text", x=1.5, y=1.40,
+           label=paste0("Definition: median TPM > ", THR_TPM, " (all sample types included)"),
+           size=4) +
+  scale_fill_manual(values=c("NRF1"="#7B2FF7", "BANP"="#FFB000")) +
+  coord_cartesian(xlim=c(0.5, 2.5), ylim=c(0.6, 1.7), expand=FALSE) +
+  theme_void() +
+  theme(legend.position="none")
+
+dir.create("./results/expression", recursive=TRUE, showWarnings=FALSE)
+ggsave("./results/expression/NRF1_BANP_ubiquity_badges_slide.pdf",
+       p, width=9, height=3.2, device=cairo_pdf)
+
+cat("WROTE -> ./results/expression/NRF1_BANP_ubiquity_badges_slide.pdf\n")
+'
 ##################################################################################################################################################
 # plot  the expression of NRF1 and BANP in the different samples, grouped by cancer type one page for healthy and one for tumor samples (boxplot)
 ##################################################################################################################################################
@@ -7431,9 +7612,9 @@ dev.off()
 cat("[DONE] Wrote ", out, "\n", sep="")
 '
 
-##################################################################################################
-# Boxplot the distribution of gene expression of NRF1 and BANP between healthy and tumor samples -per pairs
-##################################################################################################
+####################################################################################################################################################################################################
+# Build a list of the expression of NRF1 and BANP in all samples and then filter to keep only the samples for which we have both tumor and healthy samples
+####################################################################################################################################################################################################
 # 1) Build one tsv with all samples expression of NRF1 and BANP with columns : samples cancer gene tpm_unstranded
 echo -e 'samples\tcancer\tsample_type\tgene\ttpm_unstranded' > ./expression/all_samples_NRF1_BANP_expression.tsv
 OUT="./expression/all_samples_NRF1_BANP_expression.tsv"
@@ -7470,89 +7651,70 @@ END{
   }
 }' | sort >> "$OUT"
 
-# 3) Plot the distribution of TPM values for NRF1 and BANP in tumor vs healthy samples (boxplot)
-Rscript -e '
-library(data.table)
-library(ggplot2)
-IN  <- "./expression/patients_with_both_tumor_and_healthy_samples_with_tpm.tsv"
-OUT <- "./results/expression/boxplot_distribution_NRF1_BANP_tumor_vs_healthy_per_cancer_wilcox.pdf"
-df <- fread(IN)
+# Samples with NRF1 and BANP expression < 1 :
+cat ./expression/all_samples_NRF1_BANP_expression.tsv | awk '$5<1 {print $0}' > ./expression/samples_with_verylow_expression.tsv
+cat ./expression/samples_with_verylow_expression.tsv | wc -l 
+# 46
 
-# Long format
-d <- rbind(
-  df[, .(case_id, cancer, gene, group="tumor",   tpm=as.numeric(tumor_tpm))],
-  df[, .(case_id, cancer, gene, group="healthy", tpm=as.numeric(normal_tpm))])
+# number of each cancer type in those samples:
+cat ./expression/samples_with_verylow_expression.tsv | awk '{print $2}' | uniq -c
 
-d[, group := factor(group, levels=c("healthy","tumor"))]
-d[, expr := log2(tpm + 1)]
+# 9 ACC <-- there a 2 for the same sample so there is 8 samples to remove here (1 for NRF1 and 1 for BANP)
+# 1 BRCA
+# 1 CESC
+# 1 COAD
+# 1 HNSC
+# 3 KICH
+# 8 KIRC
+# 4 KIRP
+# 5 LIHC
+# 1 PAAD
+# 3 PCPG
+# 2 STAD
+# 4 THCA
+# 1 UCEC
+# 2 UVM
 
-# Paired table
-tum <- d[group=="tumor",   .(case_id, cancer, gene, tumor=expr)]
-hea <- d[group=="healthy", .(case_id, cancer, gene, healthy=expr)]
-pair <- merge(tum, hea, by=c("case_id","cancer","gene"))
+# number of samples in total:
+cat ./expression/all_samples_NRF1_BANP_expression.tsv| awk '{print $2}' | uniq -c
 
-# Wilcoxon paired p-values per (cancer, gene)
-pvals <- pair[, .(p = wilcox.test(tumor, healthy, paired=TRUE)$p.value), by=.(cancer, gene)]
+#158 ACC
+#    862 BLCA
+#   2462 BRCA
+#    618 CESC
+#    88 CHOL
+#   1048 COAD
+#    96 DLBC
+#    396 ESCA
+#    782 GBM
+#   1132 HNSC
+#    182 KICH
+#   1228 KIRC
+#    646 KIRP
+#    302 LAML
+#   1068 LGG
+#    848 LIHC
+#   1202 LUAD
+#   1124 LUSC
+#    174 MESO
+#    868 OV
+#    366 PAAD
+#    374 PCPG
+#   1108 PRAD
+#    354 READ
+#    530 SARC
+#    946 SKCM
+#   896 STAD
+#   312 TGCT
+#  1144 THCA
+#   244 THYM
+#  1178 UCEC
+#   114 UCS
+#   160 UVM
 
-# p-value -> stars (blank if not significant)
-p_to_stars <- function(p){
-  if (is.na(p)) return("NA")
-  if (p < 1e-4) return("****")
-  if (p < 1e-3) return("***")
-  if (p < 1e-2) return("**")
-  if (p < 5e-2) return("*")
-  return("")}
-pvals[, stars := vapply(p, p_to_stars, character(1))]
-
-# Plotting data restricted to paired set only
-dplot <- merge(d, pair[, .(case_id, cancer, gene)], by=c("case_id","cancer","gene"))
-
-# Add n per cancer (paired cases) and facet label
-n_df <- pair[, .(n=.N), by=.(cancer, gene)]
-dplot <- merge(dplot, n_df, by=c("cancer","gene"))
-dplot[, cancer_lab := paste0(cancer, " (n=", n, ")")]
-
-# Annotation positions (top of each facet) + SAME facet label column
-ymax <- dplot[, .(y=max(expr, na.rm=TRUE)), by=.(cancer, gene, cancer_lab)]
-ann  <- merge(pvals, ymax, by=c("cancer","gene"))
-ann  <- merge(ann, n_df, by=c("cancer","gene"))
-ann[, cancer_lab := paste0(cancer, " (n=", n, ")")]
-ann[, `:=`(x=1.5, y=y+0.15)]
-
-# Colors
-fill_cols <- c(healthy="#4C78A8", tumor="#E45756")
-pdf(OUT, width=14, height=8)
-
-for (g in sort(unique(dplot$gene))) {
-  p <- ggplot(dplot[gene==g], aes(x=group, y=expr, fill=group)) +
-    geom_violin(trim=FALSE, alpha=0.35, color=NA) +
-    geom_boxplot(width=0.22, outlier.shape=NA, alpha=0.85) +
-    geom_jitter(width=0.12, size=0.9, alpha=0.45) +
-    facet_wrap(~cancer_lab, scales="free_y") +
-    geom_text(data=ann[gene==g], aes(x=x, y=y, label=stars), inherit.aes=FALSE, size=4) +
-    scale_fill_manual(values=fill_cols) +
-    theme_classic(base_size=13) +
-    theme(
-      legend.position="top",
-      strip.background = element_rect(fill="grey95", color=NA),
-      strip.text = element_text(face="bold")
-    ) +
-    labs(
-      title = paste0(g, ": Tumor vs Healthy per cancer type (paired Wilcoxon)"),
-      subtitle = "Each facet is a cancer type. Each dot is one patient (paired tumor and normal). Boxes show median and IQR; violins show distribution.",
-      x = NULL,
-      y = "log2(TPM + 1) expression",
-      fill = "Sample type",
-      caption = "Stars indicate paired Wilcoxon significance (* p<0.05, ** p<0.01, *** p<0.001, **** p<1e-4)."
-    )
-  print(p)
-}
-dev.off()
-'
-
-#!!IM HERE!!
 ##################################################################################################################################################
-# PCA of the expression of top 10000 variable genes across all samples, to see if they cluster by cancer type or by healthy vs tumor status
+# PCA of the expression of genes across all samples, to see if they cluster by cancer type or by healthy vs tumor status
+# it removes genes that are completely flat (variance = 0) across all samples, PCA = 50, seed 1 , perp uses a dynamic calculation min 30.
 ##################################################################################################################################################
 # create a file with the color order for the cancers (to use the same colors as before in the PCA plot)
 Rscript -e '
@@ -7576,8 +7738,46 @@ fwrite(dt, out_col, sep="\t", col.names=FALSE)
 
 cat("[DONE] Wrote ", out_col, " with ", nrow(dt), " cancers\n", sep="")
 '
-#!!LAUNCHED!!
-#!!LAUNCHED!!
+# create matrix of TPM values for protein_coding genes across all samples (genes on rows, samples on columns)
+Rscript -e '
+library(data.table)
+TPM_COL <- 7
+files <- list.files("./expression/",pattern="augmented_star_gene_counts_filtered.tsv$",full.names=TRUE)
+cat("[STEP] Reading first file to define protein_coding gene set...\n")
+dt0 <- fread(files[1], header=FALSE, showProgress=FALSE)
+# V2 = gene_name, V3 = gene_type
+pc_idx <- which(dt0$V3 == "protein_coding")
+genes  <- dt0$V2[pc_idx]
+G <- length(genes)
+S <- length(files)
+cat("[INFO] Protein_coding genes:", G, " | Samples:", S, "\n")
+cat("[STEP] Allocating genes x samples matrix...\n")
+m <- matrix(NA_real_, nrow=G, ncol=S)
+rownames(m) <- genes
+cat("[STEP] Filling matrix with TPM column ", TPM_COL, "...\n", sep="")
+for (i in seq_along(files)) {
+  if (i %% 50 == 0) cat("[READ]", i, "/", S, "\n")
+  dt <- fread(files[i], header=FALSE, showProgress=FALSE)
+  # safety: ensure row counts match reference
+  if (nrow(dt) != nrow(dt0)) {
+    cat("[SKIP] Row mismatch:", basename(files[i]), "\n")
+    next
+  }
+  m[, i] <- suppressWarnings(as.numeric(dt[[TPM_COL]][pc_idx]))
+}
+cat("[STEP] Converting to samples x genes matrix...\n")
+X <- t(m)  # samples x genes
+colnames(X) <- genes
+sample_ids <- sub("^RNA_", "",sub("[.]augmented_star_gene_counts_filtered[.]tsv$","", basename(files)))
+rownames(X) <- sample_ids
+cat("[INFO] Final matrix dims (samples x genes):", nrow(X), "x", ncol(X), "\n")
+cat("[STEP] Saving to gene_expression_matrix_protein_coding.tsv.gz ...\n")
+gene_expression_matrix <- X
+fwrite(as.data.table(gene_expression_matrix, keep.rownames="sample"),file="./expression/gene_expression_matrix_protein_coding.tsv.gz",sep="\t")
+cat("[DONE] Saved ./expression/gene_expression_matrix_protein_coding.tsv.gz\n")
+'
+
+# plot tSNE of the samples using the matrix of TPM values for protein_coding genes, colored by cancer type (using the same colors as before) as input.
 Rscript -e '
 library(data.table)
 library(ggplot2)
@@ -7588,11 +7788,10 @@ if (!requireNamespace("Rtsne", quietly=TRUE)) stop("Install Rtsne: install.packa
 if (!requireNamespace("plotly", quietly=TRUE)) stop("Install plotly: install.packages(\"plotly\")")
 if (!requireNamespace("htmlwidgets", quietly=TRUE)) stop("Install htmlwidgets: install.packages(\"htmlwidgets\")")
 
-TPM_COL <- 7  # <-- set to the column index of tpm_unstranded in your filtered files
-
+# ===== INPUT MATRIX (samples x genes) =====
+mat_file <- "./expression/gene_expression_matrix_protein_coding.tsv.gz"
 col_file <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
-out_html <- "./results/expression/TSNE_TPM_protein_coding_ALL_rawTPM_interactive.html"
-
+out_html <- "./results/expression/TSNE_from_matrix_TPM_interactive.html"
 cat("[INFO] Loading cancer colors from:", col_file, "\n")
 col_dt <- fread(col_file, header=FALSE)
 if (ncol(col_dt) < 2) stop("color file must have >=2 columns")
@@ -7600,59 +7799,13 @@ col_dt <- col_dt[, 1:2]
 setnames(col_dt, c("cancer","color"))
 cancer_levels <- as.character(col_dt$cancer)
 cancer_cols   <- setNames(as.character(col_dt$color), as.character(col_dt$cancer))
-
-cat("[INFO] Listing filtered expression files...\n")
-files <- list.files("./expression/expression_files",pattern="[.]augmented_star_gene_counts_filtered[.]tsv$",full.names=TRUE)
-cat("[INFO] Found", length(files), "files\n")
-
-cat("[INFO] Reading first file (schema reference):\n  ", files[1], "\n", sep="")
-dt0 <- fread(files[1], header=FALSE, showProgress=FALSE)
-cat("[INFO] Columns detected:", ncol(dt0), " | Rows:", nrow(dt0), "\n")
-cat("[INFO] Assuming: V2=gene_name, V3=gene_type, TPM_COL=", TPM_COL, "\n", sep="")
-
-pc_idx <- which(dt0$V3 == "protein_coding")
-g0 <- dt0$V2[pc_idx]
-G <- length(g0)
-S <- length(files)
-cat("[INFO] Protein_coding genes:", G, " | Samples(files):", S, "\n")
-
-cat("[INFO] Allocating matrix...\n")
-m <- matrix(0, nrow=G, ncol=S)
-rownames(m) <- g0
-
-skipped <- 0L
-used    <- 0L
-
-cat("[INFO] Reading TPM column across files...\n")
-for (i in seq_along(files)) {
-  if (i %% 25 == 0) cat("[READ]", i, "/", S, "\n")
-  dt <- fread(files[i], header=FALSE, showProgress=FALSE)
-
-  if (nrow(dt) != nrow(dt0)) {
-    cat("[SKIP] Row mismatch:", basename(files[i]), " rows=", nrow(dt), " ref=", nrow(dt0), "\n", sep="")
-    skipped <- skipped + 1L
-    next
-  }
-
-  x <- suppressWarnings(as.numeric(dt[[TPM_COL]][pc_idx]))
-  if (length(x) != G) {
-    cat("[SKIP] protein_coding length mismatch:", basename(files[i]), " len=", length(x), " ref=", G, "\n", sep="")
-    skipped <- skipped + 1L
-    next
-  }
-
-  m[, i] <- x
-  used <- used + 1L
-}
-
-cat("[INFO] Done reading. Used:", used, " | Skipped:", skipped, "\n")
-
-cat("[INFO] Setting sample names...\n")
-sids <- sub("^RNA_", "", sub("[.]augmented_star_gene_counts_filtered[.]tsv$", "", basename(files)))
-colnames(m) <- sids
-
-m[is.na(m)] <- 0
-xs <- t(m)
+cat("[INFO] Reading matrix:", mat_file, "\n")
+dtm <- fread(mat_file)          # expects first col named "sample" (as you saved it)
+samples <- as.character(dtm$sample)
+dtm[, sample := NULL]
+xs <- as.matrix(dtm)
+mode(xs) <- "numeric"
+rownames(xs) <- samples
 cat("[INFO] Matrix dims:", nrow(xs), "samples x", ncol(xs), "genes\n")
 
 cat("[INFO] Removing zero-variance genes...\n")
@@ -7680,22 +7833,22 @@ df$cancer <- vapply(tok, function(v) paste0("TCGA-", v[2]), character(1))
 
 last_tok <- vapply(tok, function(v) v[length(v)], character(1))
 code2 <- substr(last_tok, 1, 2)
-df$type <- ifelse(substr(code2,1,1)=="0","Tumor",ifelse(substr(code2,1,1)=="1","Normal","Other"))
+df$type <- ifelse(substr(code2,1,1)=="0","Tumor",
+           ifelse(substr(code2,1,1)=="1","Normal","Other"))
 df$type <- factor(df$type, levels=c("Tumor","Normal","Other"))
 df$cancer <- factor(df$cancer, levels=cancer_levels)
 
-# IMPORTANT: do NOT name this column "text" (collides with text() function)
 df$hover <- paste0("Sample: ", df$sample,
                    "<br>Cancer: ", as.character(df$cancer),
                    "<br>Type: ", as.character(df$type))
 
 p <- ggplot(df, aes(TSNE1, TSNE2, color=cancer, shape=type)) +
   geom_point(aes(tooltip = hover), size=2, alpha=0.85) +
-  scale_shape_manual(values=c(Tumor=16, Normal=17, Other=4)) +
+  scale_shape_manual(values=c(Tumor=16, Normal=17, Other=4), drop=FALSE) +
   scale_color_manual(values=cancer_cols, breaks=cancer_levels, drop=FALSE, na.value="grey70") +
   theme_bw() +
   labs(
-    title="Interactive t-SNE — protein_coding (no header files)",
+    title="Interactive t-SNE — from expression matrix",
     subtitle=paste0("Genes used=", ncol(xs), " | Samples=", nrow(df),
                     " | PCA dims=50 | perplexity=", perp),
     color="Cancer", shape="Type"
@@ -7708,3 +7861,1237 @@ htmlwidgets::saveWidget(g, out_html, selfcontained=TRUE)
 
 cat("[DONE] Wrote ", out_html, "\n", sep="")
 '
+# add this above if i want the log2(TPM+1) transform for the tSNE  before this cat("[INFO] Removing zero-variance genes...\n")
+# cat("[INFO] log2(TPM+1) transform...\n")
+# xs <- log2(xs + 1)
+
+
+####################################################################################################
+# Plot the correlation between the expression of each gene and the changes in methylation of each cpg probe
+#####################################################################################################
+# 1) Create table cpgxgene : TF probe gene motif_instance_id(chr:start:end:strand) --> ./methylation/probe_gene_pairs_in_motifs.tsv
+# This code links each CpG probe that overlaps a TF motif instance (from the overlap files) to the gene assigned to that motif instance (from the closest_genes.bed files). It produces a table of (TF, probe, gene, motif_instance_id) for all probes in motifs and their assigned genes.
+# columns in the output file in the header:
+# TF      probe   gene    motif_instance_id(chr:start:end:strand)
+Rscript -e '
+library(data.table)
+TF_LIST <- c("BANP_mm0to2_noCGmm","NRF1_mm0to2_noCGmm")
+overlap_dir <- "./motifs/overlaps/intersected_motifs2mm_HM450"
+gene_dir    <- "./motifs"
+out_file    <- "./methylation/probe_gene_pairs_in_motifs.tsv"
+dir.create(dirname(out_file), recursive=TRUE, showWarnings=FALSE)
+
+# ---- motif_instance -> gene from closest_genes.bed
+gene_lookup <- rbindlist(lapply(TF_LIST, function(tf){
+  f <- file.path(gene_dir, paste0(tf, "_closest_genes.bed"))
+  if (!file.exists(f)) stop("Missing: ", f)
+  g <- fread(f, header=FALSE, select=c(1,2,3,6,10))
+  setnames(g, c("V1","V2","V3","V6","V10"), c("chr","s","e","st","gene"))
+  g[, motif_instance_id := paste(chr, as.integer(s), as.integer(e), st, sep=":")]
+  unique(g[, .(TF=tf, motif_instance_id, gene)])
+}), fill=TRUE)
+
+pg_list <- list()
+k <- 0L
+
+for (tf in TF_LIST) {
+  f <- file.path(overlap_dir, paste0(tf, "_probeXmotif.tsv"))
+  if (!file.exists(f)) {
+    cat("[SKIP] missing overlap:", f, "\n")
+    next
+  }
+
+  # overlap file has no header; columns:
+  # 1-3 probe chr/start/end, 4 probeID
+  # 5-7 motif chr/start/end, 8 motif sequence, 9 pval, 10 strand
+  x <- fread(f, header=FALSE)
+  if (ncol(x) < 10) stop("Unexpected columns in: ", f, " (ncol=", ncol(x), ")")
+
+  dt <- x[, .(
+    TF = tf,
+    probe = as.character(V4),
+    motif_instance_id = paste(as.character(V5), as.integer(V6), as.integer(V7), as.character(V10), sep=":")
+  )]
+  dt <- unique(dt)
+  dt <- merge(dt, gene_lookup[TF==tf], by=c("TF","motif_instance_id"), all.x=TRUE)
+
+  # keep only rows with a gene assigned
+  dt <- dt[!is.na(gene) & gene != ""]
+  if (nrow(dt) == 0) {
+    cat("[WARN] no probe-gene pairs after join for", tf, "\n")
+    next
+  }
+
+  k <- k + 1L
+  pg_list[[k]] <- unique(dt[, .(TF, probe, gene, motif_instance_id)])
+  cat("[OK]", tf, "pairs:", nrow(pg_list[[k]]), "\n")
+}
+
+pg <- rbindlist(pg_list, fill=TRUE)
+if (nrow(pg) == 0) stop("No probe-gene pairs produced.")
+
+# Save
+fwrite(pg, out_file, sep="\t")
+cat("WROTE -> ", out_file, " (rows=", nrow(pg), ", unique probes=", uniqueN(pg$probe), ")\n", sep="")
+'
+# number of pairs gene probe:
+# BANP_mm0to2_noCGmm pairs: 1053 
+# NRF1_mm0to2_noCGmm pairs: 3875
+
+# number of gene with multiple probes in them:
+cat ./methylation/probe_gene_pairs_in_motifs.tsv | grep BANP_mm0to2_noCGmm | awk '{print $3}' | uniq -c | sort -k1,1nr | awk '$1>1 {print $0}' | wc -l
+# 169 genes for BANP that have multiple probes in them 
+cat ./methylation/probe_gene_pairs_in_motifs.tsv | grep NRF1_mm0to2_noCGmm | awk '{print $3}' | uniq -c | sort -k1,1nr | awk '$1>1 {print $0}' | wc -l
+# 801 genes for NRF1 that have multiple probes in them 
+
+# create a tsv of the samples with 3d+4d and no OV:
+cat ./results/multi_omics/sample_data_summary.tsv | awk '$3==1 && $4==1 && $5==1 && ($6==0 ||$6==1) {print $0}' > ./results/multi_omics/samples_3d+4d.tsv
+
+# barplot the number of samples witht 3d+4d per cancer type:
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+dt <- fread("./results/multi_omics/samples_3d+4d.tsv", header=FALSE)
+setnames(dt, c("sample","cancer","SNV","METH","RNA","ATAC"))
+
+counts <- dt[, .N, by=cancer]
+total_samples <- nrow(dt)
+
+ggplot(counts, aes(x=reorder(cancer, N), y=N)) +
+  geom_bar(stat="identity") +
+  geom_text(aes(label=N), hjust=-0.15, size=3) +  
+  coord_flip() +
+  labs(
+    x="Cancer type",
+    y="Number of samples",
+    title="Samples per Cancer Type",
+    subtitle=paste0("Multi-omics cohort (n = ", total_samples, ")")
+  ) +
+  expand_limits(y = max(counts$N) * 1.08) +       
+  theme_minimal()
+# Save plot
+ggsave("./results/multi_omics/samples_3+4datasets_barplot.pdf", width = 5, height = 5, dpi = 300, bg = "white")
+'
+
+
+#!!IM HERE!!
+# 2) create spearman correlation plot between delta_beta and delta_expr for the probe-gene pairs
+# a) create a matrix of the 3d+4d samples with no OV cancer type:
+f="./results/multi_omics/samples_3d+4d.tsv"
+
+zcat ./expression/gene_expression_matrix_protein_coding.tsv.gz | \
+awk '
+  NR==FNR {
+    # cohort file: keep patient IDs except OV
+    if ($2 != "OV") keep[$1]=1
+    next
+  }
+  FNR==1 { print; next }  # keep header
+
+  {
+    if (FNR % 500 == 0)
+      printf("[awk] processed %d expression rows | kept %d\n", FNR, kept) > "/dev/stderr"
+
+    # extract patient barcode from expression sample id (no {n} intervals)
+    if (match($1, /TCGA-[A-Z0-9][A-Z0-9]-[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/)) {
+      pat = substr($1, RSTART, RLENGTH)
+      if (pat in keep) { print; kept++ }
+    }
+  }
+  END {
+    printf("[awk] DONE | kept %d rows (plus header)\n", kept) > "/dev/stderr"
+  }
+' "$f" - \
+> ./expression/gene_expression_matrix_3d4d_noOV.tsv
+echo "Done! Saved: ./expression/gene_expression_matrix_3d4d_noOV.tsv"
+
+# b) create pearson correlation file:
+Rscript -e '
+library(data.table)
+
+# =========================
+# Inputs
+# =========================
+pg  <- fread("./methylation/probe_gene_pairs_in_motifs.tsv")              # needs columns: probe, gene, TF
+ex  <- fread("./expression/gene_expression_matrix_3d4d_noOV.tsv")         # filtered expression matrix
+coh <- fread("./results/multi_omics/samples_3d+4d.tsv", header=FALSE)
+setnames(coh, c("patient","cancer","c1","c2","c3","c4"))
+coh <- coh[cancer!="OV", .(patient, cancer)]
+setkey(coh, patient)
+
+# =========================
+# Expression: build key like TCGA-OR-A5J1-01A_1
+# =========================
+setnames(ex, 1, "sample")
+rx_ex <- regexpr("TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-(01A|11A)_[0-9]+", ex$sample, perl=TRUE)
+ex[, key := ifelse(rx_ex > 0, regmatches(sample, rx_ex), NA_character_)]
+ex <- ex[!is.na(key)]
+setkey(ex, key)
+
+# Keep only genes present in expression matrix
+pg <- pg[gene %in% names(ex)]
+if (nrow(pg) == 0) stop("pg empty after filtering genes to expression matrix columns")
+
+# =========================
+# Methylation files: build same key from filename
+# =========================
+fls <- list.files("./methylation/filtered_methylation", pattern="bed.gz$", full.names=TRUE)
+bn  <- basename(fls)
+
+rx_m <- regexpr("TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-(01A|11A)_[0-9]+", bn, perl=TRUE)
+key_m <- ifelse(rx_m > 0, regmatches(bn, rx_m), NA_character_)
+
+keep <- !is.na(key_m) & key_m %in% ex$key
+fls  <- fls[keep]
+key_m <- key_m[keep]
+if (length(fls) == 0) stop("No methylation files match expression keys (after key extraction).")
+
+# Patient + type for cancer lookup + tumor/normal split
+patient_m <- sub("-(01A|11A)_[0-9]+$", "", key_m)     # TCGA-OR-A5J1
+type_m    <- sub("^.*-(01A|11A)_[0-9]+$", "\\1", key_m)  # 01A or 11A
+
+# =========================
+# Build long table: (TF,cancer,gene,probe,type,beta,expr)
+# =========================
+dat <- rbindlist(lapply(seq_along(fls), function(i){
+  if (i %% 200 == 0) cat("Processed", i, "methylation files\n")
+
+  # Read methylation: chr start end probe beta
+  b <- fread(cmd=paste("zcat", shQuote(fls[i])),
+             select=c(4,5),
+             col.names=c("probe","beta"))
+  b[, beta := as.numeric(beta)]
+  b <- b[is.finite(beta) & probe %in% pg$probe]
+  if (nrow(b) == 0) return(NULL)
+
+  # Map probes -> TF,gene
+  mm <- merge(b, pg, by="probe")
+
+  # Expression row for this sample key
+  e_row <- ex[key_m[i]]
+  exp_vec <- unlist(e_row[, setdiff(names(e_row), c("sample","key")), with=FALSE])
+
+  mm[, expr := as.numeric(exp_vec[gene])]
+
+  # Cancer label (patient -> cancer)
+  can <- coh[.(patient_m[i]), cancer]
+  if (is.na(can) || length(can) == 0) return(NULL)
+
+  mm[, `:=`(cancer=can, type=type_m[i])]
+  mm[, .(TF, cancer, gene, probe, type, beta, expr)]
+}))
+
+if (nrow(dat) == 0) stop("dat empty: check probe overlap, methylation beta column, or cohort mapping.")
+
+# =========================
+# Correlations per cancer (all / tumor / normal)
+# =========================
+ct <- function(v,e){
+  ok <- is.finite(v) & is.finite(e)
+  if (sum(ok) < 3 || sd(v[ok]) == 0 || sd(e[ok]) == 0)
+    return(list(r=NA_real_, p=NA_real_, n=sum(ok)))
+  rs <- cor.test(v[ok], log2(e[ok] + 1), method="pearson")
+  list(r=unname(rs$estimate), p=rs$p.value, n=sum(ok))
+}
+
+res <- dat[, {
+  all <- ct(beta, expr)
+  tum <- ct(beta[type=="01A"], expr[type=="01A"])
+  nor <- ct(beta[type=="11A"], expr[type=="11A"])
+  .(r_all=all$r, p_all=all$p, n_all=all$n,
+    r_tum=tum$r, p_tum=tum$p, n_tum=tum$n,
+    r_nor=nor$r, p_nor=nor$p, n_nor=nor$n)
+}, by=.(TF, cancer, gene, probe)]
+
+dir.create("./results/methylation", recursive=TRUE, showWarnings=FALSE)
+fwrite(res[order(p_all)], "./results/methylation/corr_pearson_perCancer.tsv", sep="\\t")
+cat("Done -> ./results/methylation/corr_pearson_perCancer.tsv\n")
+'
+
+# Plot Volcano plot of the correlation for all cg pairs
+Rscript -e '
+library(data.table)
+library(plotly)
+library(htmlwidgets)
+
+in_file <- "./results/methylation/corr_pearson_perCancer.tsv"
+out_dir <- "./results/methylation"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+dt0 <- fread(in_file)
+
+alpha <- 0.05
+r_thr <- 0.5   # like your rho_thr, but for Pearson r
+
+make_plot <- function(dt, tf, out_html) {
+
+  dt <- dt[TF == tf]
+  dt <- dt[is.finite(r_all) & is.finite(p_all) & n_all > 0]
+
+  # BH adjust within this TF (across all cancers/probes/genes for this TF)
+  dt[, p_adj := p.adjust(p_all, method="BH")]
+
+  dt[, p_cap := pmax(p_adj, .Machine$double.xmin)]
+  dt[, mlog10p := -log10(p_cap)]
+
+  lab_neg <- paste0("Significant (r < -", r_thr, ")")
+  lab_pos <- paste0("Significant (r > ",  r_thr, ")")
+
+  dt[, group := fifelse(p_adj < alpha & r_all < -r_thr, lab_neg,
+                 fifelse(p_adj < alpha & r_all >  r_thr, lab_pos,
+                         "Not significant"))]
+
+  dt[, tooltip := paste0(
+    "TF: ", TF,
+    "<br>Cancer: ", cancer,
+    "<br>Gene: ", gene,
+    "<br>Probe: ", probe,
+    "<br>n_all: ", n_all,
+    "<br>r_all (Pearson): ", signif(r_all, 3),
+    "<br>p_all: ", format(p_all, scientific=TRUE, digits=3),
+    "<br>p_adj (BH): ", format(p_adj, scientific=TRUE, digits=3)
+  )]
+
+  cols <- setNames(
+    c("grey70","red","dodgerblue3"),
+    c("Not significant", lab_neg, lab_pos)
+  )
+
+  caption <- paste0(
+    "Each point = one (probe, gene) pair within one cancer type for ", tf, ". ",
+    "x: Pearson r_all (methylation beta vs log2(expr+1)). ",
+    "y: -log10(BH-adjusted p-value within TF)."
+  )
+
+  p <- plot_ly(
+    data = dt,
+    x = ~r_all,
+    y = ~mlog10p,
+    type = "scatter",
+    mode = "markers",
+    color = ~group,
+    colors = cols,
+    text = ~tooltip,
+    hoverinfo = "text",
+    marker = list(size=6, opacity=0.75)
+  ) %>%
+    layout(
+      title = list(text = paste0(
+        tf,
+        ": methylation–expression correlations (per cancer)",
+        "<br>Significance: BH-adjusted p < ", alpha
+      )),
+      annotations = list(
+        list(
+          text = caption,
+          x = 0, y = 0.02, xref = "paper", yref = "paper",
+          xanchor = "left", yanchor = "bottom",
+          showarrow = FALSE,
+          font = list(size = 11, color = "grey30")
+        )
+      ),
+      margin = list(b = 80, t = 80),
+      xaxis = list(title = "Pearson r (r_all)"),
+      yaxis = list(title = "-log10(BH-adjusted p)"),
+      shapes = list(
+        list(type="line",
+             x0=0,x1=0,y0=0,y1=1,
+             xref="x",yref="paper",
+             line=list(width=1,dash="dot")),
+        list(type="line",
+             x0=min(dt$r_all),x1=max(dt$r_all),
+             y0=-log10(alpha),y1=-log10(alpha),
+             xref="x",yref="y",
+             line=list(width=1,dash="dash"))
+      ),
+      legend = list(orientation="h", x=0, y=1.12)
+    )
+
+  saveWidget(p, out_html, selfcontained=TRUE)
+  cat("WROTE -> ", out_html, " (n=", nrow(dt), ")\n", sep="")
+}
+
+make_plot(copy(dt0),
+          "BANP_mm0to2_noCGmm",
+          file.path(out_dir, "BANP_r_vs_adjustedP_interactive.html"))
+
+make_plot(copy(dt0),
+          "NRF1_mm0to2_noCGmm",
+          file.path(out_dir, "NRF1_r_vs_adjustedP_interactive.html"))
+'
+
+
+########################################################################################
+# add the distance to TSS to the probe if proximal or distal to the correlation tsv 
+########################################################################################
+Rscript -e '
+library(data.table)
+
+dist_cg_TSS <- "./methylation/dist_to_tss/HM450_TCGA-ACC-TCGA-OR-A5J2-01A_1_annotated_methylation_filtered_cpg_dist_tss.tsv"
+input_file  <- "./results/methylation/corr_pearson_perCancer.tsv"
+out_file    <- "./results/methylation/corr_pearson_perCancer_with_prox_dist.tsv"
+
+prox_thr <- 2000L
+
+# 1) Load distance file: probe -> dist_to_tss
+dist <- fread(dist_cg_TSS, header=FALSE, sep="\t")
+dist <- dist[, .(probe = trimws(as.character(V1)),
+                 dist_to_tss = suppressWarnings(as.integer(V2)))]
+
+# 2) Load Pearson correlation file (already has a "probe" column)
+corr <- fread(input_file, header=TRUE, sep="\t")
+corr[, probe := trimws(as.character(probe))]
+
+# 3) Join
+corr2 <- merge(corr, dist, by="probe", all.x=TRUE)
+
+# 4) Classify proximity
+corr2[, cg_proximity := fifelse(
+  is.na(dist_to_tss), "unknown",
+  fifelse(abs(dist_to_tss) <= prox_thr, "proximal", "distal")
+)]
+
+# 5) Put new columns right after probe
+current_cols <- names(corr2)
+probe_idx <- match("probe", current_cols)
+
+new_order <- c(
+  current_cols[1:probe_idx],
+  "dist_to_tss",
+  "cg_proximity",
+  setdiff(current_cols[(probe_idx+1):length(current_cols)], c("dist_to_tss","cg_proximity"))
+)
+
+new_order <- new_order[!is.na(new_order) & new_order != ""]
+setcolorder(corr2, new_order)
+
+# 6) Save
+fwrite(corr2, out_file, sep="\t", quote=FALSE, na="NA")
+cat("Success! Wrote labels to:", out_file, "\n")
+'
+
+# plot volcano 
+Rscript -e '
+library(data.table)
+library(plotly)
+library(htmlwidgets)
+
+in_file <- "./results/methylation/corr_pearson_perCancer_with_prox_dist.tsv"
+out_dir <- "./results/methylation"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+dt0 <- fread(in_file, sep="\t", fill=TRUE)
+
+alpha <- 0.05
+r_thr <- 0.5
+
+make_plot <- function(dt, tf, out_html) {
+
+  dt <- dt[TF == tf]
+  dt <- dt[is.finite(r_all) & is.finite(p_all) & n_all > 0]
+
+  # BH adjust within TF (like your previous Pe_all_adj usage)
+  dt[, p := p.adjust(p_all, method="BH")]
+
+  # ensure cols exist
+  if (!("cg_proximity" %in% names(dt))) dt[, cg_proximity := NA_character_]
+  if (!("dist_to_tss" %in% names(dt)))  dt[, dist_to_tss := NA_real_]
+
+  dt[, p_cap := pmax(p, .Machine$double.xmin)]
+  dt[, mlog10p := -log10(p_cap)]
+
+  # normalize proximity
+  dt[, prox := fifelse(cg_proximity == "proximal", "proximal",
+                fifelse(cg_proximity == "distal",   "distal", NA_character_))]
+
+  # direction/significance based on Pearson r_all
+  dt[, dir := fifelse(p < alpha & r_all >  r_thr, "Significant positive",
+               fifelse(p < alpha & r_all < -r_thr, "Significant negative",
+                      "Not significant"))]
+
+  # 6-group combination
+  dt[, group6 := paste(dir, prox)]
+  dt[is.na(prox), group6 := NA_character_]
+
+  levs <- c(
+    "Significant positive proximal",
+    "Significant positive distal",
+    "Significant negative proximal",
+    "Significant negative distal",
+    "Not significant proximal",
+    "Not significant distal"
+  )
+  dt[, group6 := factor(group6, levels = levs)]
+
+  # tooltip
+  dt[, tooltip := paste0(
+    "TF: ", TF,
+    "<br>Cancer: ", cancer,
+    "<br>Gene: ", gene,
+    "<br>Probe: ", probe,
+    "<br>TSS dist: ", ifelse(is.na(dist_to_tss), "NA", dist_to_tss),
+    "<br>Proximity: ", ifelse(is.na(cg_proximity), "NA", cg_proximity),
+    "<br>n_all: ", n_all,
+    "<br>r_all (Pearson): ", signif(r_all,3),
+    "<br>BH p-value: ", format(p, scientific=TRUE, digits=3)
+  )]
+
+  cols <- setNames(
+    c("dodgerblue3","lightskyblue2","red","pink","grey70","grey35"),
+    levs
+  )
+
+  caption <- paste0(
+    "Each point = one (probe, gene) pair within one cancer type for ", tf,
+    ". x: Pearson r_all. y: -log10(BH p-value). ",
+    "Groups: BH<", alpha, " & |r|>", r_thr, " split by sign and proximal/distal."
+  )
+
+  p <- plot_ly(
+    data = dt,
+    x = ~r_all,
+    y = ~mlog10p,
+    type = "scatter",
+    mode = "markers",
+    color = ~group6,
+    colors = cols,
+    text = ~tooltip,
+    hoverinfo = "text",
+    marker = list(size=6, opacity=0.75)
+  ) %>%
+    layout(
+      title = list(text=paste0(
+        tf, ": methylation–expression correlations (per cancer)",
+        "<br>BH < ", alpha, " and |r| > ", r_thr, " ; proximal/distal split"
+      )),
+      annotations = list(
+        list(
+          text = caption,
+          x = 0, y = 0.02, xref = "paper", yref = "paper",
+          xanchor = "left", yanchor = "bottom",
+          showarrow = FALSE,
+          font = list(size = 11, color = "grey30")
+        )
+      ),
+      margin = list(b = 80, t = 80),
+      xaxis=list(title="Pearson r (r_all)"),
+      yaxis=list(title="-log10(BH-adjusted p-value)"),
+      shapes=list(
+        list(type="line",
+             x0=0,x1=0,y0=0,y1=1,
+             xref="x",yref="paper",
+             line=list(width=1,dash="dot")),
+        list(type="line",
+             x0=min(dt$r_all),x1=max(dt$r_all),
+             y0=-log10(alpha),y1=-log10(alpha),
+             xref="x",yref="y",
+             line=list(width=1,dash="dash"))
+      ),
+      legend=list(orientation="h",x=0,y=1.12)
+    )
+
+  saveWidget(p, out_html, selfcontained=TRUE)
+  cat("WROTE -> ", out_html, " (n=", nrow(dt), ")\n", sep="")
+}
+
+make_plot(copy(dt0),"BANP_mm0to2_noCGmm",file.path(out_dir,"BANP_r_vs_BHp_interactive_TSS.html"))
+make_plot(copy(dt0),"NRF1_mm0to2_noCGmm",file.path(out_dir,"NRF1_r_vs_BHp_interactive_TSS.html"))
+'
+
+###########################################################
+# Heatmap of correlation methylationxexpression
+###########################################################
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+# ---- INPUT (Pearson per-cancer + prox/dist already added) ----
+in_file <- "./results/methylation/corr_pearson_perCancer_with_prox_dist.tsv"
+out_dir <- "./results/methylation/heatmaps_correlation_methylation_expression"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+dt <- fread(in_file, sep="\t", fill=TRUE)
+
+val_col <- "r_all"   # Pearson correlation
+r_thr   <- 0.3
+
+dt <- dt[is.finite(get(val_col)) & n_all > 0]
+dt <- dt[ abs(get(val_col)) >= r_thr ]
+
+# ---- include proximal/distal in rowname ----
+dt[, prox := fifelse(is.na(cg_proximity), "NA", cg_proximity)]
+dt[, pair := paste(probe, gene, prox, sep="|")]
+
+make_hm <- function(d, tf) {
+  x <- d[TF == tf]
+  if (nrow(x) == 0) { cat("SKIP ", tf, " (no rows after filter)\n", sep=""); return(NULL) }
+
+  w <- dcast(x, pair ~ cancer, value.var = val_col, fun.aggregate = mean, fill = NA_real_)
+  mat <- as.matrix(w[, -1])
+  rownames(mat) <- w$pair
+
+  # replace NA with 0 (shows as white)
+  mat[is.na(mat)] <- 0
+
+  # clamp to [-1, 1] (Pearson range) for stable color scaling
+  mat[mat < -1] <- -1
+  mat[mat >  1] <-  1
+
+  out_pdf <- file.path(out_dir, paste0(tf, "_", val_col, "_absGE", r_thr, "_NA0_heatmap_redNeg_bluePos.pdf"))
+
+  n_rows <- nrow(mat)
+  height_in <- max(10, 0.22 * n_rows)
+  width_in  <- 14
+
+  # Colors: red for negative (down), white at 0, blue for positive (up)
+  breaks <- seq(-1, 1, length.out = 101)
+  cols   <- colorRampPalette(c("red", "white", "blue"))(100)
+
+  pdf(out_pdf, width = width_in, height = height_in, onefile = TRUE)
+  pheatmap(
+    mat,
+    main = paste0(tf, " | ", val_col, " (|r| >= ", r_thr, ", NA->0)"),
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    show_rownames = TRUE,
+    fontsize_row = 7,
+    fontsize_col = 10,
+    color  = cols,
+    breaks = breaks
+  )
+  dev.off()
+
+  cat("WROTE -> ", out_pdf, " (pairs=", nrow(mat), ", cancers=", ncol(mat), ", height_in=", height_in, ")\n", sep="")
+}
+
+make_hm(dt, "BANP_mm0to2_noCGmm")
+make_hm(dt, "NRF1_mm0to2_noCGmm")
+'
+# ! NOT DONE !
+# LOOK IF TWO PROBES THAT AFFECT THE SAME GENE ARE CLUSTERED TOGETHER IN THE HEATMAP
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+in_file  <- "./results/methylation/corr_pearson_perCancer_with_prox_dist.tsv"
+bed_file <- "./methylation/annotated_methylation_data_probes.bed"
+out_file <- "./results/methylation/BANP_probe_gene_cluster_summary_pearson.tsv"
+
+val_col <- "r_all"
+r_thr   <- 0.2
+tf <- "BANP_mm0to2_noCGmm"
+k <- 8
+
+# --- probe positions (BED: chr start end probe) ---
+bed <- fread(bed_file, sep="\t", header=FALSE)
+setnames(bed, c("chr","start","end","probe"))
+bed[, pos := paste0(chr, ":", start, "-", end)]
+bed <- bed[, .(probe, pos)]
+setkey(bed, probe)
+
+# --- input correlations ---
+dt <- fread(in_file, sep="\t", fill=TRUE)
+dt <- dt[TF == tf & is.finite(get(val_col)) & n_all > 0]
+dt <- dt[abs(get(val_col)) >= r_thr]
+
+dt[, prox := fifelse(is.na(cg_proximity), "NA", cg_proximity)]
+dt[, pair := paste(probe, gene, prox, sep="|")]
+
+w <- dcast(dt, pair ~ cancer, value.var = val_col, fun.aggregate = mean, fill = NA_real_)
+mat <- as.matrix(w[, -1])
+rownames(mat) <- w$pair
+mat[is.na(mat)] <- 0
+
+ph <- pheatmap(mat, silent=TRUE)
+row_hc <- ph$tree_row
+cl <- cutree(row_hc, k = k)
+
+rn <- names(cl)
+parts <- tstrsplit(rn, "|", fixed=TRUE)
+probe_id <- parts[[1]]
+gene_id  <- parts[[2]]
+
+res <- data.table(row=rn, probe=probe_id, gene=gene_id, cluster=as.integer(cl))
+
+# --- add positions ---
+setkey(res, probe)
+res <- bed[res]   # left join; adds pos
+
+gene_summary2 <- res[, .(
+  probes = paste(sort(unique(probe)), collapse=","),
+  probe_positions = paste(sort(unique(paste0(probe, "(", pos, ")"))), collapse=";"),
+  n_rows = .N,
+  n_probes = uniqueN(probe),
+  n_clusters = uniqueN(cluster),
+  clusters = paste(sort(unique(cluster)), collapse=","),
+  together = (uniqueN(cluster) == 1L)
+), by=gene][n_rows >= 2][order(together, -n_clusters, -n_rows)]
+
+fwrite(gene_summary2, out_file, sep="\t", quote=FALSE, na="NA")
+cat("Saved:", out_file, "\n")
+'
+
+
+
+
+
+
+
+
+
+
+
+
+
+##################################################################
+# Spearman correlation
+##################################################################
+# create correlation plot between delta_beta and delta_expr for the probe-gene pairs
+# This code builds a long table for all 01A+11A samples linking each CpG probe in TF motifs (beta methylation from bed.gz) to its mapped gene’s expression (log2(TPM+1)) per sample and cancer.
+# Then it computes Spearman correlations (rho, p-value, FDR) between beta and expression for each (TF, cancer, gene, probe), using all samples and also tumor-only and normal-only subsets.
+# It saves the long table and the correlation results to separate files. 
+Rscript -e '
+library(data.table)
+
+pg_file   <- "./methylation/probe_gene_pairs_in_motifs.tsv"
+expr_file <- "./expression/gene_expression_matrix_protein_coding.tsv.gz"
+meth_dir  <- "./methylation/filtered_methylation"
+
+out_long  <- "./results/methylation/meth_expr_long_ALL_01A11A.tsv.gz"
+out_corr  <- "./results/methylation/corr_beta_expr_ALL_01A11A.tsv"
+dir.create(dirname(out_corr), recursive=TRUE, showWarnings=FALSE)
+
+PROBE_COL <- 4L
+BETA_COL  <- 5L
+
+pg <- fread(pg_file)
+      
+expr <- fread(expr_file)
+setnames(expr, 1, "sample")
+expr[, sample_base := sub("_[0-9]+$", "", sample)]
+setkey(expr, sample_base)
+
+genes_avail <- setdiff(names(expr), c("sample","sample_base"))
+pg <- pg[gene %in% genes_avail]
+if (nrow(pg) == 0) stop("pg empty after filtering genes to expression matrix.")
+
+probes_needed <- sort(unique(pg$probe))
+cat("[INFO] probe-gene rows:", nrow(pg),
+    " unique probes:", length(probes_needed),
+    " unique genes:", uniqueN(pg$gene), "\n")
+
+files <- list.files(meth_dir, pattern="bed[.]gz$", full.names=TRUE)
+
+pat <- "TCGA-[A-Z0-9]+-TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]"
+sids <- regmatches(basename(files), regexpr(pat, basename(files), perl=TRUE))
+
+keep <- sids != "" & grepl("-(01A|11A)$", sids)
+files <- files[keep]
+sids  <- sids[keep]
+
+cat("[INFO] methylation files kept (01A+11A):", length(files), "\n")
+if (length(files) == 0) stop("No 01A/11A methylation files found in meth_dir.")
+
+read_beta_subset <- function(bed_gz, probes) {
+  dt <- fread(cmd=paste("zcat", shQuote(bed_gz)), header=FALSE, showProgress=FALSE)
+  if (nrow(dt) == 0) return(data.table(probe=character(), beta=numeric()))
+  out <- data.table(
+    probe = as.character(dt[[PROBE_COL]]),
+    beta  = suppressWarnings(as.numeric(dt[[BETA_COL]]))
+  )
+  out[probe %in% probes]
+}
+
+long_list <- vector("list", length(files))
+k <- 0L
+
+for (i in seq_along(files)) {
+  if (i %% 50 == 0) cat("Processed", i, "/", length(files), "\n")
+
+  sid <- sids[i]
+  et <- expr[J(sid)]
+  if (nrow(et) == 0) next
+
+  b <- read_beta_subset(files[i], probes_needed)
+  if (nrow(b) == 0) next
+
+  b[, sample := sid]
+  b[, sample_type := ifelse(grepl("-01A$", sample), "Tumor", "Normal")]
+
+  b <- merge(b, pg, by="probe", allow.cartesian=TRUE)
+  if (nrow(b) == 0) next
+
+  genes_here <- unique(b$gene)
+  expr_map <- data.table(gene=genes_here, expr=as.numeric(et[1, ..genes_here]))
+  b <- merge(b, expr_map, by="gene", all.x=TRUE)
+
+  # cancer code (ACC, BLCA, ...)
+  b[, cancer := tstrsplit(sample, "-", fixed=TRUE)[[2]]]
+
+  k <- k + 1L
+  long_list[[k]] <- b[, .(TF, cancer, gene, probe, sample, sample_type, beta, expr)]
+}
+
+long <- rbindlist(long_list[1:k], fill=TRUE)
+if (nrow(long) == 0) stop("Long table empty: no samples had both methylation and expression.")
+
+# write true .tsv.gz
+tmp_long <- sub("[.]gz$", "", out_long)
+fwrite(long, tmp_long, sep="\t")
+system(paste("gzip -f", shQuote(tmp_long)))
+cat("WROTE -> ", out_long, " rows=", nrow(long), "\n", sep="")
+
+# NO minimum-n limit: always attempt cor.test; if it fails, return NA
+cor_spearman <- function(x, y) {
+  ok <- is.finite(x) & is.finite(y)
+  x <- x[ok]; y <- y[ok]
+  ct <- tryCatch(
+suppressWarnings(cor.test(x, y, method="spearman")),
+    error = function(e) NULL
+  )
+  if (is.null(ct)) return(list(n_used=length(x), rho=NA_real_, Pe=NA_real_))
+  list(n_used=length(x), rho=unname(ct$estimate), Pe=ct$p.value)
+}
+
+long[, expr_plot := log2(expr + 1)]
+
+corr <- long[, {
+  allr <- cor_spearman(beta, expr_plot)
+  tr   <- cor_spearman(beta[sample_type=="Tumor"],  expr_plot[sample_type=="Tumor"])
+  nr   <- cor_spearman(beta[sample_type=="Normal"], expr_plot[sample_type=="Normal"])
+
+  list(
+    n_all   = allr$n_used, rho_all   = allr$rho, Pe_all   = allr$Pe,
+    n_tumor = tr$n_used,   rho_tumor = tr$rho,   Pe_tumor = tr$Pe,
+    n_norm  = nr$n_used,   rho_norm  = nr$rho,   Pe_norm  = nr$Pe
+  )
+}, by=.(TF, cancer, gene, probe)]
+
+corr[, Pe_all_adj   := p.adjust(Pe_all,   method="BH"), by=TF]
+corr[, Pe_tumor_adj := p.adjust(Pe_tumor, method="BH"), by=TF]
+corr[, Pe_norm_adj  := p.adjust(Pe_norm,  method="BH"), by=TF]
+
+setorder(corr, Pe_all_adj)
+
+fwrite(corr, out_corr, sep="\t")
+cat("WROTE -> ", out_corr, " rows=", nrow(corr), "\n", sep="")
+'
+#! NOT DONE YET IM HERE !LAUNCHED THE ABOVE!
+# Plot Volcano plot of the correlation for all cg pairs
+Rscript -e '
+library(data.table)
+library(plotly)
+library(htmlwidgets)
+
+in_file <- "./results/methylation/corr_beta_expr_ALL_01A11A.tsv"
+out_dir <- "./results/methylation"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+dt0 <- fread(in_file)
+
+alpha <- 0.05
+rho_thr <- 0.5
+
+make_plot <- function(dt, tf, out_html) {
+
+  dt <- dt[TF == tf]
+  dt[, p := Pe_all_adj]
+  dt <- dt[is.finite(rho_all) & is.finite(p) & n_all > 0]
+
+  dt[, p_cap := pmax(p, .Machine$double.xmin)]
+  dt[, mlog10p := -log10(p_cap)]
+
+  lab_neg <- paste0("Significant (rho < -", rho_thr, ")")
+  lab_pos <- paste0("Significant (rho > ",  rho_thr, ")")
+
+  dt[, group := fifelse(p < alpha & rho_all < -rho_thr, lab_neg,
+                 fifelse(p < alpha & rho_all >  rho_thr, lab_pos,
+                         "Not significant"))]
+
+  dt[, tooltip := paste0(
+    "TF: ", TF,
+    "<br>Cancer: ", cancer,
+    "<br>Gene: ", gene,
+    "<br>Probe: ", probe,
+    "<br>n_all: ", n_all,
+    "<br>rho_all: ", signif(rho_all,3),
+    "<br>Adjusted p-value (BH): ",
+    format(p, scientific=TRUE, digits=3)
+  )]
+
+  cols <- setNames(
+    c("grey70","red","dodgerblue3"),
+    c("Not significant", lab_neg, lab_pos)
+  )
+
+  caption <- paste0(
+    "Each point = one (probe, gene) pair within one cancer type for ", tf,
+    ".  x: Spearman rho_all (methylation beta vs log2(TPM+1)).  ",
+    "y: -log10(adjusted p-value BH)."
+  )
+
+  p <- plot_ly(
+    data = dt,
+    x = ~rho_all,
+    y = ~mlog10p,
+    type = "scatter",
+    mode = "markers",
+    color = ~group,
+    colors = cols,
+    text = ~tooltip,
+    hoverinfo = "text",
+    marker = list(size=6, opacity=0.75)
+  ) %>%
+    layout(
+      title = list(text=paste0(
+        tf,
+        ": methylation–expression correlations (all samples)",
+        "<br>Significance: adjusted p-value (BH) < ",
+        alpha
+      )),
+      annotations = list(
+        list(
+          text = caption,
+          x = 0, y = 0.02, xref = "paper", yref = "paper",
+          xanchor = "left", yanchor = "bottom",
+          showarrow = FALSE,
+          font = list(size = 11, color = "grey30")
+        )
+      ),
+      margin = list(b = 80, t = 80),
+      xaxis=list(title="Spearman rho (rho_all)"),
+      yaxis=list(title="-log10(Adjusted p-value BH)"),
+      shapes=list(
+ list(type="line",
+             x0=0,x1=0,y0=0,y1=1,
+             xref="x",yref="paper",
+             line=list(width=1,dash="dot")),
+        list(type="line",
+             x0=min(dt$rho_all),x1=max(dt$rho_all),
+             y0=-log10(alpha),y1=-log10(alpha),
+             xref="x",yref="y",
+             line=list(width=1,dash="dash"))
+      ),
+      legend=list(orientation="h",x=0,y=1.12)
+    )
+
+  saveWidget(p,out_html,selfcontained=TRUE)
+  cat("WROTE -> ",out_html," (n=",nrow(dt),")\n",sep="")
+}
+
+make_plot(copy(dt0),
+          "BANP_mm0to2_noCGmm",
+          file.path(out_dir,"BANP_rho_vs_adjustedP_interactive.html"))
+
+make_plot(copy(dt0),
+          "NRF1_mm0to2_noCGmm",
+          file.path(out_dir,"NRF1_rho_vs_adjustedP_interactive.html"))
+'
+
+
+########################################################################################
+# add the distance to TSS to the probe if proximal or distal to the correlation tsv 
+########################################################################################
+Rscript -e '
+library(data.table)
+
+dist_cg_TSS <- "./methylation/dist_to_tss/HM450_TCGA-ACC-TCGA-OR-A5J2-01A_1_annotated_methylation_filtered_cpg_dist_tss.tsv"
+input_file  <- "./results/methylation/corr_beta_expr_ALL_01A11A.tsv"
+out_file    <- "./results/methylation/corr_beta_expr_ALL_01A11A_with_prox_dist.tsv"
+
+prox_thr <- 2000L
+
+# 1. Load distance file
+# Ensure we handle potential headers and force types
+dist <- fread(dist_cg_TSS, header=FALSE, sep="\t")
+dist <- dist[, .(probe = trimws(as.character(V1)),dist_to_tss = as.integer(V2))]
+
+# 2. Load correlation file
+corr <- fread(input_file, header=TRUE, sep="\t")
+probe_col_name <- names(corr)[4]
+setnames(corr, probe_col_name, "probe")
+corr[, probe := trimws(as.character(probe))]
+
+# 3. Join - Explicitly using merge to avoid column position issues
+# all.x = TRUE keeps all rows from your correlation file
+corr2 <- merge(corr, dist, by = "probe", all.x = TRUE)
+
+# 4. Classify
+corr2[, cg_proximity := fifelse(
+  is.na(dist_to_tss), "unknown",
+  fifelse(abs(dist_to_tss) <= prox_thr, "proximal", "distal")
+)]
+
+# 5. Reorder Columns
+# We find where "probe" is and sandwich the new columns right after it
+current_cols <- names(corr2)
+other_cols <- setdiff(current_cols, c("probe", "dist_to_tss", "cg_proximity"))
+
+# Build the new order: start of original columns -> probe -> new info -> rest
+probe_idx <- match("probe", current_cols)
+new_order <- c(
+    current_cols[1:probe_idx], 
+    "dist_to_tss", 
+    "cg_proximity", 
+    setdiff(current_cols[(probe_idx+1):length(current_cols)], c("dist_to_tss", "cg_proximity"))
+)
+
+# Remove any NA or empty strings that might have been created if probe was at the end
+new_order <- new_order[!is.na(new_order) & new_order != ""]
+setcolorder(corr2, new_order)
+
+# 6. Save
+fwrite(corr2, out_file, sep="\t", quote=FALSE, na="NA")
+cat("Success! Wrote labels to:", out_file, "\n")
+'
+
+# plot volcano 
+Rscript -e '
+library(data.table)
+library(plotly)
+library(htmlwidgets)
+
+in_file <- "./results/methylation/corr_beta_expr_ALL_01A11A_with_prox_dist.tsv"
+out_dir <- "./results/methylation"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+dt0 <- fread(in_file, sep="\t", fill=TRUE)
+
+alpha <- 0.05
+rho_thr <- 0.5
+
+make_plot <- function(dt, tf, out_html) {
+
+  dt <- dt[TF == tf]
+  dt[, p := Pe_all_adj]
+  dt <- dt[is.finite(rho_all) & is.finite(p) & n_all > 0]
+
+  # ensure cols exist
+  if (!("cg_proximity" %in% names(dt))) dt[, cg_proximity := NA_character_]
+  if (!("dist_to_tss" %in% names(dt)))  dt[, dist_to_tss := NA_real_]
+
+  dt[, p_cap := pmax(p, .Machine$double.xmin)]
+  dt[, mlog10p := -log10(p_cap)]
+
+  # normalize proximity
+  dt[, prox := fifelse(cg_proximity == "proximal", "proximal",
+                fifelse(cg_proximity == "distal",   "distal", NA_character_))]
+
+  # direction/significance
+  dt[, dir := fifelse(p < alpha & rho_all >  rho_thr, "Significant positive",
+               fifelse(p < alpha & rho_all < -rho_thr, "Significant negative",
+                      "Not significant"))]
+
+  # 6-group combination
+  dt[, group6 := paste(dir, prox)]
+  dt[is.na(prox), group6 := NA_character_]
+
+  # keep legend order stable
+  levs <- c(
+    "Significant positive proximal",
+    "Significant positive distal",
+    "Significant negative proximal",
+    "Significant negative distal",
+    "Not significant proximal",
+    "Not significant distal"
+  )
+  dt[, group6 := factor(group6, levels = levs)]
+
+  # tooltip
+  dt[, tooltip := paste0(
+    "TF: ", TF,
+    "<br>Cancer: ", cancer,
+    "<br>Gene: ", gene,
+    "<br>Probe: ", probe,
+    "<br>TSS dist: ", ifelse(is.na(dist_to_tss), "NA", dist_to_tss),
+    "<br>Proximity: ", ifelse(is.na(cg_proximity), "NA", cg_proximity),
+    "<br>n_all: ", n_all,
+    "<br>rho_all: ", signif(rho_all,3),
+    "<br>Adjusted p-value (BH): ", format(p, scientific=TRUE, digits=3)
+  )]
+
+  # 6 colors (you can change these)
+  cols <- setNames(
+    c("dodgerblue3","lightskyblue2","red","pink","grey70","grey35"),
+    levs
+  )
+
+  caption <- paste0(
+    "Each point = one (probe, gene) pair within one cancer type for ", tf,
+    ". x: Spearman rho_all. y: -log10(adjusted p-value BH). ",
+    "Groups: BH<", alpha, " & |rho|>", rho_thr, " split by sign and proximal/distal."
+  )
+
+  p <- plot_ly(
+    data = dt,
+    x = ~rho_all,
+    y = ~mlog10p,
+    type = "scatter",
+    mode = "markers",
+    color = ~group6,
+    colors = cols,
+    text = ~tooltip,
+    hoverinfo = "text",
+ marker = list(size=6, opacity=0.75)
+  ) %>%
+    layout(
+      title = list(text=paste0(
+        tf, ": methylation–expression correlations (all samples)",
+        "<br>BH < ", alpha, " and |rho| > ", rho_thr, " ; proximal/distal split"
+      )),
+      annotations = list(
+        list(
+          text = caption,
+          x = 0, y = 0.02, xref = "paper", yref = "paper",
+          xanchor = "left", yanchor = "bottom",
+          showarrow = FALSE,
+          font = list(size = 11, color = "grey30")
+        )
+      ),
+      margin = list(b = 80, t = 80),
+      xaxis=list(title="Spearman rho (rho_all)"),
+      yaxis=list(title="-log10(Adjusted p-value BH)"),
+      shapes=list(
+        list(type="line",
+             x0=0,x1=0,y0=0,y1=1,
+             xref="x",yref="paper",
+             line=list(width=1,dash="dot")),
+        list(type="line",
+             x0=min(dt$rho_all),x1=max(dt$rho_all),
+             y0=-log10(alpha),y1=-log10(alpha),
+             xref="x",yref="y",
+             line=list(width=1,dash="dash"))
+      ),
+      legend=list(orientation="h",x=0,y=1.12)
+    )
+  saveWidget(p, out_html, selfcontained=TRUE)
+  cat("WROTE -> ", out_html, " (n=", nrow(dt), ")\n", sep="")
+}
+
+make_plot(copy(dt0),"BANP_mm0to2_noCGmm",file.path(out_dir,"BANP_rho_vs_adjustedP_interactive_TSS.html"))
+make_plot(copy(dt0),"NRF1_mm0to2_noCGmm",file.path(out_dir,"NRF1_rho_vs_adjustedP_interactive_TSS.html"))
+'
+
+###########################################################
+# Heatmap of correlation methylationxexpression
+###########################################################
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+in_file <- "./results/methylation/corr_beta_expr_ALL_01A11A_with_prox_dist.tsv"
+out_dir <- "./results/methylation/heatmaps_correlation_methylation_expression"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+dt <- fread(in_file, sep="\t", fill=TRUE)
+
+val_col <- "rho_all"
+rho_thr <- 0.5
+
+dt <- dt[is.finite(get(val_col)) & n_all > 0]
+dt <- dt[ abs(get(val_col)) >= rho_thr ]
+
+# ----include proximal/distal in rowname ----
+dt[, prox := fifelse(is.na(cg_proximity), "NA", cg_proximity)]
+dt[, pair := paste(probe, gene, prox, sep="|")]
+
+make_hm <- function(d, tf) {
+  x <- d[TF == tf]
+  if (nrow(x) == 0) { cat("SKIP ", tf, " (no rows after filter)\n", sep=""); return(NULL) }
+
+  w <- dcast(x, pair ~ cancer, value.var = val_col, fun.aggregate = mean, fill = NA_real_)
+  mat <- as.matrix(w[, -1])
+  rownames(mat) <- w$pair
+
+  mat[is.na(mat)] <- 0
+
+  out_pdf <- file.path(out_dir, paste0(tf, "_", val_col, "_absGE", rho_thr, "_NA0_heatmap.pdf"))
+
+  n_rows <- nrow(mat)
+  height_in <- max(10, 0.22 * n_rows)
+  width_in  <- 14
+
+  pdf(out_pdf, width = width_in, height = height_in, onefile = TRUE)
+  pheatmap(
+    mat,
+    main = paste0(tf, " | ", val_col, " (|rho| >= ", rho_thr, ", NA->0)"),
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    show_rownames = TRUE,
+    fontsize_row = 7,
+    fontsize_col = 10
+  )
+  dev.off()
+
+  cat("WROTE -> ", out_pdf, " (pairs=", nrow(mat), ", cancers=", ncol(mat), ", height_in=", height_in, ")\n", sep="")
+}
+
+make_hm(dt, "BANP_mm0to2_noCGmm")
+make_hm(dt, "NRF1_mm0to2_noCGmm")
+'
+# LOOK IF TWO PROBES THAT AFFECT THE SAME GENE ARE CLUSTERED TOGETHER IN THE HEATMAP
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+in_file  <- "./results/methylation/corr_beta_expr_ALL_01A11A_with_prox_dist.tsv"
+bed_file <- "./methylation/annotated_methylation_data_probes.bed"
+out_file <- "./results/methylation/NRF1_probe_gene_cluster_summary.tsv"
+
+val_col <- "rho_all"
+rho_thr <- 0.5
+tf <- "NRF1_mm0to2_noCGmm"
+k <- 8
+
+# --- probe positions (BED: chr start end probe) ---
+bed <- fread(bed_file, sep="\t", header=FALSE)
+setnames(bed, c("chr","start","end","probe"))
+bed[, pos := paste0(chr, ":", start, "-", end)]
+bed <- bed[, .(probe, pos)]
+setkey(bed, probe)
+
+# --- input correlations ---
+dt <- fread(in_file, sep="\t", fill=TRUE)
+dt <- dt[TF == tf & is.finite(get(val_col)) & n_all > 0]
+dt <- dt[abs(get(val_col)) >= rho_thr]
+
+dt[, prox := fifelse(is.na(cg_proximity), "NA", cg_proximity)]
+dt[, pair := paste(probe, gene, prox, sep="|")]
+
+w <- dcast(dt, pair ~ cancer, value.var = val_col, fun.aggregate = mean, fill = NA_real_)
+mat <- as.matrix(w[, -1])
+rownames(mat) <- w$pair
+mat[is.na(mat)] <- 0
+
+ph <- pheatmap(mat, silent=TRUE)
+row_hc <- ph$tree_row
+cl <- cutree(row_hc, k = k)
+
+rn <- names(cl)
+parts <- tstrsplit(rn, "|", fixed=TRUE)
+probe_id <- parts[[1]]
+gene <- parts[[2]]
+
+res <- data.table(row=rn, probe=probe_id, gene=gene, cluster=as.integer(cl))
+
+# --- add positions ---
+setkey(res, probe)
+res <- bed[res]   # left join; adds pos
+
+gene_summary2 <- res[, .(
+  probes = paste(sort(unique(probe)), collapse=","),
+  probe_positions = paste(sort(unique(paste0(probe, "(", pos, ")"))), collapse=";"),
+  n_rows = .N,
+  n_probes = uniqueN(probe),
+  n_clusters = uniqueN(cluster),
+  clusters = paste(sort(unique(cluster)), collapse=","),
+  together = (uniqueN(cluster) == 1L)
+), by=gene][n_rows >= 2][order(together, -n_clusters, -n_rows)]
+
+fwrite(gene_summary2, out_file, sep="\t", quote=FALSE, na="NA")
+cat("Saved:", out_file, "\n")
+'
+
+
+
