@@ -8013,85 +8013,141 @@ library(data.table)
 # =========================
 # Inputs
 # =========================
-pg  <- fread("./methylation/probe_gene_pairs_in_motifs.tsv")              # needs columns: probe, gene, TF
-ex  <- fread("./expression/gene_expression_matrix_3d4d_noOV.tsv")         # filtered expression matrix
+pg  <- fread("./methylation/probe_gene_pairs_in_motifs.tsv")
+ex  <- fread("./expression/gene_expression_matrix_3d4d_noOV.tsv")
 coh <- fread("./results/multi_omics/samples_3d+4d.tsv", header=FALSE)
 setnames(coh, c("patient","cancer","c1","c2","c3","c4"))
 coh <- coh[cancer!="OV", .(patient, cancer)]
-setkey(coh, patient)
+
+# Robust cohort map: extract short TCGA patient ID from whatever is in coh$patient
+coh[, patient_short := {
+  m <- regexpr("TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}", patient, perl=TRUE)
+  ifelse(m > 0, regmatches(patient, m), NA_character_)
+}]
+coh <- coh[!is.na(patient_short)]
+coh_map <- unique(coh[, .(patient_short, cancer)])
+setkey(coh_map, patient_short)
+
+cat("[INFO] cohort map patients:", nrow(coh_map), "\n")
+
+# Make sure expression has a "sample" column
+if (!("sample" %in% names(ex))) setnames(ex, 1, "sample")
 
 # =========================
-# Expression: build key like TCGA-OR-A5J1-01A_1
+# Key standardization (allow with OR without _1)
 # =========================
-setnames(ex, 1, "sample")
-rx_ex <- regexpr("TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-(01A|11A)_[0-9]+", ex$sample, perl=TRUE)
-ex[, key := ifelse(rx_ex > 0, regmatches(sample, rx_ex), NA_character_)]
+rx_pattern <- "TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-(01A|11A)(_[0-9]+)?"
+
+ex[, key := {
+  m <- regexpr(rx_pattern, sample, perl=TRUE)
+  ifelse(m > 0, regmatches(sample, m), NA_character_)
+}]
 ex <- ex[!is.na(key)]
 setkey(ex, key)
 
-# Keep only genes present in expression matrix
-pg <- pg[gene %in% names(ex)]
-if (nrow(pg) == 0) stop("pg empty after filtering genes to expression matrix columns")
+cat("[INFO] Expression rows with valid key:", nrow(ex), "\n")
+
+# Define gene columns explicitly
+gene_cols <- setdiff(names(ex), c("sample","key"))
+cat("[INFO] Expression gene columns:", length(gene_cols), "\n")
+if (length(gene_cols) == 0) stop("No gene columns detected in expression matrix.")
+
+# Filter pg to genes available in expression
+pg <- pg[gene %in% gene_cols]
+if (nrow(pg) == 0) stop("No genes in pg match expression matrix gene columns.")
+
+probes_needed <- unique(pg$probe)
+cat("[INFO] pg rows:", nrow(pg), " unique probes:", length(probes_needed), " unique genes:", uniqueN(pg$gene), "\n")
 
 # =========================
-# Methylation files: build same key from filename
+# Methylation files and keys
 # =========================
-fls <- list.files("./methylation/filtered_methylation", pattern="bed.gz$", full.names=TRUE)
+meth_dir <- "./methylation/filtered_methylation"
+fls <- list.files(meth_dir, pattern="bed[.]gz$", full.names=TRUE)
 bn  <- basename(fls)
 
-rx_m <- regexpr("TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-(01A|11A)_[0-9]+", bn, perl=TRUE)
-key_m <- ifelse(rx_m > 0, regmatches(bn, rx_m), NA_character_)
+m_matches <- regexpr(rx_pattern, bn, perl=TRUE)
+key_m <- ifelse(m_matches > 0, regmatches(bn, m_matches), NA_character_)
 
-keep <- !is.na(key_m) & key_m %in% ex$key
-fls  <- fls[keep]
+# Keep only methyl files that exist in expression keys
+keep  <- !is.na(key_m) & key_m %in% ex$key
+fls   <- fls[keep]
 key_m <- key_m[keep]
-if (length(fls) == 0) stop("No methylation files match expression keys (after key extraction).")
 
-# Patient + type for cancer lookup + tumor/normal split
-patient_m <- sub("-(01A|11A)_[0-9]+$", "", key_m)     # TCGA-OR-A5J1
-type_m    <- sub("^.*-(01A|11A)_[0-9]+$", "\\1", key_m)  # 01A or 11A
+cat("[INFO] Methylation files kept after key match:", length(fls), "\n")
+if (length(fls) == 0) stop("No methylation files match expression keys after standardization.")
+
+# Extract short patient from key (TCGA-XX-XXXX)
+patient_m <- sub("-(01A|11A)(_[0-9]+)?$", "", key_m)
+
+# Keep only patients present in cohort map (3D+4D, no OV)
+keep_coh <- patient_m %in% coh_map$patient_short
+fls      <- fls[keep_coh]
+key_m    <- key_m[keep_coh]
+patient_m<- patient_m[keep_coh]
+
+cat("[INFO] Methylation files kept after cohort filter:", length(fls), "\n")
+if (length(fls) == 0) stop("No methylation files after cohort filter.")
 
 # =========================
-# Build long table: (TF,cancer,gene,probe,type,beta,expr)
+# Build long table
 # =========================
 dat <- rbindlist(lapply(seq_along(fls), function(i){
-  if (i %% 200 == 0) cat("Processed", i, "methylation files\n")
 
-  # Read methylation: chr start end probe beta
-  b <- fread(cmd=paste("zcat", shQuote(fls[i])),
-             select=c(4,5),
-             col.names=c("probe","beta"))
-  b[, beta := as.numeric(beta)]
-  b <- b[is.finite(beta) & probe %in% pg$probe]
+  if (i %% 200 == 0) cat("Processed", i, "/", length(fls), " methylation files\n")
+
+  b <- fread(cmd=paste("zcat", shQuote(fls[i])), header=FALSE, showProgress=FALSE)
+  if (ncol(b) < 5) return(NULL)
+
+  # probe=col4, beta=col5
+  b <- b[, .(probe=as.character(V4), beta=suppressWarnings(as.numeric(V5)))]
+  b <- b[is.finite(beta) & probe %in% probes_needed]
   if (nrow(b) == 0) return(NULL)
 
-  # Map probes -> TF,gene
-  mm <- merge(b, pg, by="probe")
+  mm <- merge(b, pg, by="probe", allow.cartesian=TRUE)
+  if (nrow(mm) == 0) return(NULL)
 
-  # Expression row for this sample key
-  e_row <- ex[key_m[i]]
-  exp_vec <- unlist(e_row[, setdiff(names(e_row), c("sample","key")), with=FALSE])
+  e_row <- ex[J(key_m[i])]
+  if (nrow(e_row) == 0) return(NULL)
 
-  mm[, expr := as.numeric(exp_vec[gene])]
+  # named vector of gene expression for this sample
+  exp_vec <- as.numeric(e_row[1, ..gene_cols])
+  names(exp_vec) <- gene_cols
 
-  # Cancer label (patient -> cancer)
-  can <- coh[.(patient_m[i]), cancer]
+  # map expr by gene
+  mm[, expr := exp_vec[gene]]
+
+  # cancer lookup via cohort map (robust)
+  can <- coh_map[.(patient_m[i]), cancer]
   if (is.na(can) || length(can) == 0) return(NULL)
 
-  mm[, `:=`(cancer=can, type=type_m[i])]
-  mm[, .(TF, cancer, gene, probe, type, beta, expr)]
-}))
+  # robust type extraction from the standardized key
+  mm[, sample_key := key_m[i]]
+  mm[, type := fifelse(grepl("-01A", sample_key), "01A",
+                fifelse(grepl("-11A", sample_key), "11A", NA_character_))]
 
-if (nrow(dat) == 0) stop("dat empty: check probe overlap, methylation beta column, or cohort mapping.")
+  mm[, cancer := can]
+  mm[, .(TF, cancer, gene, probe, sample_key, type, beta, expr)]
+}), fill=TRUE)
+
+if (is.null(dat) || nrow(dat) == 0) stop("dat is empty. Something went wrong in building the long table.")
 
 # =========================
-# Correlations per cancer (all / tumor / normal)
+# Diagnostics BEFORE correlation
 # =========================
-ct <- function(v,e){
+cat("[INFO] dat rows:", nrow(dat), "\n")
+cat("[INFO] dat unique samples:", uniqueN(dat$sample_key), "\n")
+cat("[INFO] type counts:\n"); print(dat[, .N, by=type][order(type)])
+cat("[INFO] NA expr fraction:", mean(is.na(dat$expr)), "\n")
+
+# =========================
+# Correlations per group (Pearson)
+# =========================
+ct <- function(v, e){
   ok <- is.finite(v) & is.finite(e)
-  if (sum(ok) < 3 || sd(v[ok]) == 0 || sd(e[ok]) == 0)
-    return(list(r=NA_real_, p=NA_real_, n=sum(ok)))
-  rs <- cor.test(v[ok], log2(e[ok] + 1), method="pearson")
+  if (sum(ok) < 3) return(list(r=NA_real_, p=NA_real_, n=sum(ok)))
+  if (sd(v[ok]) == 0 || sd(e[ok]) == 0) return(list(r=NA_real_, p=NA_real_, n=sum(ok)))
+  rs <- suppressWarnings(cor.test(v[ok], log2(e[ok] + 1), method="pearson"))
   list(r=unname(rs$estimate), p=rs$p.value, n=sum(ok))
 }
 
@@ -8104,9 +8160,18 @@ res <- dat[, {
     r_nor=nor$r, p_nor=nor$p, n_nor=nor$n)
 }, by=.(TF, cancer, gene, probe)]
 
-dir.create("./results/methylation", recursive=TRUE, showWarnings=FALSE)
-fwrite(res[order(p_all)], "./results/methylation/corr_pearson_perCancer.tsv", sep="\\t")
-cat("Done -> ./results/methylation/corr_pearson_perCancer.tsv\n")
+# =========================
+# Write
+# =========================
+out_file <- "./results/methylation/corr_pearson_perCancer.tsv"
+dir.create(dirname(out_file), recursive=TRUE, showWarnings=FALSE)
+fwrite(res[order(p_all)], out_file, sep="\t", quote=FALSE, na="NA")
+
+cat("[INFO] Output rows:", nrow(res), "\n")
+cat("[INFO] Finite r_all:", sum(is.finite(res$r_all)), "\n")
+cat("[INFO] Finite r_tum:", sum(is.finite(res$r_tum)), "\n")
+cat("[INFO] Finite r_nor:", sum(is.finite(res$r_nor)), "\n")
+cat("Done -> ", out_file, "\n", sep="")
 '
 
 # Plot Volcano plot of the correlation for all cg pairs
@@ -8214,11 +8279,11 @@ make_plot <- function(dt, tf, out_html) {
 
 make_plot(copy(dt0),
           "BANP_mm0to2_noCGmm",
-          file.path(out_dir, "BANP_r_vs_adjustedP_interactive.html"))
+          file.path(out_dir, "BANP_r_vs_adjustedP_pearson_interactive.html"))
 
 make_plot(copy(dt0),
           "NRF1_mm0to2_noCGmm",
-          file.path(out_dir, "NRF1_r_vs_adjustedP_interactive.html"))
+          file.path(out_dir, "NRF1_r_vs_adjustedP_pearson_interactive.html"))
 '
 
 
@@ -8236,8 +8301,7 @@ prox_thr <- 2000L
 
 # 1) Load distance file: probe -> dist_to_tss
 dist <- fread(dist_cg_TSS, header=FALSE, sep="\t")
-dist <- dist[, .(probe = trimws(as.character(V1)),
-                 dist_to_tss = suppressWarnings(as.integer(V2)))]
+dist <- dist[, .(probe = trimws(as.character(V1)),dist_to_tss = suppressWarnings(as.integer(V2)))]
 
 # 2) Load Pearson correlation file (already has a "probe" column)
 corr <- fread(input_file, header=TRUE, sep="\t")
@@ -8395,8 +8459,8 @@ make_plot <- function(dt, tf, out_html) {
   cat("WROTE -> ", out_html, " (n=", nrow(dt), ")\n", sep="")
 }
 
-make_plot(copy(dt0),"BANP_mm0to2_noCGmm",file.path(out_dir,"BANP_r_vs_BHp_interactive_TSS.html"))
-make_plot(copy(dt0),"NRF1_mm0to2_noCGmm",file.path(out_dir,"NRF1_r_vs_BHp_interactive_TSS.html"))
+make_plot(copy(dt0),"BANP_mm0to2_noCGmm",file.path(out_dir,"BANP_r_vs_pearson_TSS_interactive.html"))
+make_plot(copy(dt0),"NRF1_mm0to2_noCGmm",file.path(out_dir,"NRF1_r_vs_pearson_TSS_interactive.html"))
 '
 
 ###########################################################
@@ -8414,7 +8478,7 @@ dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
 dt <- fread(in_file, sep="\t", fill=TRUE)
 
 val_col <- "r_all"   # Pearson correlation
-r_thr   <- 0.3
+r_thr   <- 0.5
 
 dt <- dt[is.finite(get(val_col)) & n_all > 0]
 dt <- dt[ abs(get(val_col)) >= r_thr ]
@@ -8531,8 +8595,82 @@ gene_summary2 <- res[, .(
 fwrite(gene_summary2, out_file, sep="\t", quote=FALSE, na="NA")
 cat("Saved:", out_file, "\n")
 '
+#! NOT DONE YET!! IM HERE!!
+##################################
+# plot correlation of healthyandtumor vs only tumor 
+##################################
+Rscript -e '
+library(data.table)
+library(plotly)
+library(htmlwidgets)
 
+in_file <- "./results/methylation/corr_pearson_perCancer_with_prox_dist.tsv"
+out_dir <- "./results/methylation/pearson_checks"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
 
+tf_pick     <- "NRF1_mm0to2_noCGmm"  # change to the TF wanted
+cancer_pick <- "BRCA"               # change to cancer waanted
+min_n_tum   <- 3                    # require at least 3 tumors to trust r_tum
+
+dt <- fread(in_file, sep="\t", fill=TRUE)
+
+d <- dt[TF == tf_pick & cancer == cancer_pick]
+
+# keep only where both correlations exist and tumor has enough samples
+d_use <- d[is.finite(r_all) & is.finite(r_tum) & n_tum >= min_n_tum]
+
+cat("[INFO] ", tf_pick, " ", cancer_pick, 
+    " total rows=", nrow(d),
+    " usable rows (finite r_all & r_tum, n_tum>= ", min_n_tum, ")=", nrow(d_use), "\n", sep="")
+
+if (nrow(d_use) == 0) {
+  stop("No usable points. Likely r_tum is NA everywhere (n_tum=0) or too few tumor samples.")
+}
+
+# label whether normals exist (helps interpret whether r_all might be driven by normals)
+d_use[, has_normals := fifelse(n_nor >= 3, "has normals (n_nor>=3)", "no/too few normals")]
+
+d_use[, tooltip := paste0(
+  "TF: ", TF,
+  "<br>Cancer: ", cancer,
+  "<br>Gene: ", gene,
+  "<br>Probe: ", probe,
+  "<br>prox: ", cg_proximity,
+  "<br>dist_to_tss: ", dist_to_tss,
+  "<br>r_all: ", signif(r_all, 3), " (n_all=", n_all, ")",
+  "<br>r_tum: ", signif(r_tum, 3), " (n_tum=", n_tum, ")",
+  "<br>r_nor: ", ifelse(is.finite(r_nor), signif(r_nor, 3), "NA"), " (n_nor=", n_nor, ")"
+)]
+
+p <- plot_ly(
+  d_use,
+  x = ~r_all,
+  y = ~r_tum,
+  type = "scatter",
+  mode = "markers",
+  color = ~has_normals,
+  text = ~tooltip,
+  hoverinfo = "text",
+  marker = list(size=6, opacity=0.75)
+) %>%
+  layout(
+    title = list(text = paste0(tf_pick, " | ", cancer_pick, ": Pearson r_all vs r_tum")),
+    xaxis = list(title = "Pearson correlation (all samples) r_all", range = c(-1, 1)),
+    yaxis = list(title = "Pearson correlation (tumor only) r_tum", range = c(-1, 1)),
+    shapes = list(
+      list(type="line", x0=-1, x1=1, y0=-1, y1=1, xref="x", yref="y",
+           line=list(width=1, dash="dot")),   # y=x
+      list(type="line", x0=0, x1=0, y0=-1, y1=1, xref="x", yref="y",
+           line=list(width=1, dash="dash")),  # x=0
+      list(type="line", x0=-1, x1=1, y0=0, y1=0, xref="x", yref="y",
+           line=list(width=1, dash="dash"))   # y=0
+    )
+  )
+
+out_html <- file.path(out_dir, paste0(tf_pick, "_", cancer_pick, "_r_all_vs_r_tum.html"))
+saveWidget(p, out_html, selfcontained=TRUE)
+cat("WROTE -> ", out_html, "\n", sep="")
+'
 
 
 
@@ -8554,130 +8692,140 @@ cat("Saved:", out_file, "\n")
 Rscript -e '
 library(data.table)
 
-pg_file   <- "./methylation/probe_gene_pairs_in_motifs.tsv"
-expr_file <- "./expression/gene_expression_matrix_protein_coding.tsv.gz"
-meth_dir  <- "./methylation/filtered_methylation"
+# =========================
+# Inputs
+# =========================
+pg  <- fread("./methylation/probe_gene_pairs_in_motifs.tsv")
+ex  <- fread("./expression/gene_expression_matrix_3d4d_noOV.tsv")
+coh <- fread("./results/multi_omics/samples_3d+4d.tsv", header=FALSE)
+setnames(coh, c("patient","cancer","c1","c2","c3","c4"))
+coh <- coh[cancer!="OV", .(patient, cancer)]
 
-out_long  <- "./results/methylation/meth_expr_long_ALL_01A11A.tsv.gz"
-out_corr  <- "./results/methylation/corr_beta_expr_ALL_01A11A.tsv"
-dir.create(dirname(out_corr), recursive=TRUE, showWarnings=FALSE)
+# --- robust cohort map: short TCGA patient id ---
+coh[, patient_short := {
+  m <- regexpr("TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}", patient, perl=TRUE)
+  ifelse(m > 0, regmatches(patient, m), NA_character_)
+}]
+coh <- coh[!is.na(patient_short)]
+coh_map <- unique(coh[, .(patient_short, cancer)])
+setkey(coh_map, patient_short)
 
-PROBE_COL <- 4L
-BETA_COL  <- 5L
+# Make sure expression has a "sample" column name
+if (!("sample" %in% names(ex))) setnames(ex, 1, "sample")
 
-pg <- fread(pg_file)
-      
-expr <- fread(expr_file)
-setnames(expr, 1, "sample")
-expr[, sample_base := sub("_[0-9]+$", "", sample)]
-setkey(expr, sample_base)
+# =========================
+# Standardize Keys (allow with OR without _1)
+# =========================
+rx_pattern <- "TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-(01A|11A)(_[0-9]+)?"
 
-genes_avail <- setdiff(names(expr), c("sample","sample_base"))
-pg <- pg[gene %in% genes_avail]
-if (nrow(pg) == 0) stop("pg empty after filtering genes to expression matrix.")
+ex[, key := {
+  m <- regexpr(rx_pattern, sample, perl=TRUE)
+  ifelse(m > 0, regmatches(sample, m), NA_character_)
+}]
+ex <- ex[!is.na(key)]
+setkey(ex, key)
 
-probes_needed <- sort(unique(pg$probe))
-cat("[INFO] probe-gene rows:", nrow(pg),
-    " unique probes:", length(probes_needed),
-    " unique genes:", uniqueN(pg$gene), "\n")
+# Keep only genes present in expression matrix columns
+gene_cols <- setdiff(names(ex), c("sample","key"))
+pg <- pg[gene %in% gene_cols]
+if (nrow(pg) == 0) stop("No genes in pg match the columns in the expression matrix.")
+probes_needed <- unique(pg$probe)
 
-files <- list.files(meth_dir, pattern="bed[.]gz$", full.names=TRUE)
+# =========================
+# Methylation files
+# =========================
+fls <- list.files("./methylation/filtered_methylation", pattern="bed[.]gz$", full.names=TRUE)
+bn  <- basename(fls)
 
-pat <- "TCGA-[A-Z0-9]+-TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]"
-sids <- regmatches(basename(files), regexpr(pat, basename(files), perl=TRUE))
+m_matches <- regexpr(rx_pattern, bn, perl=TRUE)
+key_m <- ifelse(m_matches > 0, regmatches(bn, m_matches), NA_character_)
 
-keep <- sids != "" & grepl("-(01A|11A)$", sids)
-files <- files[keep]
-sids  <- sids[keep]
+keep  <- !is.na(key_m) & key_m %in% ex$key
+fls   <- fls[keep]
+key_m <- key_m[keep]
 
-cat("[INFO] methylation files kept (01A+11A):", length(files), "\n")
-if (length(files) == 0) stop("No 01A/11A methylation files found in meth_dir.")
+if (length(fls) == 0) stop("No methylation files match expression keys after standardization.")
 
-read_beta_subset <- function(bed_gz, probes) {
-  dt <- fread(cmd=paste("zcat", shQuote(bed_gz)), header=FALSE, showProgress=FALSE)
-  if (nrow(dt) == 0) return(data.table(probe=character(), beta=numeric()))
-  out <- data.table(
-    probe = as.character(dt[[PROBE_COL]]),
-    beta  = suppressWarnings(as.numeric(dt[[BETA_COL]]))
-  )
-  out[probe %in% probes]
+# short patient id from key
+patient_m <- sub("-(01A|11A)(_[0-9]+)?$", "", key_m)
+
+# cohort filter (3D+4D, no OV)
+keep_coh <- patient_m %in% coh_map$patient_short
+fls      <- fls[keep_coh]
+key_m    <- key_m[keep_coh]
+patient_m<- patient_m[keep_coh]
+
+if (length(fls) == 0) stop("No methylation files remain after cohort filter.")
+
+# =========================
+# Build long table
+# =========================
+dat <- rbindlist(lapply(seq_along(fls), function(i){
+  if (i %% 200 == 0) cat("Processed", i, "methylation files\n")
+
+  b <- fread(cmd=paste("zcat", shQuote(fls[i])),
+             header=FALSE, showProgress=FALSE)
+  if (ncol(b) < 5) return(NULL)
+
+  b <- b[, .(probe=as.character(V4), beta=suppressWarnings(as.numeric(V5)))]
+  b <- b[is.finite(beta) & probe %in% probes_needed]
+  if (nrow(b) == 0) return(NULL)
+
+  mm <- merge(b, pg, by="probe", allow.cartesian=TRUE)
+  if (nrow(mm) == 0) return(NULL)
+
+  e_row <- ex[J(key_m[i])]
+  if (nrow(e_row) == 0) return(NULL)
+
+  exp_vec <- as.numeric(e_row[1, ..gene_cols])
+  names(exp_vec) <- gene_cols
+  mm[, expr := exp_vec[gene]]
+
+  can <- coh_map[.(patient_m[i]), cancer]
+  if (is.na(can) || length(can) == 0) return(NULL)
+
+  mm[, sample_key := key_m[i]]
+
+  # --- FIX: robust type extraction (exactly 01A/11A) ---
+  mm[, type := fifelse(grepl("-01A", sample_key), "01A",
+                fifelse(grepl("-11A", sample_key), "11A", NA_character_))]
+
+  mm[, cancer := can]
+  mm[, .(TF, cancer, gene, probe, sample_key, type, beta, expr)]
+}), fill=TRUE)
+
+if (is.null(dat) || nrow(dat) == 0) stop("Data table is empty.")
+
+# =========================
+# Spearman Correlation
+# =========================
+ct <- function(v, e){
+  ok <- is.finite(v) & is.finite(e)
+  if (sum(ok) < 3 || sd(v[ok]) == 0 || sd(e[ok]) == 0)
+    return(list(r=NA_real_, p=NA_real_, n=sum(ok)))
+
+  rs <- suppressWarnings(cor.test(v[ok], log2(e[ok] + 1), method="spearman", exact=FALSE))
+  list(r=unname(rs$estimate), p=rs$p.value, n=sum(ok))
 }
 
-long_list <- vector("list", length(files))
-k <- 0L
-
-for (i in seq_along(files)) {
-  if (i %% 50 == 0) cat("Processed", i, "/", length(files), "\n")
-
-  sid <- sids[i]
-  et <- expr[J(sid)]
-  if (nrow(et) == 0) next
-
-  b <- read_beta_subset(files[i], probes_needed)
-  if (nrow(b) == 0) next
-
-  b[, sample := sid]
-  b[, sample_type := ifelse(grepl("-01A$", sample), "Tumor", "Normal")]
-
-  b <- merge(b, pg, by="probe", allow.cartesian=TRUE)
-  if (nrow(b) == 0) next
-
-  genes_here <- unique(b$gene)
-  expr_map <- data.table(gene=genes_here, expr=as.numeric(et[1, ..genes_here]))
-  b <- merge(b, expr_map, by="gene", all.x=TRUE)
-
-  # cancer code (ACC, BLCA, ...)
-  b[, cancer := tstrsplit(sample, "-", fixed=TRUE)[[2]]]
-
-  k <- k + 1L
-  long_list[[k]] <- b[, .(TF, cancer, gene, probe, sample, sample_type, beta, expr)]
-}
-
-long <- rbindlist(long_list[1:k], fill=TRUE)
-if (nrow(long) == 0) stop("Long table empty: no samples had both methylation and expression.")
-
-# write true .tsv.gz
-tmp_long <- sub("[.]gz$", "", out_long)
-fwrite(long, tmp_long, sep="\t")
-system(paste("gzip -f", shQuote(tmp_long)))
-cat("WROTE -> ", out_long, " rows=", nrow(long), "\n", sep="")
-
-# NO minimum-n limit: always attempt cor.test; if it fails, return NA
-cor_spearman <- function(x, y) {
-  ok <- is.finite(x) & is.finite(y)
-  x <- x[ok]; y <- y[ok]
-  ct <- tryCatch(
-suppressWarnings(cor.test(x, y, method="spearman")),
-    error = function(e) NULL
-  )
-  if (is.null(ct)) return(list(n_used=length(x), rho=NA_real_, Pe=NA_real_))
-  list(n_used=length(x), rho=unname(ct$estimate), Pe=ct$p.value)
-}
-
-long[, expr_plot := log2(expr + 1)]
-
-corr <- long[, {
-  allr <- cor_spearman(beta, expr_plot)
-  tr   <- cor_spearman(beta[sample_type=="Tumor"],  expr_plot[sample_type=="Tumor"])
-  nr   <- cor_spearman(beta[sample_type=="Normal"], expr_plot[sample_type=="Normal"])
-
-  list(
-    n_all   = allr$n_used, rho_all   = allr$rho, Pe_all   = allr$Pe,
-    n_tumor = tr$n_used,   rho_tumor = tr$rho,   Pe_tumor = tr$Pe,
-    n_norm  = nr$n_used,   rho_norm  = nr$rho,   Pe_norm  = nr$Pe
-  )
+res <- dat[, {
+  all <- ct(beta, expr)
+  tum <- ct(beta[type=="01A"], expr[type=="01A"])
+  nor <- ct(beta[type=="11A"], expr[type=="11A"])
+  .(rho_all=all$r, p_all=all$p, n_all=all$n,
+    rho_tum=tum$r, p_tum=tum$p, n_tum=tum$n,
+    rho_nor=nor$r, p_nor=nor$p, n_nor=nor$n)
 }, by=.(TF, cancer, gene, probe)]
 
-corr[, Pe_all_adj   := p.adjust(Pe_all,   method="BH"), by=TF]
-corr[, Pe_tumor_adj := p.adjust(Pe_tumor, method="BH"), by=TF]
-corr[, Pe_norm_adj  := p.adjust(Pe_norm,  method="BH"), by=TF]
-
-setorder(corr, Pe_all_adj)
-
-fwrite(corr, out_corr, sep="\t")
-cat("WROTE -> ", out_corr, " rows=", nrow(corr), "\n", sep="")
+out_file <- "./results/methylation/corr_spearman_perCancer.tsv"
+dir.create(dirname(out_file), recursive=TRUE, showWarnings=FALSE)
+fwrite(res[order(p_all)], out_file, sep="\t", quote=FALSE, na="NA")
+cat("Done -> ", out_file, "\n", sep="")
 '
-#! NOT DONE YET IM HERE !LAUNCHED THE ABOVE!
+
+
+
+
 # Plot Volcano plot of the correlation for all cg pairs
 Rscript -e '
 library(data.table)
@@ -8782,11 +8930,11 @@ make_plot <- function(dt, tf, out_html) {
 
 make_plot(copy(dt0),
           "BANP_mm0to2_noCGmm",
-          file.path(out_dir,"BANP_rho_vs_adjustedP_interactive.html"))
+          file.path(out_dir,"BANP_rho_all_spearmann_interactive.html"))
 
 make_plot(copy(dt0),
           "NRF1_mm0to2_noCGmm",
-          file.path(out_dir,"NRF1_rho_vs_adjustedP_interactive.html"))
+          file.path(out_dir,"NRF1_rho_all_spearmann_interactive.html"))
 '
 
 
@@ -8969,8 +9117,8 @@ make_plot <- function(dt, tf, out_html) {
   cat("WROTE -> ", out_html, " (n=", nrow(dt), ")\n", sep="")
 }
 
-make_plot(copy(dt0),"BANP_mm0to2_noCGmm",file.path(out_dir,"BANP_rho_vs_adjustedP_interactive_TSS.html"))
-make_plot(copy(dt0),"NRF1_mm0to2_noCGmm",file.path(out_dir,"NRF1_rho_vs_adjustedP_interactive_TSS.html"))
+make_plot(copy(dt0),"BANP_mm0to2_noCGmm",file.path(out_dir,"BANP_rho_all_spearmann_TSS_interactive.html"))
+make_plot(copy(dt0),"NRF1_mm0to2_noCGmm",file.path(out_dir,"NRF1_rho_all_spearmann_TSS_interactive.html"))
 '
 
 ###########################################################
@@ -9020,7 +9168,9 @@ make_hm <- function(d, tf) {
     cluster_cols = TRUE,
     show_rownames = TRUE,
     fontsize_row = 7,
-    fontsize_col = 10
+    fontsize_col = 10,
+    breaks = seq(-1, 1, length.out = 101),
+  color  = colorRampPalette(c("red", "white", "blue"))(100)
   )
   dev.off()
 
@@ -9037,11 +9187,11 @@ library(pheatmap)
 
 in_file  <- "./results/methylation/corr_beta_expr_ALL_01A11A_with_prox_dist.tsv"
 bed_file <- "./methylation/annotated_methylation_data_probes.bed"
-out_file <- "./results/methylation/NRF1_probe_gene_cluster_summary.tsv"
+out_file <- "./results/methylation/BANP_probe_gene_cluster_spearmann_summary.tsv"
 
 val_col <- "rho_all"
 rho_thr <- 0.5
-tf <- "NRF1_mm0to2_noCGmm"
+tf <- "BANP_mm0to2_noCGmm"
 k <- 8
 
 # --- probe positions (BED: chr start end probe) ---
