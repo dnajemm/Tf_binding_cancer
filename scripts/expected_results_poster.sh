@@ -230,3 +230,182 @@ ggsave(
   width    = 8,
   height   = 5
 );'
+
+
+
+############################################
+# IMCbio presentation expected results
+############################################
+# NRF1 and BANP gene expression for imcbio presentation
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+in_file  <- "./expression/all_samples_NRF1_BANP_expression.tsv"
+col_file <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+out_file <- "./results/expression/NRF1_BANP_boxplot_expression_sameScale_TPMge1_cap50.pdf"
+
+dt <- fread(in_file)
+
+# --- Load cancer colors (2 columns: cancer, color) robustly ---
+cc <- fread(col_file)
+if (ncol(cc) < 2) stop("Color file must have at least 2 columns: cancer and color")
+
+# Keep only first two cols if extra exist
+cc <- cc[, .(cancer = get(names(cc)[1]), color = get(names(cc)[2]))]
+
+# Normalize cancer naming: remove possible "TCGA-" prefix
+cc[, cancer := sub("^TCGA-","", cancer)]
+dt[, cancer := sub("^TCGA-","", cancer)]
+
+# --- Filter expression table ---
+dt <- dt[gene %in% c("NRF1","BANP")]
+dt <- dt[tpm_unstranded >= 1]
+
+# Intersect cancers present in both
+common <- intersect(unique(dt$cancer), unique(cc$cancer))
+dt <- dt[cancer %in% common]
+cc <- cc[cancer %in% common]
+
+# Safety check
+if (nrow(dt) == 0) {
+  stop("After filtering, dt is empty. Check that cancer names match between expression file and color file.")
+}
+
+# Named vector: cancer -> color
+cols <- setNames(cc$color, cc$cancer)
+
+# Keep a consistent cancer order (from color file)
+dt[, cancer := factor(cancer, levels = cc$cancer)]
+
+p <- ggplot(dt, aes(x=cancer, y=tpm_unstranded, fill=cancer)) +
+  geom_boxplot(outlier.shape=NA, width=0.7) +
+  geom_hline(yintercept=1, color="red", linewidth=1) +
+  facet_wrap(~gene, scales="fixed") +
+  scale_fill_manual(values=cols, drop=FALSE) +
+  coord_cartesian(ylim=c(1,50)) +
+  theme_bw(base_size=14) +
+  theme(
+    axis.text.x = element_text(angle=60, hjust=1),
+    legend.position="none",
+    strip.text = element_text(size=14, face="bold")
+  ) +
+  labs(
+    x="Cancer type",
+    y="TPM expression (TPM ≥ 1)",
+    title="NRF1 and BANP Expression Across Cancers"
+  )
+
+ggsave(out_file, p, width=14, height=6)
+cat("Saved:", out_file, "\n")
+'
+
+# expected healthy vs cancer boxplot for imcbio presentation
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+set.seed(1)
+
+# ---------------------------
+# Synthetic "expected" data
+# ---------------------------
+n_healthy <- 60
+n_cancer  <- 120
+
+effect_size <- 1.2   # cancer shift (negative = downregulation)
+sd_common   <- 0.8
+
+expr_healthy <- rnorm(n_healthy, mean=4.0, sd=sd_common)
+expr_cancer  <- rnorm(n_cancer,  mean=4.0 + effect_size, sd=sd_common)
+
+dt <- data.table(
+  group = factor(c(rep("Healthy", n_healthy), rep("Cancer", n_cancer)),
+                 levels=c("Cancer","Healthy")),
+  expr  = c(expr_healthy, expr_cancer)
+)
+
+# Colors you asked for
+cols <- c("Healthy" = "#2EAD64",  # green
+          "Cancer"  = "#E53935")  # red
+
+out_file <- "./expected_healthy_vs_cancer_boxplot_ggplot_style.pdf"
+dir.create(dirname(out_file), recursive=TRUE, showWarnings=FALSE)
+
+p <- ggplot(dt, aes(x=group, y=expr, fill=group)) +
+  geom_boxplot(outlier.shape=NA, width=0.65, color="black") +
+  scale_fill_manual(values=cols) +
+  coord_flip() +
+  theme_bw(base_size=14) +
+  theme(
+    legend.position="none",
+    strip.text = element_text(size=14, face="bold")
+  ) +
+  labs(
+    x="",
+    y="Synthetic gene expression (log2(TPM+1)-like)",
+    title="Expected expression difference (synthetic)"
+  )
+
+ggsave(out_file, p, width=5.6, height=4.2)
+
+cat("Saved:", out_file, "\n")
+'
+
+# cancer type rewiring score plot 
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+col_file <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+
+cc <- fread(col_file)
+if (ncol(cc) < 2) stop("Color file must have at least 2 columns: cancer and color")
+
+cc <- cc[, .(cancer = get(names(cc)[1]), color = get(names(cc)[2]))]
+cc[, cancer := sub("^TCGA-","", cancer)]
+
+cols <- setNames(cc$color, cc$cancer)
+
+df <- data.frame(
+  cancer = c("BRCA","LUAD","COAD","KIRC","ACC","LAML"),
+  rewiring_score = c(0.92, 0.68, 0.48, 0.31, 0.18, 0.12)
+)
+
+df$cancer <- sub("^TCGA-","", df$cancer)
+df <- df[df$cancer %in% names(cols), ]
+if (nrow(df) == 0) stop("After matching with the color file, df is empty. Check cancer names.")
+
+top_n <- 6
+df <- df[order(df$rewiring_score, decreasing = TRUE), ]
+df <- head(df, top_n)
+
+# Order cancers left-to-right by decreasing score
+df$cancer <- factor(df$cancer, levels = df$cancer)
+
+p <- ggplot(df, aes(x = cancer, y = rewiring_score, fill = cancer)) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = cols, drop = FALSE) +
+  scale_y_continuous(
+    limits = c(0, max(df$rewiring_score) * 1.1),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = "Cancer-specific promoter rewiring",
+    x = NULL,
+    y = "Rewiring score"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(face = "bold", angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+
+ggsave("./right_panel_rewiring.png", p, width = 7.5, height = 4.2, dpi = 300, bg = "white")
+cat("Saved: ./right_panel_rewiring.png\n")
+'
+#############################################################################################s
+
