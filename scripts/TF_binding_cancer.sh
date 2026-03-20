@@ -1034,12 +1034,12 @@ cat("Wrote:", out_pdf, "\n")
 '
 
 ###############################################################################
-# 4) MOTIF ∩ ATAC PEAKS
+# 4) MOTIF ∩ ATAC PEAKS --> merged peaks from all samples has 557,832 peaks
 ###############################################################################
 # Overlap the 6mer motifs with the peaks to see which motifs fall within the peaks regions.
 mkdir -p ./motifs/overlaps/motif_peak_overlaps
 
-# Loop through each 6mer motif file and intersect with all peak files from peaks
+# Loop through each 6mer motif file and intersect with all peak files from peaks 
 for file in ./motifs/*_filtered_6mer*.bed; do
    motif_name=$(basename "$file" .bed)
    bedtools intersect -u -a "$file" -b ./peaks/filtered_peaks/merged_peaks.bed > ./motifs/overlaps/motif_peak_overlaps/"${motif_name}_peak_overlaps.bed"
@@ -1088,6 +1088,38 @@ tab <- data.frame(
 )
 print(tab)
 "
+
+# plot the euler diagram of the 2mm motifs and peaks overlaps for NRF1 and BANP : output pdf file with 4 pages : 1 page NRF1 mm0to2, 1 page NRF1 mm0to_noCGmm,  1 page BANP mm0to2, 1 page BANP mm0to_noCGmm.
+Rscript -e '
+library(data.table)
+library(eulerr)
+
+id3 <- function(f) {
+  if (endsWith(f, ".gz")) {
+    unique(fread(cmd=paste("zcat", f), header=FALSE)[, paste(V1,V2,V3,sep=":")])
+  } else {
+    unique(fread(f, header=FALSE)[, paste(V1,V2,V3,sep=":")])
+  }
+}
+
+dir.create("./results/multi_omics", recursive=TRUE, showWarnings=FALSE)
+pdf("./results/multi_omics/euler_2mmmotif_peak_overlaps.pdf", width=7, height=7)
+
+# NRF1
+m <- length(id3("./motifs/NRF1_mm0to2_noCGmm.bed.gz"))
+p <- length(id3("./peaks/filtered_peaks/merged_peaks.bed"))
+o <- length(id3("./motifs/overlaps/motif2mm_peak_overlaps/NRF1_mm0to2_noCGmm_peak_overlaps.bed"))
+plot(euler(c(Motifs=m-o, Peaks=p-o, "Motifs&Peaks"=o)), quantities=TRUE, main="NRF1 mm0to2 noCGmm")
+
+# BANP
+m <- length(id3("./motifs/BANP_mm0to2_noCGmm.bed.gz"))
+p <- length(id3("./peaks/filtered_peaks/merged_peaks.bed"))
+o <- length(id3("./motifs/overlaps/motif2mm_peak_overlaps/BANP_mm0to2_noCGmm_peak_overlaps.bed"))
+plot(euler(c(Motifs=m-o, Peaks=p-o, "Motifs&Peaks"=o)), quantities=TRUE, main="BANP mm0to2 noCGmm")
+
+dev.off()
+'
+
 
 ###############################################################################
 # 5) MOTIF ∩ PEAK ∩ HM450
@@ -3591,7 +3623,7 @@ cat("DONE -> ", out_pdf, "\n", sep="")
 
 
 ###########################################################################################################################
-# QUANTIFICATION OF % OF CpGs WITH |DELTA| >= 20% IN NRF1 AND BANP MOTIFS (mm0to2 vs noCGmm mm0to2) AND IN ATAC PEAKS
+# QUANTIFICATION OF % OF CpGs WITH |DELTA| >= 20% IN NRF1 AND BANP MOTIFS (mm0to2 vs noCGmm mm0to2) AND IN ATAC PEAKS for only pairs with healthy vs tumor samples (filtered pairs file)
 ###########################################################################################################################
 Rscript -e '
 suppressPackageStartupMessages({library(data.table)})
@@ -4143,6 +4175,289 @@ for (setdir in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
   dev.off()
 }
 '
+
+
+# IM HERE 
+# merge the big matrix so that probes that affect the same motif are merged together and the motif associated with each probe is indicated in the rownames. 
+Rscript -e '
+library(data.table)
+
+in_root  <- "./methylation/delta20_cg_lists/cg_presence_matrices"
+map_root <- "./motifs/overlaps/intersected_motifs2mm_HM450"
+out_root <- "./methylation/delta20_cg_lists/motif_presence_matrices"
+dir.create(out_root, recursive=TRUE, showWarnings=FALSE)
+
+setdirs <- list.dirs(in_root, recursive=FALSE, full.names=TRUE)
+
+for (k in seq_along(setdirs)) {
+  setdir <- setdirs[k]
+  tf <- basename(setdir)
+
+  big_file <- file.path(setdir, paste0("big_matrix_", tf, ".tsv.gz"))
+  map_file <- file.path(map_root, paste0(tf, "_probeXmotif.tsv"))
+  out_dir  <- file.path(out_root, tf)
+  out_file <- file.path(out_dir, paste0("big_matrix_", tf, "_motif_count.tsv.gz"))
+
+  cat("\n[", k, "/", length(setdirs), "] ", tf, "\n", sep="")
+
+  if (!file.exists(big_file) || !file.exists(map_file)) {
+    cat("  missing file, skipping\n")
+    next
+  }
+
+  dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+  cat("  reading big matrix...\n")
+  dt <- fread(cmd=paste("zcat", shQuote(big_file)))
+  m <- as.matrix(dt[, -1, with=FALSE])
+  rownames(m) <- dt[[1]]
+  colnames(m) <- names(dt)[-1]
+  storage.mode(m) <- "numeric"
+  m[is.na(m)] <- 0
+  cat("  probes in matrix:", nrow(m), "| patients:", ncol(m), "\n")
+
+  cat("  reading probeXmotif...\n")
+  mp <- fread(map_file, header=FALSE)
+  mp <- unique(mp[, .(
+    probe = V4,
+    motif = paste(V5, V6, V7, V8, sep=":")
+  )])
+  cat("  probe-motif pairs:", nrow(mp), "| motifs:", uniqueN(mp$motif), "\n")
+
+  mp <- mp[probe %in% rownames(m)]
+  cat("  mapped probes kept:", uniqueN(mp$probe), "\n")
+  if (nrow(mp) == 0) {
+    cat("  no overlap, skipping\n")
+    next
+  }
+
+  cat("  merging...\n")
+  idx <- split(match(mp$probe, rownames(m)), mp$motif)
+
+  merged <- t(sapply(idx, function(i) {
+    if (length(i) == 1) m[i, ] else colSums(m[i, , drop=FALSE])
+  }))
+
+  merged <- as.data.table(merged, keep.rownames="motif")
+  cat("  merged motifs:", nrow(merged), "\n")
+
+  cat("  writing output...\n")
+  fwrite(merged, out_file, sep="\t")
+  cat("  saved:", out_file, "\n")
+}
+'
+# plot the merged altered motifs
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+in_root  <- "./methylation/delta20_cg_lists/motif_presence_matrices"
+map_root <- "./motifs/overlaps/intersected_motifs2mm_HM450"
+out_dir  <- "./results/methylation/heatmap_motif_binary_gene_filtered"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+pairs <- fread("./methylation/sample_pairs_files/methylation_pairs_filtered.tsv")
+meta  <- unique(pairs[, .(patient, cancer)])
+
+pg <- fread("./methylation/probe_gene_pairs_in_motifs.tsv")[, .(probe, gene)]
+pg <- unique(pg)
+
+for (d in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
+
+  tf <- basename(d)
+
+  f_count <- file.path(d, paste0("big_matrix_", tf, "_motif_count.tsv.gz"))
+  f_map   <- file.path(map_root, paste0(tf, "_probeXmotif.tsv"))
+
+  if (!file.exists(f_count) || !file.exists(f_map)) next
+
+  cat("Processing:", tf, "\n")
+
+  dt <- fread(cmd=paste("zcat", shQuote(f_count)))
+  m <- as.matrix(dt[, -1, with=FALSE])
+  rownames(m) <- dt[[1]]
+  colnames(m) <- names(dt)[-1]
+  storage.mode(m) <- "numeric"
+  m[is.na(m)] <- 0
+
+  # binary
+  m <- (m > 0) * 1
+
+  # fix motif IDs
+  rownames(m) <- sub(":[ACGT]+$", ":+", rownames(m))
+
+  # remove empty motifs
+  m <- m[rowSums(m) > 0, , drop=FALSE]
+  if (nrow(m) == 0) next
+
+  # motif -> gene
+  mp <- fread(f_map, header=FALSE)[, .(
+    probe = V4,
+    motif = paste(V5, V6, V7, V10, sep=":")
+  )]
+
+  mg <- unique(merge(mp, pg, by="probe")[, .(motif, gene)])
+
+  g <- mg$gene[match(rownames(m), mg$motif)]
+  g[is.na(g)] <- "no_gene"
+
+  row_lab <- paste0(g, " | ", rownames(m))
+
+  # FILTER: keep motifs shared in >=10 patients
+  keep <- rowSums(m) >= 10
+  m <- m[keep, , drop=FALSE]
+  row_lab <- row_lab[keep]
+  if (nrow(m) == 0) next
+
+  # rename columns
+  meta_sub <- meta[match(colnames(m), patient)]
+  colnames(m) <- paste0(meta_sub$cancer, "-", meta_sub$patient)
+
+  # order rows
+  o <- order(rowSums(m), decreasing=TRUE, rownames(m))
+  m <- m[o, , drop=FALSE]
+  row_lab <- row_lab[o]
+
+  # group columns by cancer
+  ordc <- order(meta_sub$cancer, meta_sub$patient)
+  m <- m[, ordc, drop=FALSE]
+
+  pdf(file.path(out_dir, paste0(tf, "_min10.pdf")), width=14, height=20)
+  pheatmap(
+    m,
+    color = c("white", "yellow"),
+    breaks = c(-0.5, 0.5, 1.5),
+    cluster_rows = FALSE,
+    cluster_cols = FALSE,
+    labels_row = row_lab,
+    show_rownames = TRUE,
+    show_colnames = TRUE,
+    fontsize_row = 4,
+    fontsize_col = 4,
+    border_color = "grey70",
+    main = paste0(tf, " | motifs≥10 samples=", nrow(m))
+  )
+  dev.off()
+}
+'
+# NEW IM HERE
+# to build cancer specific matrix : an altered motif is considered present in a cancer if it is present in at least 50% of the patients of that cancer. 
+Rscript -e '
+library(data.table)
+library(pheatmap)
+
+# paths
+in_root  <- "./methylation/delta20_cg_lists/motif_presence_matrices"
+map_root <- "./motifs/overlaps/intersected_motifs2mm_HM450"
+out_dir  <- "./results/methylation/heatmap_motif_by_cancer_50pct_gene"
+dir.create(out_dir, recursive=TRUE, showWarnings=FALSE)
+
+# sample -> cancer
+pairs <- fread("./methylation/sample_pairs_files/methylation_pairs_filtered.tsv")
+meta  <- unique(pairs[, .(patient, cancer)])
+
+# probe -> gene
+pg <- fread("./methylation/probe_gene_pairs_in_motifs.tsv")[, .(probe, gene)]
+pg <- unique(pg)
+
+for (d in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
+
+  tf <- basename(d)
+
+  f_count <- file.path(d, paste0("big_matrix_", tf, "_motif_count.tsv.gz"))
+  f_map   <- file.path(map_root, paste0(tf, "_probeXmotif.tsv"))
+
+  if (!file.exists(f_count) || !file.exists(f_map)) next
+
+  cat("Processing:", tf, "\n")
+
+  # read matrix
+  dt <- fread(cmd=paste("zcat", shQuote(f_count)))
+  m <- as.matrix(dt[, -1, with=FALSE])
+  rownames(m) <- dt[[1]]
+  colnames(m) <- names(dt)[-1]
+  storage.mode(m) <- "numeric"
+  m[is.na(m)] <- 0
+
+  # binary
+  m <- (m > 0) * 1
+
+  # fix motif IDs
+  rownames(m) <- sub(":[ACGT]+$", ":+", rownames(m))
+
+  # remove empty motifs
+  m <- m[rowSums(m) > 0, , drop=FALSE]
+  if (nrow(m) == 0) next
+
+  # motif -> gene
+  mp <- fread(f_map, header=FALSE)[, .(
+    probe = V4,
+    motif = paste(V5, V6, V7, V10, sep=":")
+  )]
+
+  mg <- unique(merge(mp, pg, by="probe")[, .(motif, gene)])
+
+  g <- mg$gene[match(rownames(m), mg$motif)]
+  g[is.na(g)] <- "no_gene"
+
+  row_lab <- paste0(g, " | ", rownames(m))
+
+  # build cancer-level matrix
+  meta_sub <- meta[match(colnames(m), patient)]
+  cancers <- unique(meta_sub$cancer)
+
+  mc <- sapply(cancers, function(ca) {
+    cols <- which(meta_sub$cancer == ca)
+    rowSums(m[, cols, drop=FALSE])
+  })
+  mc <- as.matrix(mc)
+  colnames(mc) <- cancers
+
+  # proportions
+  n_patients <- table(meta_sub$cancer)
+  prop <- sweep(mc, 2, n_patients, "/")
+
+  # ≥50% rule
+  present <- (prop >= 0.5) * 1
+
+  # remove empty motifs
+  present <- present[rowSums(present) > 0, , drop=FALSE]
+  if (nrow(present) == 0) next
+
+  # order rows
+  o <- order(rowSums(present), decreasing=TRUE, rownames(present))
+  present <- present[o, , drop=FALSE]
+  row_lab <- row_lab[o]
+
+  # order columns
+  present <- present[, sort(colnames(present)), drop=FALSE]
+
+  # ADD sample size directly to column names
+  colnames(present) <- paste0(
+    colnames(present),
+    " (N=", n_patients[colnames(present)], ")"
+  )
+
+  # plot
+  pdf(file.path(out_dir, paste0(tf, "_by_cancer_gene.pdf")), width=14, height=25)
+  pheatmap(
+    present,
+    color = c("white", "red"),
+    breaks = c(-0.5, 0.5, 1.5),
+    cluster_rows = FALSE,
+    cluster_cols = TRUE,
+    labels_row = row_lab,
+    show_rownames = TRUE,
+    show_colnames = TRUE,
+    fontsize_row = 5,
+    fontsize_col = 8,
+    border_color = "grey70",
+    main = paste0(tf, " | ≥50% patients per cancer")
+  )
+  dev.off()
+}
+'
+
 ##################################################################################################################################################
 # Barplot of the number of CpGs with |delta| >= 20% in each motif∩peaks set across all pairs, grouped by cancer type.
 ##################################################################################################################################################
@@ -4408,94 +4723,10 @@ fwrite(
 # BANP has 324 genes that have at least one motif instance with a CpG with |delta| >= 20% in proximal region
 # NRF1 has 1022 genes that have at least one motif instance with a CpG with |delta| >= 20% in proximal region
 
-# IM HERE!!!
-# To look if those genes are differentially expressed in the same patients (if we have expression data for those patients) and if the direction of expression change is consistent with the direction of methylation change (hypo = up, hyper = down). This is for the genes that have at least one motif instance with a CpG with |delta| >= 20% in proximal region. We will need to check the expression data for those patients and see if those genes are differentially expressed and if the direction of change is consistent with the methylation change.
-Rscript -e '
-library(data.table)
-
-cat("STEP 1/9 - Loading input files...\n")
-genes <- fread("./methylation/delta20_cg_lists/motif_presence_matrices/BANP_mm0to2_noCGmm/Gene_counts_per_cancer_BANP_mm0to2_noCGmm_proximal.tsv")
-expr  <- fread("./expression/gene_expression_matrix_3d4d_noOV.tsv")
-cat("  genes table rows: ", nrow(genes), "\n", sep="")
-cat("  expression table rows: ", nrow(expr), "\n", sep="")
-cat("  expression table cols: ", ncol(expr), "\n", sep="")
-
-cat("STEP 2/9 - Extracting unique genes...\n")
-genes <- unique(genes$gene)
-cat("  unique genes kept: ", length(genes), "\n", sep="")
-
-cat("STEP 3/9 - Keeping only expression columns for selected genes...\n")
-keep_cols <- intersect(c("sample", genes), names(expr))
-expr <- expr[, ..keep_cols]
-cat("  kept columns: ", length(keep_cols), "\n", sep="")
-cat("  genes found in expression matrix: ", length(setdiff(keep_cols, "sample")), "\n", sep="")
-
-cat("STEP 4/9 - Checking sample column...\n")
-print(head(expr$sample, 5))
-
-cat("STEP 5/9 - Reshaping expression matrix to long format...\n")
-expr_long <- melt(expr, id.vars="sample", variable.name="gene", value.name="expression")
-cat("  long table rows: ", nrow(expr_long), "\n", sep="")
-
-cat("STEP 6/9 - Extracting sample type from last barcode field...\n")
-expr_long[, last_field := tstrsplit(sample, "-", keep=6)]
-expr_long[, type := substr(last_field, 1, 2)]
-
-cat("  first extracted sample/type pairs:\n")
-print(unique(expr_long[, .(sample, last_field, type)])[1:10])
-
-cat("  type counts before filtering:\n")
-print(expr_long[, .N, by=type][order(-N)][1:20])
-
-expr_long <- expr_long[type %in% c("01","11")]
-expr_long[, group := ifelse(type=="01", "Tumor", "Healthy")]
-
-cat("  rows after keeping only 01/11 samples: ", nrow(expr_long), "\n", sep="")
-cat("  tumor rows: ", expr_long[group=="Tumor", .N], "\n", sep="")
-cat("  healthy rows: ", expr_long[group=="Healthy", .N], "\n", sep="")
-
-cat("STEP 7/9 - Removing missing expression values...\n")
-expr_long <- expr_long[!is.na(expression)]
-cat("  rows after NA removal: ", nrow(expr_long), "\n", sep="")
-
-cat("STEP 8/9 - Running Wilcoxon test per gene...\n")
-res <- expr_long[, {
-  if (uniqueN(group) < 2) {
-    list(
-      p_value = NA_real_,
-      mean_tumor = NA_real_,
-      mean_healthy = NA_real_
-    )
-  } else {
-    w <- wilcox.test(expression ~ group)
-    list(
-      p_value = w$p.value,
-      mean_tumor = mean(expression[group=="Tumor"], na.rm=TRUE),
-      mean_healthy = mean(expression[group=="Healthy"], na.rm=TRUE)
-    )
-  }
-}, by = gene]
-cat("  result rows: ", nrow(res), "\n", sep="")
-
-cat("STEP 9/9 - Adjusting p-values, adding direction, saving...\n")
-res[, p_adj := p.adjust(p_value, method="BH")]
-res[, direction := fifelse(mean_tumor > mean_healthy, "up_in_tumor",
-                    fifelse(mean_tumor < mean_healthy, "down_in_tumor", "no_change"))]
-
-fwrite(res, "./results/gene_expression_diff.tsv", sep="\t")
-cat("  saved file: ./results/gene_expression_diff.tsv\n")
-
-cat("\nTOP 20 GENES BY ADJUSTED P-VALUE:\n")
-print(res[order(p_adj)][1:min(20, .N)])
-
-cat("\nDONE.\n")
-'
 
 
 
 
-
-]
 ###########################################################################################
 # SMOOTH SCATTER PLOT FOR REPLICATES for 6 mer motifs
 ###########################################################################################
