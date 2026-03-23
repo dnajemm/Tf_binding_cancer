@@ -21,7 +21,7 @@ conda activate ./conda_envs/TF_binding_cancer_env
 # BANP 
 ###############################################################################
 
-# Install MEM BANP of JASPAR 2025 and put it in the folder of MEME:
+# Install MEM BANP of JASPAR 2026 and put it in the folder of MEME:
 
 #wget "https://jaspar.elixir.no/api/v1/matrix/MA2503.1.meme" -O /data/genome/motifs/jaspar_2024/meme/vertebrata/MA2503.1.meme.  <--DIDNT DO IT BECAUSE NO PERMISSION
 
@@ -4457,6 +4457,18 @@ for (d in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
   dev.off()
 }
 '
+# not done yet
+#############################################################
+# All tumor vz all healthy samples not only on paired samples
+#############################################################
+
+
+
+
+
+
+
+
 
 ##################################################################################################################################################
 # Barplot of the number of CpGs with |delta| >= 20% in each motif∩peaks set across all pairs, grouped by cancer type.
@@ -7451,6 +7463,529 @@ p <- ggplot(df, aes(x = reorder(cancer, delta), y = delta)) +
 ggsave("./results/methylation/methylation_motif_mutation_overlap/NRF1_delta_beta_per_cancer.pdf", plot = p, width = 12, height = 12)
 '
 
+# IM HERE
+####################################################################################################
+# Build a presence mutation only SNV matrix across the 34+4d samples across cancer type
+####################################################################################################
+# 1) filter the vcf files to keep only snv --> ./snv/filtered_SNV/
+mkdir -p ./snv/filtered_SNV
+
+max_jobs=10
+
+for file in ./snv/snv_filtered_without_structural_variants/*.vcf.gz; do
+    echo "Processing $file"
+    bcftools view -v snps "$file" -Oz -o "./snv/filtered_SNV/$(basename "$file")" &
+
+    while [ "$(jobs -r | wc -l)" -ge "$max_jobs" ]; do
+        sleep 2
+    done
+done
+
+wait
+
+# 2) build a unique list of SNVs in motifs per cancer type 
+awk -F'\t' '{
+    # Split the last column by colon
+    split($NF, a, ":"); 
+    ref = a[3]; 
+    alt = a[4]; 
+    # Keep only if both Ref and Alt are 1 character long
+    if (length(ref) == 1 && length(alt) == 1) print $0 
+}' ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif.bed > ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif_filtered_snvs.bed
+
+awk -F'\t' '{
+    # Split the last column by colon
+    split($NF, a, ":"); 
+    ref = a[3]; 
+    alt = a[4]; 
+    # Keep only if both Ref and Alt are 1 character long
+    if (length(ref) == 1 && length(alt) == 1) print $0 
+}' ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif.bed > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif_filtered_snvs.bed
+# IM HERE 
+# filter out OV samples from the metadata file to keep only 3d and 4d samples for the presence/absence matrix
+awk '$2!="OV"' ./results/multi_omics/samples_3d+4d.tsv > ./results/multi_omics/samples_3d+4d_noOV.tsv
+
+# 3)build a presence/absence matrix of SNVs in motifs across samples and cancer types (rows = SNVs, columns = samples, values = 1 if SNV is present in sample, 0 otherwise)
+Rscript -e '
+library(data.table)
+library(parallel)
+
+# ===== choose motif =====
+# motif_name <- "NRF1_mm0to2_noCGmm"
+motif_name <- "BANP_mm0to2_noCGmm"
+
+overlap_file <- paste0("./snv/overlaps/snv_in_motifs2mm/", motif_name, "_SNVs_in_motifs_SNVidxmotif_filtered_snvs.bed")
+meta_file    <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+vcf_dir      <- "./snv/filtered_SNV"
+outdir       <- file.path("./snv/SNVs_presence_matrix_motifs2mm", motif_name)
+
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+# ===== helper: extract TCGA patient/sample ID like TCGA-OR-A5J1 =====
+get_tcga_id <- function(x) {
+  m <- regexpr("TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}", x)
+  if (m[1] == -1) return(NA_character_)
+  regmatches(x, m)
+}
+
+# ===== unique SNVs overlapping motifs =====
+ov <- fread(overlap_file, sep = "\t", header = FALSE)
+snvs <- sort(unique(ov[[ncol(ov)]]))   # last column = chr:pos:ref:alt
+
+# ===== sample / cancer metadata =====
+meta <- fread(meta_file, header = FALSE)
+setnames(meta, c("sample","cancer","SNV","METH","RNA","ATAC"))
+
+# ===== keep only VCFs whose extracted TCGA ID is in metadata =====
+vcfs <- list.files(vcf_dir, pattern = "vcf.gz", full.names = TRUE)
+vcf_samples <- vapply(basename(vcfs), get_tcga_id, character(1))
+vcfs <- vcfs[vcf_samples %in% meta$sample]
+
+cat("Number of motif SNVs:", length(snvs), "\n")
+cat("Number of matched VCFs:", length(vcfs), "\n")
+flush.console()
+
+# ===== for one sample VCF, keep motif-SNVs present in that sample =====
+get_hits <- function(f) {
+  sample <- get_tcga_id(basename(f))
+  cat("Processing sample:", sample, "\n")
+  flush.console()
+
+  dt <- fread(cmd = paste("zcat", shQuote(f)), sep = "\t", header = FALSE, skip = "#CHROM")
+  if (nrow(dt) == 0) return(NULL)
+
+  dt[, SNV_ID := paste(V1, V2, V4, V5, sep = ":")]
+  hit <- unique(dt[SNV_ID %in% snvs, .(SNV = SNV_ID)])
+  if (nrow(hit) == 0) return(NULL)
+
+  hit[, sample := sample]
+  hit
+}
+
+# ===== scan sample VCFs in parallel =====
+res <- rbindlist(mclapply(vcfs, get_hits, mc.cores = 10), fill = TRUE)
+
+cat("Number of sample-SNV hits found:", nrow(res), "\n")
+flush.console()
+
+if (nrow(res) > 0) {
+  res <- merge(res, meta[, .(sample, cancer)], by = "sample")
+}
+
+# ===== build one matrix per cancer type =====
+for (cc in sort(unique(meta$cancer))) {
+  cat("Writing matrix for cancer type:", cc, "\n")
+  flush.console()
+
+  samples_cc <- meta[cancer == cc, sample]
+  sub <- if (nrow(res) > 0) res[cancer == cc] else data.table()
+
+  if (nrow(sub) > 0) {
+    sub[, value := 1L]
+    mat <- dcast(sub, SNV ~ sample, value.var = "value", fill = 0)
+  } else {
+    mat <- data.table(SNV = snvs)
+  }
+
+  missing_samples <- setdiff(samples_cc, names(mat))
+  for (s in missing_samples) mat[, (s) := 0L]
+
+  mat <- merge(data.table(SNV = snvs), mat, by = "SNV", all.x = TRUE)
+  for (j in setdiff(names(mat), "SNV")) {
+    set(mat, which(is.na(mat[[j]])), j, 0L)
+  }
+
+  fwrite(mat, file.path(outdir, paste0(cc, "_SNV_presence_matrix.tsv")), sep = "\t")
+}
+'
+
+# 4) build one big matrix with all cancers together (rows = SNVs, columns = TCGA-cancer-samples, values = 1 if SNV is present in sample, 0 otherwise)
+Rscript -e '
+library(data.table)
+
+indir <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm"
+outfile <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/all_cancers_SNV_presence_matrix.tsv"
+
+files <- list.files(indir, pattern = "_SNV_presence_matrix.tsv$", full.names = TRUE)
+
+lst <- lapply(files, function(f) {
+  cancer <- sub("_SNV_presence_matrix.tsv", "", basename(f), fixed = TRUE)
+  cat("Adding cancer type:", cancer, "\n")
+  flush.console()
+
+  dt <- fread(f)
+  sample_cols <- setdiff(names(dt), "SNV")
+  setnames(dt, sample_cols, paste(cancer, sample_cols, sep = "_"))
+  dt
+})
+
+mat <- Reduce(function(x, y) merge(x, y, by = "SNV", all = TRUE), lst)
+
+for (j in setdiff(names(mat), "SNV")) {
+  set(mat, which(is.na(mat[[j]])), j, 0L)
+}
+
+fwrite(mat, outfile, sep = "\t")
+'
+
+# add motif information to the SNV presence matrix (chr:pos:ref:alt) by merging with the original overlap file that contains the motif information for each SNV
+Rscript -e '
+library(data.table)
+
+motif_name   <- "NRF1_mm0to2_noCGmm"
+overlap_file <- paste0("./snv/overlaps/snv_in_motifs2mm/", motif_name, "_SNVs_in_motifs_SNVidxmotif_filtered_snvs.bed")
+matrix_file  <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_SNV_presence_matrix.tsv")
+out_file     <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_SNV_presence_matrix_annotated.tsv")
+
+cat("Step 1: Loading overlap file...\n"); flush.console()
+ov <- fread(overlap_file, header = FALSE)
+
+setnames(ov, c("motif_chr","motif_start","motif_end","motif_seq","motif_score","motif_strand","snv_chr","snv_start","snv_end","SNV"))
+
+cat("Number of overlap rows:", nrow(ov), "\n"); flush.console()
+
+cat("Step 2: Building SNV -> motif annotation...\n"); flush.console()
+annot <- ov[, .(
+  motif_name   = motif_name,
+  motif_chr    = paste(unique(motif_chr), collapse=";"),
+  motif_start  = paste(unique(motif_start), collapse=";"),
+  motif_end    = paste(unique(motif_end), collapse=";"),
+  motif_seq    = paste(unique(motif_seq), collapse=";"),
+  motif_score  = paste(unique(motif_score), collapse=";"),
+  motif_strand = paste(unique(motif_strand), collapse=";")
+), by = SNV]
+
+cat("Number of unique SNVs annotated:", nrow(annot), "\n"); flush.console()
+
+cat("Step 3: Loading SNV matrix...\n"); flush.console()
+mat <- fread(matrix_file)
+cat("Matrix dimensions:", nrow(mat), "rows,", ncol(mat), "columns\n"); flush.console()
+
+cat("Step 4: Merging annotation with matrix...\n"); flush.console()
+mat_annot <- merge(annot, mat, by = "SNV", all.y = TRUE)
+
+cat("Annotated matrix dimensions:", nrow(mat_annot), "rows,", ncol(mat_annot), "columns\n"); flush.console()
+
+cat("Step 5: Writing output file...\n"); flush.console()
+fwrite(mat_annot, out_file, sep = "\t")
+
+cat("Done. Output written to:", out_file, "\n"); flush.console()
+'
+
+# add the linked gene information to the SNV presence matrix by merging with the original overlap file that contains the linked gene information for each SNV (if available)
+Rscript -e '
+library(data.table)
+
+# motif_name   <- "NRF1_mm0to2_noCGmm"
+motif_name <- "BANP_mm0to2_noCGmm"
+
+overlap_file <- paste0("./snv/overlaps/snv_in_motifs2mm/", motif_name, "_SNVs_in_motifs_SNVidxmotif_filtered_snvs.bed")
+gene_file    <- paste0("./motifs/", motif_name, "_closest_genes.bed")
+matrix_file  <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_SNV_presence_matrix.tsv")
+out_file     <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_SNV_presence_matrix_annotated_with_gene.tsv")
+
+cat("Step 1: Loading overlap file...\n"); flush.console()
+ov <- fread(overlap_file, header = FALSE)
+setnames(ov, c("motif_chr","motif_start","motif_end","motif_seq","motif_score","motif_strand",
+               "snv_chr","snv_start","snv_end","SNV"))
+cat("Overlap rows:", nrow(ov), "\n"); flush.console()
+
+cat("Step 2: Loading closest-gene file...\n"); flush.console()
+g <- fread(gene_file, header = FALSE, skip = 1)
+setnames(g, c("chrom_motif","start_motif","end_motif","motif","pvalue","strand_motif",
+              "chrom_gene","start_gene","end_gene","gene","gene_id","transcript_id","strand_gene","distance"))
+cat("Closest-gene rows:", nrow(g), "\n"); flush.console()
+
+cat("Step 3: Merging motif overlaps with closest-gene annotations...\n"); flush.console()
+ann0 <- merge(
+  ov,
+  g,
+  by.x = c("motif_chr","motif_start","motif_end","motif_seq","motif_strand"),
+  by.y = c("chrom_motif","start_motif","end_motif","motif","strand_motif"),
+  all.x = TRUE
+)
+cat("Merged annotation rows:", nrow(ann0), "\n"); flush.console()
+
+cat("Step 4: Collapsing to one annotation row per SNV...\n"); flush.console()
+annot <- ann0[, .(
+  motif_name    = motif_name,
+  motif_chr     = paste(unique(na.omit(motif_chr)), collapse=";"),
+  motif_start   = paste(unique(na.omit(motif_start)), collapse=";"),
+  motif_end     = paste(unique(na.omit(motif_end)), collapse=";"),
+  motif_seq     = paste(unique(na.omit(motif_seq)), collapse=";"),
+  motif_score   = paste(unique(na.omit(motif_score)), collapse=";"),
+  motif_strand  = paste(unique(na.omit(motif_strand)), collapse=";"),
+  gene          = paste(unique(na.omit(gene)), collapse=";"),
+  gene_id       = paste(unique(na.omit(gene_id)), collapse=";"),
+  transcript_id = paste(unique(na.omit(transcript_id)), collapse=";"),
+  gene_chr      = paste(unique(na.omit(chrom_gene)), collapse=";"),
+  gene_start    = paste(unique(na.omit(start_gene)), collapse=";"),
+  gene_end      = paste(unique(na.omit(end_gene)), collapse=";"),
+  gene_strand   = paste(unique(na.omit(strand_gene)), collapse=";"),
+  distance      = paste(unique(na.omit(distance)), collapse=";")
+), by = SNV]
+cat("Unique annotated SNVs:", nrow(annot), "\n"); flush.console()
+
+cat("Step 5: Loading all-cancers matrix...\n"); flush.console()
+mat <- fread(matrix_file)
+cat("Matrix dimensions:", nrow(mat), "rows,", ncol(mat), "columns\n"); flush.console()
+
+cat("Step 6: Merging annotation into matrix...\n"); flush.console()
+mat_annot <- merge(annot, mat, by = "SNV", all.y = TRUE)
+cat("Annotated matrix dimensions:", nrow(mat_annot), "rows,", ncol(mat_annot), "columns\n"); flush.console()
+
+cat("Step 7: Writing output...\n"); flush.console()
+fwrite(mat_annot, out_file, sep = "\t")
+
+cat("Done. Output written to:", out_file, "\n"); flush.console()
+'
+
+#filter out SNV that are not present in any samples to reduce the size of the matrix.
+Rscript -e '
+library(data.table)
+
+infile  <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/all_cancers_SNV_presence_matrix_annotated_with_gene.tsv"
+outfile <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/all_cancers_SNV_presence_matrix_annotated_with_gene_filtered.tsv"
+
+cat("Step 1: Loading matrix...\n"); flush.console()
+dt <- fread(infile)
+
+annot_cols <- c("SNV","motif_name","motif_chr","motif_start","motif_end","motif_seq","motif_score",
+                "motif_strand","gene","gene_id","transcript_id","gene_chr","gene_start",
+                "gene_end","gene_strand","distance")
+
+sample_cols <- setdiff(names(dt), annot_cols)
+
+cat("Rows before filtering:", nrow(dt), "\n"); flush.console()
+
+dt[, total_presence := rowSums(.SD), .SDcols = sample_cols]
+dt_filt <- dt[total_presence > 0]
+dt_filt[, total_presence := NULL]
+
+cat("Rows after filtering:", nrow(dt_filt), "\n"); flush.console()
+cat("Rows removed:", nrow(dt) - nrow(dt_filt), "\n"); flush.console()
+
+cat("Step 2: Writing filtered matrix...\n"); flush.console()
+fwrite(dt_filt, outfile, sep = "\t")
+
+cat("Done. Output written to:", outfile, "\n"); flush.console()
+'
+
+# Build the motif alteration matrix , where rows are motifs (instead of SNVs) and values indicate whether any SNV in that motif is present in each sample.
+Rscript -e '
+library(data.table)
+
+infile  <- "./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/all_cancers_SNV_presence_matrix_annotated_with_gene_filtered.tsv"
+outfile <- "./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/all_cancers_MOTIF_presence_matrix.tsv"
+
+cat("Step 1: Loading SNV matrix...\n"); flush.console()
+dt <- fread(infile)
+
+annot_cols <- c(
+  "SNV","motif_name","motif_chr","motif_start","motif_end","motif_seq","motif_score",
+  "motif_strand","gene","gene_id","transcript_id","gene_chr","gene_start",
+  "gene_end","gene_strand","distance"
+)
+
+sample_cols <- setdiff(names(dt), annot_cols)
+
+cat("SNV rows before collapse:", nrow(dt), "\n"); flush.console()
+
+cat("Step 2: Building motif IDs...\n"); flush.console()
+dt[, motif_id := paste(motif_name, motif_chr, motif_start, motif_end, motif_strand, sep="|")]
+
+cat("Unique motifs before collapse:", uniqueN(dt$motif_id), "\n"); flush.console()
+
+cat("Step 3: Collapsing SNVs into motif-level presence...\n"); flush.console()
+motif_dt <- dt[, c(
+  .(
+    motif_name    = first(motif_name),
+    motif_chr     = first(motif_chr),
+    motif_start   = first(motif_start),
+    motif_end     = first(motif_end),
+    motif_seq     = first(motif_seq),
+    motif_score   = first(motif_score),
+    motif_strand  = first(motif_strand),
+    gene          = first(gene),
+    gene_id       = first(gene_id),
+    transcript_id = first(transcript_id),
+    gene_chr      = first(gene_chr),
+    gene_start    = first(gene_start),
+    gene_end      = first(gene_end),
+    gene_strand   = first(gene_strand),
+    distance      = first(distance)
+  ),
+  lapply(.SD, max, na.rm = TRUE)
+), by = motif_id, .SDcols = sample_cols]
+
+cat("Rows after motif collapse:", nrow(motif_dt), "\n"); flush.console()
+
+cat("Step 4: Writing motif-level matrix...\n"); flush.console()
+fwrite(motif_dt, outfile, sep = "\t")
+
+cat("Done. Output written to:", outfile, "\n"); flush.console()
+'
+# motif alteration frequency per cancer type by averaging the presence/absence values of all motifs in each cancer type.
+Rscript -e '
+library(data.table)
+
+infile  <- "./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/all_cancers_MOTIF_presence_matrix.tsv"
+outfile <- "./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/motif_frequency_per_cancer.tsv"
+
+cat("Step 1: Loading motif-level matrix...\n"); flush.console()
+dt <- fread(infile)
+
+annot_cols <- c(
+  "motif_id","motif_name","motif_chr","motif_start","motif_end","motif_seq","motif_score",
+  "motif_strand","gene","gene_id","transcript_id","gene_chr","gene_start",
+  "gene_end","gene_strand","distance"
+)
+
+sample_cols <- setdiff(names(dt), annot_cols)
+
+cat("Number of motifs:", nrow(dt), "\n"); flush.console()
+cat("Number of sample columns:", length(sample_cols), "\n"); flush.console()
+
+m <- as.matrix(dt[, ..sample_cols])
+rownames(m) <- dt$motif_id
+
+cancer <- sub("_.*", "", colnames(m))
+
+cat("Cancer types found:", paste(unique(cancer), collapse=", "), "\n"); flush.console()
+
+cat("Step 2: Computing motif frequency per cancer...\n"); flush.console()
+res <- rbindlist(lapply(unique(cancer), function(cc){
+  cols <- which(cancer == cc)
+  data.table(
+    motif_id = rownames(m),
+    cancer   = cc,
+    freq     = rowMeans(m[, cols, drop=FALSE], na.rm=TRUE)
+  )
+}))
+
+annot <- unique(dt[, .(
+  motif_id, motif_name, motif_chr, motif_start, motif_end, motif_strand,
+  motif_seq, motif_score, gene
+)])
+
+res <- merge(res, annot, by="motif_id", all.x=TRUE)
+
+cat("Step 3: Writing frequency table...\n"); flush.console()
+fwrite(res, outfile, sep="\t")
+
+cat("Done. Output written to:", outfile, "\n"); flush.console()
+'
+
+# gene alteration 
+Rscript -e '
+library(data.table)
+
+infile  <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/all_cancers_MOTIF_presence_matrix.tsv"
+outfile <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/all_cancers_GENE_presence_matrix.tsv"
+
+cat("Step 1: Loading motif matrix...\n"); flush.console()
+dt <- fread(infile)
+
+annot_cols <- c(
+  "motif_id","motif_name","motif_chr","motif_start","motif_end","motif_seq",
+  "motif_score","motif_strand","gene","gene_id","transcript_id","gene_chr",
+  "gene_start","gene_end","gene_strand","distance"
+)
+
+sample_cols <- setdiff(names(dt), annot_cols)
+
+cat("Motifs:", nrow(dt), "\n"); flush.console()
+cat("True sample columns:", length(sample_cols), "\n"); flush.console()
+
+# force sample columns to numeric
+dt[, (sample_cols) := lapply(.SD, as.numeric), .SDcols = sample_cols]
+
+cat("Step 2: Collapsing motifs into gene-level...\n"); flush.console()
+gene_dt <- dt[, lapply(.SD, max, na.rm = TRUE), by = gene, .SDcols = sample_cols]
+
+cat("Genes:", nrow(gene_dt), "\n"); flush.console()
+
+cat("Step 3: Writing output...\n"); flush.console()
+fwrite(gene_dt, outfile, sep = "\t")
+
+cat("Done. Output written to:", outfile, "\n"); flush.console()
+'
+
+# frequency of gene alteration per cancer type by averaging the presence/absence values of all genes in each cancer type.
+Rscript -e '
+library(data.table)
+
+infile  <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/all_cancers_GENE_presence_matrix.tsv"
+outfile <- "./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/gene_frequency_per_cancer.tsv"
+
+cat("Step 1: Loading gene matrix...\n"); flush.console()
+dt <- fread(infile)
+
+sample_cols <- setdiff(names(dt), "gene")
+
+cat("Genes:", nrow(dt), "\n"); flush.console()
+cat("Samples:", length(sample_cols), "\n"); flush.console()
+
+dt[, (sample_cols) := lapply(.SD, as.numeric), .SDcols = sample_cols]
+
+m <- as.matrix(dt[, ..sample_cols])
+rownames(m) <- dt$gene
+
+cancer <- sub("_.*", "", colnames(m))
+
+cat("Cancer types found:", paste(unique(cancer), collapse=", "), "\n"); flush.console()
+
+cat("Step 2: Computing frequency per cancer...\n"); flush.console()
+res <- rbindlist(lapply(unique(cancer), function(cc) {
+  cols <- which(cancer == cc)
+  data.table(
+    gene   = rownames(m),
+    cancer = cc,
+    freq   = rowMeans(m[, cols, drop = FALSE], na.rm = TRUE)
+  )
+}))
+
+cat("Step 3: Writing output...\n"); flush.console()
+fwrite(res, outfile, sep = "\t")
+
+cat("Done. Output written to:", outfile, "\n"); flush.console()
+'
+#IM HERE
+# plot the frequency of the top 50 genes with the highest alteration frequency across cancer types (bubble plot where x-axis = cancer type, y-axis = gene, size/color of points = alteration frequency)
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+infile  <- "./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/gene_frequency_per_cancer.tsv"
+outfile <- "./results/snv/gene_NRF1_frequency_bubbleplot_top100.pdf"
+
+dt <- fread(infile)
+
+top_genes <- dt[, .(max_freq = max(freq, na.rm=TRUE)), by=gene][order(-max_freq)][1:100, gene]
+plot_dt <- dt[gene %in% top_genes & freq > 0]
+
+gene_order <- plot_dt[, .(max_freq = max(freq, na.rm=TRUE)), by=gene][order(max_freq), gene]
+plot_dt[, gene := factor(gene, levels = gene_order)]
+
+pdf(outfile, width=15, height=18)
+
+ggplot(plot_dt, aes(x=cancer, y=gene, size=freq)) +
+  geom_point() +
+  theme_bw() +
+  labs(
+    title = "Gene alteration frequency per cancer",
+    x = "Cancer type",
+    y = "Gene",
+    size = "Frequency"
+  ) +
+  theme(
+    axis.text.x = element_text(angle=45, hjust=1),
+    panel.grid.major = element_line(linewidth=0.2),
+    panel.grid.minor = element_blank()
+  )
+
+dev.off()
+'
 
 ###############################################################################
 # RNAseq script 
