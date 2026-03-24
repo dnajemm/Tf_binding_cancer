@@ -1963,6 +1963,64 @@ cat("Wrote:", out_pdf, "\n")
 '
 
 ###############################################################################
+# NBR OF samples with peaks per cancer type
+###############################################################################
+mkdir -p ./peaks/peak_counts_per_sample/
+
+{
+  echo -e "cancer\tsample_count"
+  for peakfile in ./peaks/filtered_peaks/ATAC_TCGA-*-*.bed; do
+    sample=$(basename "$peakfile" .bed)
+    cancer=$(echo "$sample" | cut -d'-' -f2 | cut -d'_' -f1)
+    echo "$cancer"
+  done | sort | uniq -c | awk '{print "TCGA-"$2"\t"$1}'
+} > ./peaks/peak_counts_per_sample/samples_per_cancer.tsv
+
+# plot the barplot of number of samples with peaks per cancer type
+Rscript -e '
+data <- read.table("./peaks/peak_counts_per_sample/samples_per_cancer.tsv",header=TRUE, sep="\t", stringsAsFactors=FALSE, check.names=FALSE)
+data$sample_count <- as.numeric(data$sample_count)
+data <- data[order(data$sample_count, decreasing=FALSE), ]
+cols <- read.table("./results/multi_omics/cancer_color_order_with_defined_colours.tsv",header=FALSE, sep="\t", stringsAsFactors=FALSE,quote="", comment.char="")
+colnames(cols) <- c("cancer","color")
+palette <- setNames(cols$color, cols$cancer)
+bar_colors <- unname(palette[data$cancer])
+
+# validate colors
+bad <- sapply(bar_colors, function(x) {
+  inherits(try(col2rgb(x), silent=TRUE), "try-error")
+})
+if (any(bad)) {
+  cat("[ERROR] These colors are invalid:\n")
+  print(unique(bar_colors[bad]))
+  quit(status=1)
+}
+
+pdf("./results/peaks/samples_with_peaks_per_cancer_barplot.pdf", width=9, height=9, bg="white")
+
+nice_max <- max(pretty(c(0, data$sample_count)))
+labels <- sub("^TCGA-", "", data$cancer)
+
+par(mar=c(5,8,4,2))
+barplot(
+  data$sample_count,
+  names.arg=labels,
+  horiz=TRUE,
+  las=1,
+  col=bar_colors,
+  border="black",
+  main="Samples with peaks per cancer type",
+  cex.main=2,
+  cex.lab=1.1,
+  cex.names=0.8,
+  xlab="Number of samples",
+  xlim=c(0, nice_max)
+)
+
+dev.off()
+'
+
+###############################################################################
 # 5) DISTANCE OF FILTERED PEAKS TO TSS 
 ###############################################################################
 # Distance of filtered peaks to TSS : generate a file per sample with the distances of each peak to the nearest TSS
@@ -3477,6 +3535,409 @@ if (nrow(pairs) == 0) {
 
 dev.off()
 cat("DONE -> ", out_pdf, " (pages:", pages_written, ")\n", sep="")
+'
+
+#############################################################################
+# create an annotated file with probe_id distance and label proximal distal
+#############################################################################
+awk 'BEGIN{OFS="\t"} {label=(($2 < 0 ? -$2 : $2) <= 2000 ? "proximal" : "distal"); print $1, $2, label}' \
+./methylation/dist_to_tss/HM450_TCGA-ACC-TCGA-OR-A5J1-01A_1_annotated_methylation_filtered_cpg_dist_tss.tsv \
+> ./methylation/probes_tss_annotation.tsv
+
+
+#smoothscatterplot separating proxial vs distal probes to see if we have more methylation changes in one group vs the other
+Rscript -e '
+suppressPackageStartupMessages({
+  library(data.table)
+  library(KernSmooth)
+})
+
+# =========================
+# INPUTS
+# =========================
+pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+annot_file <- "./methylation/probes_tss_annotation.tsv"
+out_pdf    <- "./results/methylation/smoothScatter_mm0to2_proxdist_thr20.pdf"
+thr <- 20
+
+motif_files <- list(
+  NRF1 = "./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_intersected_methylation.bed",
+  BANP = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_intersected_methylation.bed"
+)
+
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# =========================
+# HELPERS
+# =========================
+pct_fmt <- function(x, n) {
+  if (n == 0) return("0%")
+  sprintf("%.1f%%", 100 * x / n)
+}
+
+read_bed_gz <- function(f) {
+  fread(cmd = paste("zcat", shQuote(f)), header = FALSE, showProgress = FALSE)
+}
+
+sum_txt <- function(d, nm, thr) {
+  n <- length(d)
+  hypo  <- sum(d <= -thr, na.rm = TRUE)
+  hyper <- sum(d >=  thr, na.rm = TRUE)
+  unch  <- sum(abs(d) < thr, na.rm = TRUE)
+
+  paste0(
+    nm, " (n=", n, ")\n",
+    "Hypo: ", hypo, " (", pct_fmt(hypo, n), ")\n",
+    "Unchanged: ", unch, " (", pct_fmt(unch, n), ")\n",
+    "Hyper: ", hyper, " (", pct_fmt(hyper, n), ")"
+  )
+}
+
+plot_all <- function(m, d, title, thr) {
+  smoothScatter(
+    m$meth_normal, m$meth_tumor,
+    xlab = "Healthy methylation (%)",
+    ylab = "Tumor methylation (%)",
+    main = title
+  )
+
+  abline(a = 0, b = 1, lwd = 2, col = "black")
+  abline(a = -thr, b = 1, lwd = 2, col = "blue")
+  abline(a =  thr, b = 1, lwd = 2, col = "blue")
+
+  u <- par("usr")
+  text(
+    u[1] + 0.02 * (u[2] - u[1]),
+    u[4] - 0.02 * (u[4] - u[3]),
+    labels = sum_txt(d, "All CpGs", thr),
+    adj = c(0, 1),
+    cex = 0.75
+  )
+}
+
+plot_motif <- function(m, d, motif_probes, title, thr) {
+  is_prox <- m$probe %in% motif_probes & m$cg_proximity == "proximal"
+  is_dist <- m$probe %in% motif_probes & m$cg_proximity == "distal"
+
+  smoothScatter(
+    m$meth_normal, m$meth_tumor,
+    xlab = "Healthy methylation (%)",
+    ylab = "Tumor methylation (%)",
+    main = title
+  )
+
+  points(
+    m$meth_normal[is_prox], m$meth_tumor[is_prox],
+    pch = 16, cex = 0.5, col = rgb(0, 0, 1, 0.6)
+  )
+
+  points(
+    m$meth_normal[is_dist], m$meth_tumor[is_dist],
+    pch = 16, cex = 0.5, col = rgb(1, 0.4, 0.7, 0.6)
+  )
+
+  abline(a = 0, b = 1, lwd = 2, col = "black")
+  abline(a = -thr, b = 1, lwd = 2, col = "blue")
+  abline(a =  thr, b = 1, lwd = 2, col = "blue")
+
+  u <- par("usr")
+
+  # résumé proximal (bleu)
+  text(
+    u[1] + 0.02 * (u[2] - u[1]),
+    u[4] - 0.02 * (u[4] - u[3]),
+    labels = sum_txt(d[is_prox], "Proximal", thr),
+    adj = c(0, 1),
+    cex = 0.70,
+    col = "blue"
+  )
+
+  # résumé distal (rose), placé à côté du bleu
+  text(
+    u[1] + 0.30 * (u[2] - u[1]),
+    u[4] - 0.02 * (u[4] - u[3]),
+    labels = sum_txt(d[is_dist], "Distal", thr),
+    adj = c(0, 1),
+    cex = 0.70,
+    col = rgb(1, 0.4, 0.7, 1)
+  )
+
+  legend(
+    "bottomright",
+    legend = c(
+      paste0("Proximal (n=", sum(is_prox, na.rm = TRUE), ")"),
+      paste0("Distal (n=", sum(is_dist, na.rm = TRUE), ")")
+    ),
+    col = c(rgb(0, 0, 1, 0.8), rgb(1, 0.4, 0.7, 0.8)),
+    pch = 16,
+    bty = "n",
+    cex = 0.8
+  )
+}
+
+# =========================
+# LOAD DATA
+# =========================
+pairs <- fread(pairs_file)
+stopifnot(all(c("cancer", "patient", "tumor_file", "healthy_file") %in% names(pairs)))
+
+annot <- fread(annot_file, header = FALSE)
+if (ncol(annot) < 3) stop("Annotation file must have at least 3 columns.")
+setnames(annot, c("probe", "dist_to_tss", "cg_proximity"))
+annot <- unique(annot[, .(probe, cg_proximity)])
+
+motifs <- lapply(motif_files, function(f) {
+  if (!file.exists(f)) stop(paste("Missing motif file:", f))
+  unique(fread(f, header = FALSE)[[4]])
+})
+
+# =========================
+# PLOT
+# =========================
+pdf(out_pdf, width = 16, height = 6, useDingbats = FALSE)
+pages_written <- 0L
+
+for (i in seq_len(nrow(pairs))) {
+  cat("Processing:", pairs$cancer[i], pairs$patient[i], "\n")
+  flush.console()
+
+  par(mfrow = c(1, 3), mar = c(4, 4, 4, 1))
+
+  tryCatch({
+    tf <- pairs$tumor_file[i]
+    nf <- pairs$healthy_file[i]
+
+    if (!file.exists(tf) || !file.exists(nf)) {
+      plot.new()
+      title(main = paste0(
+        pairs$cancer[i], " | ", pairs$patient[i], "\nMissing file(s)"
+      ))
+      plot.new()
+      plot.new()
+      pages_written <- pages_written + 1L
+      next
+    }
+
+    tumor  <- read_bed_gz(tf)
+    normal <- read_bed_gz(nf)
+
+    m <- merge(
+      data.table(probe = tumor[[4]],  meth_tumor  = as.numeric(tumor[[5]])),
+      data.table(probe = normal[[4]], meth_normal = as.numeric(normal[[5]])),
+      by = "probe"
+    )
+
+    m <- m[!is.na(meth_tumor) & !is.na(meth_normal)]
+    m <- merge(m, annot, by = "probe", all.x = TRUE)
+
+    if (nrow(m) == 0) {
+      plot.new()
+      title(main = paste0(pairs$cancer[i], " | ", pairs$patient[i], "\nMerged = 0 usable CpGs"))
+      plot.new()
+      plot.new()
+      pages_written <- pages_written + 1L
+      next
+    }
+
+    d <- m$meth_tumor - m$meth_normal
+    lab <- paste0(pairs$cancer[i], " | ", pairs$patient[i])
+
+    plot_all(
+      m, d,
+      paste0(lab, "\nAll CpGs"),
+      thr
+    )
+
+    plot_motif(
+      m, d, motifs$NRF1,
+      paste0(lab, "\nNRF1 motifs"),
+      thr
+    )
+
+    plot_motif(
+      m, d, motifs$BANP,
+      paste0(lab, "\nBANP motifs"),
+      thr
+    )
+
+    pages_written <- pages_written + 1L
+
+  }, error = function(e) {
+    plot.new()
+    title(main = paste0(
+      pairs$cancer[i], " | ", pairs$patient[i], "\nERROR:\n", conditionMessage(e)
+    ))
+    plot.new()
+    plot.new()
+    pages_written <- pages_written + 1L
+  })
+}
+
+dev.off()
+cat("DONE -> ", out_pdf, " (pages:", pages_written, ")\n", sep = "")
+'
+
+#################################################################################################################
+# Resume methylation changes in a probes matrix for all samples in filtered pairs methylation and in 3d+4d tsv :
+#################################################################################################################
+Rscript -e '
+library(data.table)
+
+pairs <- fread("./methylation/sample_pairs_files/methylation_pairs_filtered.tsv")
+annot <- fread("./methylation/probes_tss_annotation.tsv")
+setnames(annot, names(annot)[1:2], c("probe","dist_to_tss"))
+annot <- annot[, .(probe, dist_to_tss)]
+annot[, cg_proximity := ifelse(abs(dist_to_tss) <= 2000, "proximal", "distal")]
+
+read_bed <- function(f) fread(f)[, .(probe=V4, beta=as.numeric(V5))]
+
+all_dt <- rbindlist(lapply(1:nrow(pairs), function(i){
+  t <- read_bed(pairs$tumor_file[i]);   setnames(t, "beta", "beta_tumor")
+  h <- read_bed(pairs$healthy_file[i]); setnames(h, "beta", "beta_healthy")
+  merge(t, h, by="probe")[, .(
+    probe,
+    cancer = pairs$cancer[i],
+    patient = pairs$patient[i],
+    delta_beta = beta_tumor - beta_healthy
+  )]
+}))
+
+res <- merge(all_dt, annot, by="probe", all.x=TRUE)[
+  , .(n_pairs=.N, median_delta_beta=median(delta_beta, na.rm=TRUE)),
+  by=.(probe, cancer, dist_to_tss, cg_proximity)
+]
+
+fwrite(res, "./methylation/median_delta_beta_per_probe_per_cancer.tsv", sep="\t")
+'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# plot only one with no threshhold to see the overall distribution of methylation changes in motifs vs non motifs for one pair of samples
+Rscript -e '
+suppressPackageStartupMessages({
+  library(data.table)
+})
+
+# =========================
+# INPUTS: set one pair here
+# =========================
+tumor_file   <- "./methylation/filtered_methylation/HM450_TCGA-BRCA-TCGA-E9-A1RH-01A_1_annotated_methylation_filtered.bed.gz"
+healthy_file <- "./methylation/filtered_methylation/HM450_TCGA-BRCA-TCGA-E9-A1RH-11A_1_annotated_methylation_filtered.bed.gz"
+pair_label   <- "BRCA | TCGA-E9-A1RH"
+
+motif_files <- list(
+  NRF1_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_intersected_methylation.bed",
+  BANP_mm0to2        = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_intersected_methylation.bed",
+  NRF1_noCGmm_mm0to2 = "./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_intersected_methylation.bed",
+  BANP_noCGmm_mm0to2 = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_intersected_methylation.bed"
+)
+
+out_pdf <- "./results/methylation/smoothScatter_one_pair_mm0to2_vs_noCGmm_nothreshold.pdf"
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# =========================
+# LOAD MOTIF PROBES
+# =========================
+motif_cpgs <- lapply(motif_files, function(f){
+  if(!file.exists(f)) stop(paste("Missing motif file:", f))
+  unique(fread(f, header = FALSE)[[4]])
+})
+
+# =========================
+# HELPERS
+# =========================
+read_bed_gz <- function(path) {
+  cmd <- paste("zcat", shQuote(path))
+  fread(cmd = cmd, header = FALSE, showProgress = FALSE)
+}
+
+plot_all <- function(merged, main_title){
+  smoothScatter(
+    merged$meth_normal, merged$meth_tumor,
+    xlab = "Healthy methylation (%)",
+    ylab = "Tumor methylation (%)",
+    main = main_title
+  )
+  abline(0, 1, col = "black", lwd = 2)
+}
+
+plot_motif_red <- function(merged, in_motif, label_title){
+  smoothScatter(
+    merged$meth_normal, merged$meth_tumor,
+    xlab = "Healthy methylation (%)",
+    ylab = "Tumor methylation (%)",
+    main = paste0(label_title, " in red")
+  )
+  points(
+    merged$meth_normal[in_motif],
+    merged$meth_tumor[in_motif],
+    pch = 16, cex = 0.5, col = rgb(1, 0, 0, 0.6)
+  )
+  abline(0, 1, col = "black", lwd = 2)
+}
+
+# =========================
+# LOAD PAIR
+# =========================
+if (!file.exists(tumor_file)) stop(paste("Missing tumor file:", tumor_file))
+if (!file.exists(healthy_file)) stop(paste("Missing healthy file:", healthy_file))
+
+cat("Reading tumor file...\n")
+tumor <- read_bed_gz(tumor_file)
+
+cat("Reading healthy file...\n")
+normal <- read_bed_gz(healthy_file)
+
+tumor_df  <- data.frame(probe = tumor[[4]],  meth_tumor  = tumor[[5]])
+normal_df <- data.frame(probe = normal[[4]], meth_normal = normal[[5]])
+
+merged <- merge(tumor_df, normal_df, by = "probe")
+merged <- merged[!is.na(merged$meth_tumor) & !is.na(merged$meth_normal), ]
+
+cat("Merged CpGs:", nrow(merged), "\n")
+if (nrow(merged) == 0) stop("Merged table has 0 usable CpGs.")
+
+# =========================
+# PDF
+# =========================
+pdf(out_pdf, width = 16, height = 6, colormodel = "rgb", useDingbats = FALSE)
+par(mfrow = c(1, 3), mar = c(4, 4, 4, 1))
+
+# PAGE 1 — mm0to2
+plot_all(merged, paste0(pair_label, "\nAll CpGs (mm0to2 page)"))
+
+in_NRF1 <- merged$probe %in% motif_cpgs$NRF1_mm0to2
+plot_motif_red(merged, in_NRF1, "NRF1_mm0to2 CpGs")
+
+in_BANP <- merged$probe %in% motif_cpgs$BANP_mm0to2
+plot_motif_red(merged, in_BANP, "BANP_mm0to2 CpGs")
+
+# PAGE 2 — noCGmm
+plot_all(merged, paste0(pair_label, "\nAll CpGs (noCGmm page)"))
+
+in_NRF1_nc <- merged$probe %in% motif_cpgs$NRF1_noCGmm_mm0to2
+plot_motif_red(merged, in_NRF1_nc, "NRF1_mm0to2_noCGmm CpGs")
+
+in_BANP_nc <- merged$probe %in% motif_cpgs$BANP_noCGmm_mm0to2
+plot_motif_red(merged, in_BANP_nc, "BANP_mm0to2_noCGmm CpGs")
+
+dev.off()
+
+cat("DONE -> ", out_pdf, "\n", sep="")
 '
 
 # HM450_TCGA-BRCA-TCGA-E9-A1RH-01A_1_annotated_methylation_filtered.bed.gz
@@ -7986,6 +8447,193 @@ ggplot(plot_dt, aes(x=cancer, y=gene, size=freq)) +
 
 dev.off()
 '
+
+# Link altered motifs with expression of linked genes 
+library(data.table)
+library(ggplot2)
+
+expr_file <- "./expression/gene_expression_matrix_protein_coding.tsv"
+alt_file  <- "./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/all_cancers_GENE_presence_matrix.tsv"
+
+out_stats <- "./results/snv/NRF1_expression_vs_alteration_stats_by_cancer.tsv"
+out_pdf   <- "./results/snv/NRF1_expression_vs_alteration_one_page_per_gene.pdf"
+
+dir.create(dirname(out_stats), recursive = TRUE, showWarnings = FALSE)
+
+cat("STEP 1 - Loading alteration matrix\n")
+alt <- fread(alt_file)
+alt_cols <- setdiff(names(alt), "gene")
+
+alt_long <- melt(
+  alt,
+  id.vars = "gene",
+  measure.vars = alt_cols,
+  variable.name = "alt_sample",
+  value.name = "altered"
+)
+
+alt_long[, c("cancer", "patient_id") := tstrsplit(as.character(alt_sample), "_", fixed = TRUE)]
+alt_long[, altered := as.numeric(altered)]
+alt_long[, altered_bin := as.integer(altered >= 1)]
+
+alt_long <- alt_long[
+  ,
+  .(
+    altered = max(altered, na.rm = TRUE),
+    altered_bin = as.integer(any(altered_bin == 1, na.rm = TRUE))
+  ),
+  by = .(gene, patient_id, cancer)
+]
+
+pair_stats <- alt_long[
+  ,
+  .(
+    n_alt = sum(altered_bin == 1, na.rm = TRUE),
+    n_noalt = sum(altered_bin == 0, na.rm = TRUE),
+    n_tested = .N
+  ),
+  by = .(gene, cancer)
+][n_alt >= 5 & n_noalt >= 5]
+
+cat("Usable gene-cancer pairs from alteration matrix:", nrow(pair_stats), "\n")
+
+top_genes <- pair_stats[
+  ,
+  .(total_alt = sum(n_alt, na.rm = TRUE)),
+  by = gene
+][order(-total_alt)][1:min(20, .N), gene]
+
+cat("Top genes selected:", length(top_genes), "\n")
+if (length(top_genes) == 0) stop("No top_genes found. Check alteration matrix filtering.")
+
+alt_long <- alt_long[gene %in% top_genes]
+
+cat("STEP 2 - Loading expression matrix\n")
+expr <- fread(expr_file)
+
+expr <- expr[grepl("-01A", sample)]
+
+tmp <- tstrsplit(expr$sample, "-", fixed = TRUE)
+expr[, cancer := tmp[[2]]]
+expr[, patient_id := paste(tmp[[3]], tmp[[4]], tmp[[5]], sep = "-")]
+
+keep_cols <- intersect(c("sample", "cancer", "patient_id", top_genes), names(expr))
+cat("Gene columns found in expression matrix:", length(setdiff(keep_cols, c("sample", "cancer", "patient_id"))), "\n")
+
+if (length(keep_cols) <= 3) {
+  stop("None of the selected genes were found in the expression matrix columns.")
+}
+
+expr <- expr[, ..keep_cols]
+
+expr_long <- melt(
+  expr,
+  id.vars = c("sample", "cancer", "patient_id"),
+  variable.name = "gene",
+  value.name = "expression"
+)
+
+expr_long[, expression := log2(as.numeric(expression) + 1)]
+
+expr_long <- expr_long[
+  ,
+  .(expression = median(expression, na.rm = TRUE)),
+  by = .(gene, patient_id, cancer)
+]
+
+cat("Rows in expression long table:", nrow(expr_long), "\n")
+
+cat("STEP 3 - Merging expression and alteration\n")
+dt <- merge(
+  expr_long,
+  alt_long[, .(gene, patient_id, cancer, altered, altered_bin)],
+  by = c("gene", "patient_id", "cancer")
+)
+
+cat("Rows after merge:", nrow(dt), "\n")
+if (nrow(dt) == 0) {
+  stop("Merged table dt is empty. Expression and alteration sample IDs do not match after filtering.")
+}
+
+usable <- dt[
+  ,
+  .(
+    n_alt = sum(altered_bin == 1, na.rm = TRUE),
+    n_noalt = sum(altered_bin == 0, na.rm = TRUE),
+    n_tested = .N
+  ),
+  by = .(gene, cancer)
+][n_alt >= 5 & n_noalt >= 5]
+
+cat("Usable gene-cancer pairs after merge:", nrow(usable), "\n")
+if (nrow(usable) == 0) {
+  stop("No usable gene-cancer pairs remain after merge.")
+}
+
+dt <- merge(dt, usable[, .(gene, cancer)], by = c("gene", "cancer"))
+
+cat("Rows kept for plotting:", nrow(dt), "\n")
+cat("Genes to plot:", length(unique(dt$gene)), "\n")
+
+cat("STEP 4 - Computing stats\n")
+stats <- dt[
+  ,
+  {
+    grp <- sort(unique(altered_bin[!is.na(altered_bin)]))
+    p <- if (length(grp) == 2) wilcox.test(expression ~ altered_bin)$p.value else NA_real_
+    list(
+      n_alt = sum(altered_bin == 1, na.rm = TRUE),
+      n_noalt = sum(altered_bin == 0, na.rm = TRUE),
+      n_tested = .N,
+      p_value = p
+    )
+  },
+  by = .(gene, cancer)
+]
+
+stats[, p_adj := p.adjust(p_value, method = "BH")]
+fwrite(stats, out_stats, sep = "\t")
+cat("Stats written to:", out_stats, "\n")
+
+cat("STEP 5 - Writing PDF\n")
+pdf(out_pdf, width = 16, height = 10)
+
+genes_to_plot <- unique(dt$gene)
+
+for (g in genes_to_plot) {
+  cat("Plotting gene:", g, "\n")
+
+  sub_dt <- dt[gene == g]
+  sub_stats <- stats[gene == g]
+
+  sub_dt <- merge(
+    sub_dt,
+    sub_stats[, .(cancer, n_tested, p_adj)],
+    by = "cancer",
+    all.x = TRUE
+  )
+
+  sub_dt[, cancer_label := paste0(cancer, "\nN=", n_tested, " | FDR=", signif(p_adj, 2))]
+
+  p <- ggplot(sub_dt, aes(x = factor(altered_bin), y = expression)) +
+    geom_boxplot() +
+    facet_wrap(~ cancer_label, scales = "free_y") +
+    theme_bw() +
+    labs(
+      title = paste("Expression vs alteration:", g),
+      x = "Alteration status (0=no, 1=>=1 alteration)",
+      y = "log2(expression + 1)"
+    )
+
+  print(p)
+}
+
+dev.off()
+cat("PDF written to:", out_pdf, "\n")
+
+
+
+
 
 ###############################################################################
 # RNAseq script 
