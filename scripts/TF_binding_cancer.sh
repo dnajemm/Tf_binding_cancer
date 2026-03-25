@@ -484,6 +484,83 @@ p <- ggplot(df, aes(x = Motif, y = Count, fill = Status, group = StatusWithin)) 
 ggsave(out_pdf, plot = p, width = 7, height = 4, dpi = 300, bg = "white")
 cat("[DONE] Wrote:", out_pdf, "\n")
 '
+###################################################################
+# Filter out chrX and chrY motifs
+###################################################################
+for f in ./motifs/*_mm0to2.bed.gz; do
+    base=$(basename "$f")                     
+    sample=${base%_mm0to2.bed.gz} 
+    echo "Filtering $sample ..."
+    zcat "$f" | awk '$1 != "chrX" && $1 != "chrY"' | gzip > "./motifs/${sample}_mm0to2_noXY.bed.gz"
+done
+
+for f in ./motifs/*_noCGmm.bed.gz; do
+    base=$(basename "$f")                     
+    sample=${base%_mm0to2_noCGmm.bed.gz} 
+    echo "Filtering $sample ..."
+    zcat "$f" | awk '$1 != "chrX" && $1 != "chrY"' | gzip > "./motifs/${sample}_mm0to2_noCGmm_noXY.bed.gz"
+done
+
+
+zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz | wc -l
+# 10968
+zcat ./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz | wc -l
+# 10418 (no chrX/Y motifs )
+zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz | wc -l
+# 34285
+zcat ./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz | wc -l
+# 32800 (no chrX/Y motifs )
+
+#plot the number of motifs before and after filtering out chrX/Y
+Rscript -e '
+library(ggplot2)
+library(scales)
+
+motifs <- c("BANP", "NRF1")
+before_counts <- c(10968, 34285)
+after_counts  <- c(10418, 32800)
+statuses <- c("Before chrX/Y filtering", "After chrX/Y filtering")
+
+df <- data.frame(
+  Motif  = rep(motifs, times = 2),
+  Status = rep(statuses, each = length(motifs)),
+  Count  = c(before_counts, after_counts)
+)
+
+df$Status <- factor(
+  df$Status,
+  levels = c("Before chrX/Y filtering", "After chrX/Y filtering")
+)
+
+p <- ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(
+    aes(label = comma(Count)),
+    position = position_dodge(width = 0.9),
+    vjust = -0.3,
+    size = 3
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Number of motifs before and after chrX/Y filtering",
+    subtitle = "Filtering out motifs on chrX and chrY",
+    y = "Count",
+    x = "Motif"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.7, size = 12),
+    plot.subtitle = element_text(hjust = 0.7, size = 9)
+  )
+
+ggsave(
+  "./results/motifs/motif_counts_before_after_chrX_Y_filtering.pdf",
+  plot = p,
+  width = 6,
+  height = 4,
+  dpi = 300,
+  bg = "white"
+)
+'
 
 ###############################################################################
 # MOTIF COUNT AFTER FILTERING 6mer
@@ -731,6 +808,7 @@ dev.off()
 
 cat("[DONE] PDF written:", out_pdf, "\\n")
 '
+
 
 ###############################################################################
 # 2) MOTIF DISTANCE TO TSS
@@ -980,9 +1058,9 @@ for (motif in c("NRF1","BANP")) {
 
     # pick motif file + overlap file
     motif_file <- if (var == "mm0to2") {
-      paste0("./motifs/", motif, "_mm0to2.bed.gz")
+      paste0("./motifs/", motif, "_mm0to2_noXY.bed.gz")
     } else {
-      paste0("./motifs/", motif, "_mm0to2_noCGmm.bed.gz")
+      paste0("./motifs/", motif, "_mm0to2_noCGmm_noXY.bed.gz")
     }
 
     overlap_file <- if (var == "mm0to2") {
@@ -1062,7 +1140,7 @@ mkdir -p ./motifs/overlaps/motif2mm_peak_overlaps
 
 # Loop through each 6mer motif file and intersect with all peak files from peaks
 
-for file in ./motifs/*_mm0to2_noCGmm.bed.gz ./motifs/*_mm0to2.bed.gz; do
+for file in ./motifs/*_mm0to2_noCGmm_noXY.bed.gz ./motifs/*_mm0to2_noXY.bed.gz; do
   [ -e "$file" ] || continue
 
   motif_name=$(basename "$file" .bed.gz)
@@ -1106,13 +1184,13 @@ dir.create("./results/multi_omics", recursive=TRUE, showWarnings=FALSE)
 pdf("./results/multi_omics/euler_2mmmotif_peak_overlaps.pdf", width=7, height=7)
 
 # NRF1
-m <- length(id3("./motifs/NRF1_mm0to2_noCGmm.bed.gz"))
+m <- length(id3("./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz"))
 p <- length(id3("./peaks/filtered_peaks/merged_peaks.bed"))
 o <- length(id3("./motifs/overlaps/motif2mm_peak_overlaps/NRF1_mm0to2_noCGmm_peak_overlaps.bed"))
 plot(euler(c(Motifs=m-o, Peaks=p-o, "Motifs&Peaks"=o)), quantities=TRUE, main="NRF1 mm0to2 noCGmm")
 
 # BANP
-m <- length(id3("./motifs/BANP_mm0to2_noCGmm.bed.gz"))
+m <- length(id3("./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz"))
 p <- length(id3("./peaks/filtered_peaks/merged_peaks.bed"))
 o <- length(id3("./motifs/overlaps/motif2mm_peak_overlaps/BANP_mm0to2_noCGmm_peak_overlaps.bed"))
 plot(euler(c(Motifs=m-o, Peaks=p-o, "Motifs&Peaks"=o)), quantities=TRUE, main="BANP mm0to2 noCGmm")
@@ -1318,9 +1396,9 @@ pdf(out_pdf, width = 10, height = 8)
 plot_one <- function(motif, variant){
 
   motif_all_file <- if(variant == "mm0to2"){
-    paste0("./motifs/", motif, "_mm0to2.bed.gz")
+    paste0("./motifs/", motif, "_mm0to2_noXY.bed.gz")
   } else {
-    paste0("./motifs/", motif, "_mm0to2_noCGmm.bed.gz")
+    paste0("./motifs/", motif, "_mm0to2_noCGmm_noXY.bed.gz")
   }
 
   motif_peak_file <- if(variant == "mm0to2"){
@@ -1412,7 +1490,7 @@ plot_one("BANP", "mm0to2_noCGmm")
 dev.off()
 cat("Wrote:", out_pdf, "\n")
 '
-
+# ATTENTION I M HERE !!! NOT CCORRECTED IN THE LAB BOOK YET  THE BARPLOT ABOVE 
 
 ###############################################################################
 # ONE BARPLOT FOR BOTH TF : MOTIFS, ATAC, HM450, SNVs 
@@ -1785,9 +1863,9 @@ done
 #    ln -s "$file" ./peaks/
 # done
 
-###############################################################################
-# 2) FILTERING OUT PEAKS FILES --> 217 FILES LEFT
-###############################################################################
+########################################################################################
+# 2) FILTERING OUT PEAKS FILES --> 217 FILES LEFT and filter out peaks on chrX and chrY
+########################################################################################
 # Filter out the peak files corresponding to failing samples from the previous analysis of /data/hichamif/pred_tf_cancer/QC_results/failing_samples_by_step/all_failing_samples.txt
 # Filters : NFR 15% Mapping rate > 80% Peakcount >20,000 FRIP > 0.2
 mkdir -p ./peaks/filtered_peaks/
@@ -1797,6 +1875,7 @@ FAIL_TSV="./all_failing_samples.txt"
 for file in ./peaks/ATAC_TCGA-*_peaks_macs.bed; do
     base=$(basename "$file")
     sample=${base%_peaks_macs.bed}
+    out="./peaks/filtered_peaks/$base"
 
     echo "Processing $sample ..."
 
@@ -1805,7 +1884,7 @@ for file in ./peaks/ATAC_TCGA-*_peaks_macs.bed; do
         continue
     fi
 
-    cp "$file" ./peaks/filtered_peaks/
+    awk 'BEGIN{FS=OFS="\t"} $1 != "chrX" && $1 != "chrY"' "$file" > "$out"
 done
 
 ###############################################################################
@@ -1823,16 +1902,6 @@ cat ./peaks/filtered_peaks/ATAC_TCGA*_peaks_macs.bed | sort -k1,1 -k2,2n | bedto
 ###############################################################################
 # nbr of cancer types with peaks --> 22 types 
 ls ./peaks/filtered_peaks/ATAC_TCGA*bed | cut -d'-' -f2 | cut -d'_' -f1 | sort | uniq -c | awk '{print $2 "\t" $1}' > ./peaks/cancer_counts.tsv
-
-###############################################################################
-# CANCER COLOR ORDER FILE 
-###############################################################################
-# create a cancer color order file based on the order of cancers in the peaks and snv unique per cancer files
-cat ./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv \
-    ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv \
-    | cut -f1 \
-    | sort -u \
-    > ./results/multi_omics/cancer_color_order.txt
 
 ###############################################################################
 # HISTOGRAM OF NBR OF PEAKS PER CANCER TYPE
@@ -1868,43 +1937,65 @@ done
 
 cut -d "-" -f2 ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv > ./peaks/peaks_counts_per_cancer_type/tmp.tsv
 mv ./peaks/peaks_counts_per_cancer_type/tmp.tsv ./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv
-
+#IM HERE NOT CORRECT YET!!
+# plot the barplot of number of unique peaks per cancer type
 Rscript -e '
+# 1. Read the peak counts
+data <- read.table("./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv", 
+                   header = FALSE, sep = "\t", stringsAsFactors = FALSE)
 
-data <- read.table("./peaks/peaks_counts_per_cancer_type/peaks_unique_per_cancer.tsv")
-                   
 cancer_names <- data[,1]
 peak_counts  <- data[,2]
-# Sort from biggest to smallest
-ord <- order(peak_counts, decreasing = TRUE)
-cancer_names <- cancer_names[ord]
-peak_counts  <- peak_counts[ord]
-# reverse order for horizontal barplot (largest at top)
-cancer_names <- rev(cancer_names)
-peak_counts  <- rev(peak_counts)
-# Convert to thousands
-peak_thousands <- peak_counts / 1e3
-# Build consistent colors
-all_cancers <- scan("./results/multi_omics/cancer_color_order.txt", what = "")
-palette <- rainbow(length(all_cancers))
-names(palette) <- all_cancers
-bar_colors <- palette[cancer_names]
 
-pdf("./results/peaks/peaks_per_cancer_type_barplot.pdf", width=12, height=9 , bg = "white")
+# Sort and reverse for horizontal barplot (largest at top)
+ord <- order(peak_counts, decreasing = TRUE)
+cancer_names <- rev(cancer_names[ord])
+peak_counts  <- rev(peak_counts[ord])
+peak_thousands <- peak_counts / 1e3
+
+# 2. Read the color file - CRITICAL: added comment.char = ""
+color_df <- read.table("./results/multi_omics/cancer_color_order_with_defined_colours.tsv", 
+                       header = FALSE, 
+                       sep = "\t", 
+                       stringsAsFactors = FALSE, 
+                       comment.char = "") # This prevents # hex codes from being ignored
+
+colnames(color_df) <- c("Cancer_full", "Color")
+
+# 3. Clean names and Build Palette
+# Strip TCGA-, trim whitespace, and force uppercase for a perfect match
+color_df$Clean_Name <- toupper(trimws(sub("^TCGA-", "", color_df$Cancer_full)))
+palette <- color_df$Color
+names(palette) <- color_df$Clean_Name
+
+# 4. Map colors to the peaks data
+clean_peak_names <- toupper(trimws(cancer_names))
+bar_colors <- palette[clean_peak_names]
+
+# Fallback for any unmatched names
+bar_colors[is.na(bar_colors)] <- "gray"
+
+# 5. Plotting
+pdf("./results/peaks/peaks_per_cancer_type_barplot.pdf", width = 12, height = 9, bg = "white")
+
+# Give the left margin (2nd value) more room for cancer names
+par(mar = c(5, 10, 4, 2)) 
 
 barplot(
   peak_thousands,
-  names.arg=cancer_names,
-  horiz=TRUE,                          # horizontal bars
-  las=1,                               # labels readable
+  names.arg = cancer_names,
+  horiz = TRUE,
+  las = 1,
   col = bar_colors,
-  border="black",
-  main="Peaks per Cancer Type",
-  cex.main = 3,
-  cex.lab = 1.5,
-  xlab="Total Peaks (thousands)")
+  border = "black",
+  main = "Peaks per Cancer Type",
+  cex.main = 2,
+  xlab = "Total Peaks (thousands)"
+)
 
 dev.off()
+
+cat("Success! Plot generated with hex colors.\n")
 '
 
 ###############################################################################
@@ -2133,11 +2224,12 @@ for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
   bedtools intersect -u -a "$f" -b "$motif_sites" > "$out"
   echo "Wrote: $out"
 done
-
+#########################################################
 # Look into the ATAC peaks overlapping with 2mm motifs
+#########################################################
 mkdir -p ./peaks/overlaps/intersected_motifs/NRF1_mm0to2
 
-motif_sites="./motifs/NRF1_mm0to2.bed.gz"
+motif_sites="./motifs/NRF1_mm0to2_noXY.bed.gz"
 
 for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
   sample=$(basename "$f" _peaks_macs.bed)
@@ -2149,7 +2241,7 @@ done
 
 mkdir -p ./peaks/overlaps/intersected_motifs/BANP_mm0to2
 
-motif_sites="./motifs/BANP_mm0to2.bed.gz"
+motif_sites="./motifs/BANP_mm0to2_noXY.bed.gz"
 
 for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
   sample=$(basename "$f" _peaks_macs.bed)
@@ -2161,7 +2253,7 @@ done
 
 mkdir -p ./peaks/overlaps/intersected_motifs/NRF1_mm0to2_noCGmm
 
-motif_sites="./motifs/NRF1_mm0to2_noCGmm.bed.gz"
+motif_sites="./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz"
 
 for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
   sample=$(basename "$f" _peaks_macs.bed)
@@ -2173,7 +2265,7 @@ done
 
 mkdir -p ./peaks/overlaps/intersected_motifs/BANP_mm0to2_noCGmm
 
-motif_sites="./motifs/BANP_mm0to2_noCGmm.bed.gz"
+motif_sites="./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz"
 
 for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
   sample=$(basename "$f" _peaks_macs.bed)
@@ -3290,30 +3382,30 @@ PROBES=./methylation/annotated_methylation_data_probes_filtered.bed
 # NRF1 mm0to2
 bedtools intersect -u \
   -a "$PROBES" \
-  -b <(zcat ./motifs/NRF1_mm0to2.bed.gz) \
+  -b <(zcat ./motifs/NRF1_mm0to2_noXY.bed.gz) \
   > ./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_intersected_methylation.bed
 
 # NRF1 mm0to2 noCGmm
 bedtools intersect -u \
   -a "$PROBES" \
-  -b <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) \
+  -b <(zcat ./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz) \
   > ./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_intersected_methylation.bed
 
 # BANP mm0to2
 bedtools intersect -u \
   -a "$PROBES" \
-  -b <(zcat ./motifs/BANP_mm0to2.bed.gz) \
+  -b <(zcat ./motifs/BANP_mm0to2_noXY.bed.gz) \
   > ./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_intersected_methylation.bed
 
 # BANP mm0to2 noCGmm
 bedtools intersect -u \
   -a "$PROBES" \
-  -b <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) \
+  -b <(zcat ./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz) \
   > ./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_intersected_methylation.bed
 
 
 ###########################################################################################
-# Overlaps Mehtylaiton probes with 2mm motifs in peaks 
+# Overlaps Methylaiton probes with 2mm motifs in peaks 
 ########################################################################################### 
 mkdir -p ./methylation/overlaps/intersected_motifs2mm_HM450_peaks
 
@@ -3810,21 +3902,22 @@ res <- merge(all_dt, annot, by="probe", all.x=TRUE)[
 fwrite(res, "./methylation/median_delta_beta_per_probe_per_cancer.tsv", sep="\t")
 '
 
+# To get per cancer type all cpg proximal summary:
+Rscript -e '
+library(data.table)
 
+res <- fread("./methylation/median_delta_beta_per_probe_per_cancer.tsv")
 
+final_prox <- res[cg_proximity == "distal",
+  .(
+    n_cpg = .N,
+    final_median_delta_beta = median(median_delta_beta, na.rm = TRUE)
+  ),
+  by = cancer
+][order(final_median_delta_beta)]
 
-
-
-
-
-
-
-
-
-
-
-
-
+final_prox
+'
 
 # plot only one with no threshhold to see the overall distribution of methylation changes in motifs vs non motifs for one pair of samples
 Rscript -e '
@@ -8412,7 +8505,7 @@ fwrite(res, outfile, sep = "\t")
 cat("Done. Output written to:", outfile, "\n"); flush.console()
 '
 #IM HERE
-# plot the frequency of the top 50 genes with the highest alteration frequency across cancer types (bubble plot where x-axis = cancer type, y-axis = gene, size/color of points = alteration frequency)
+# plot the frequency of the top 100 genes with the highest alteration frequency across cancer types (bubble plot where x-axis = cancer type, y-axis = gene, size/color of points = alteration frequency)
 Rscript -e '
 library(data.table)
 library(ggplot2)
@@ -8447,6 +8540,7 @@ ggplot(plot_dt, aes(x=cancer, y=gene, size=freq)) +
 
 dev.off()
 '
+# NOT DONE YET
 
 # Link altered motifs with expression of linked genes 
 library(data.table)
@@ -8501,7 +8595,7 @@ top_genes <- pair_stats[
   ,
   .(total_alt = sum(n_alt, na.rm = TRUE)),
   by = gene
-][order(-total_alt)][1:min(20, .N), gene]
+][order(-total_alt)][1:min(5, .N), gene]
 
 cat("Top genes selected:", length(top_genes), "\n")
 if (length(top_genes) == 0) stop("No top_genes found. Check alteration matrix filtering.")
@@ -8631,8 +8725,240 @@ for (g in genes_to_plot) {
 dev.off()
 cat("PDF written to:", out_pdf, "\n")
 
+################################################
+# Multiple Mutations needed analysis 
+################################################
+library(data.table)
+library(ggplot2)
 
+# =========================
+# ALL GENE x CANCER RESULTS
+# TOP 10 GENES GLOBALLY
+# PLOT ONE PAGE PER GENE WITH ONE PANEL PER CANCER
+# =========================
 
+motif_name <- "BANP_mm0to2_noCGmm"
+# motif_name <- "NRF1_mm0to2_noCGmm"
+
+motif_file <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_MOTIF_presence_matrix.tsv")
+expr_file  <- "./expression/gene_expression_matrix_protein_coding.tsv"
+
+out_all_tsv   <- paste0("./results/snv/", motif_name, "_ALL_gene_cancer_results.tsv")
+out_top_tsv   <- paste0("./results/snv/", motif_name, "_TOP10_genes_global_summary.tsv")
+out_pdf       <- paste0("./results/snv/", motif_name, "_TOP10_genes_global_one_page_per_gene.pdf")
+
+dir.create("./results/snv", recursive = TRUE, showWarnings = FALSE)
+
+cat("STEP 1 - Loading motif matrix\n")
+motif_dt <- fread(motif_file)
+
+annot_cols <- c(
+  "motif_id","motif_name","motif_chr","motif_start","motif_end","motif_seq",
+  "motif_score","motif_strand","gene","gene_id","transcript_id","gene_chr",
+  "gene_start","gene_end","gene_strand","distance"
+)
+
+sample_cols <- setdiff(names(motif_dt), annot_cols)
+motif_dt[, (sample_cols) := lapply(.SD, as.numeric), .SDcols = sample_cols]
+
+cat("STEP 2 - Counting altered motifs per gene per sample\n")
+gene_count_dt <- motif_dt[
+  ,
+  lapply(.SD, sum, na.rm = TRUE),
+  by = gene,
+  .SDcols = sample_cols
+]
+
+gene_count_long <- melt(
+  gene_count_dt,
+  id.vars = "gene",
+  measure.vars = setdiff(names(gene_count_dt), "gene"),
+  variable.name = "alt_sample",
+  value.name = "altered_count"
+)
+
+# alt_sample format: ACC_TCGA-OR-A5J5
+gene_count_long[, cancer := sub("_.*", "", alt_sample)]
+gene_count_long[, patient_id := sub("^[^_]+_", "", alt_sample)]
+gene_count_long[, altered_count := as.numeric(altered_count)]
+
+# binary grouping for comparison
+gene_count_long[, altered_bin := ifelse(altered_count == 0, "0", ">=1")]
+
+cat("STEP 3 - Loading expression matrix\n")
+expr <- fread(expr_file)
+expr <- expr[grepl("-01A", sample)]
+
+# expression sample format: TCGA-ACC-TCGA-OR-A5J5-01A_1
+expr[, cancer := sub("^TCGA-([^-]+)-.*$", "\\1", sample)]
+expr[, patient_id := sub("^TCGA-[^-]+-(TCGA-[^-]+-[^-]+)-.*$", "\\1", sample)]
+
+keep_genes <- intersect(unique(gene_count_long$gene), names(expr))
+cat("Genes found in both datasets:", length(keep_genes), "\n")
+
+if (length(keep_genes) == 0) {
+  stop("No common genes between alteration and expression tables.")
+}
+
+expr <- expr[, c("sample", "cancer", "patient_id", keep_genes), with = FALSE]
+
+expr_long <- melt(
+  expr,
+  id.vars = c("sample", "cancer", "patient_id"),
+  variable.name = "gene",
+  value.name = "expression"
+)
+
+# raw expression
+expr_long[, expression := as.numeric(expression)]
+
+cat("STEP 4 - Merging\n")
+dt <- merge(
+  expr_long,
+  gene_count_long[, .(gene, cancer, patient_id, altered_count, altered_bin)],
+  by = c("gene", "cancer", "patient_id")
+)
+
+cat("Rows after merge:", nrow(dt), "\n")
+if (nrow(dt) == 0) {
+  stop("Merged table is empty.")
+}
+
+cat("STEP 5 - Computing all gene x cancer results\n")
+rank_dt <- dt[
+  ,
+  .(
+    n_0   = sum(altered_bin == "0", na.rm = TRUE),
+    n_alt = sum(altered_bin == ">=1", na.rm = TRUE),
+    med_0 = median(expression[altered_bin == "0"], na.rm = TRUE),
+    med_alt = median(expression[altered_bin == ">=1"], na.rm = TRUE)
+  ),
+  by = .(gene, cancer)
+]
+
+rank_dt[, abs_diff := abs(med_alt - med_0)]
+
+# Wilcoxon 0 vs >=1 for every gene x cancer
+wilcox_dt <- dt[
+  ,
+  .(
+    p_value = tryCatch(
+      wilcox.test(expression ~ altered_bin)$p.value,
+      error = function(e) NA_real_
+    )
+  ),
+  by = .(gene, cancer)
+]
+
+rank_dt <- merge(
+  rank_dt,
+  wilcox_dt,
+  by = c("gene", "cancer"),
+  all.x = TRUE
+)
+
+# BH correction across all gene-cancer tests
+rank_dt[, p_adj := p.adjust(p_value, method = "BH")]
+
+# keep valid rows
+rank_dt <- rank_dt[is.finite(abs_diff) & !is.na(abs_diff)]
+
+# keep only rows with enough samples in both groups
+rank_dt <- rank_dt[n_0 >= 5 & n_alt >= 5]
+
+if (nrow(rank_dt) == 0) {
+  stop("No gene-cancer pairs remain after filtering n_0 >= 5 and n_alt >= 5.")
+}
+
+# save ALL gene x cancer results
+fwrite(rank_dt, out_all_tsv, sep = "\t")
+cat("All gene-cancer results written to:", out_all_tsv, "\n")
+
+cat("STEP 6 - Ranking genes globally across cancers\n")
+gene_rank <- rank_dt[
+  ,
+  .(
+    best_diff = max(abs_diff, na.rm = TRUE),
+    best_padj = min(p_adj, na.rm = TRUE)
+  ),
+  by = gene
+]
+
+# global ranking score: big effect + strong significance
+gene_rank[, score := best_diff * -log10(best_padj + 1e-300)]
+
+top_genes_dt <- gene_rank[order(-score)][1:min(10, .N)]
+top_genes <- top_genes_dt$gene
+
+fwrite(top_genes_dt, out_top_tsv, sep = "\t")
+cat("Top 10 genes global summary written to:", out_top_tsv, "\n")
+print(top_genes_dt)
+
+cat("STEP 7 - Plotting one page per gene with panels per cancer\n")
+pdf(out_pdf, width = 14, height = 8)
+
+for (g in top_genes) {
+  sub_dt <- dt[gene == g]
+
+  # keep only cancers that passed the usable filter
+  keep_cancers <- rank_dt[gene == g, unique(cancer)]
+  sub_dt <- sub_dt[cancer %in% keep_cancers]
+
+  if (nrow(sub_dt) == 0) next
+
+  sub_dt[, altered_bin := factor(altered_bin, levels = c("0", ">=1"))]
+
+  # stats per cancer for labels
+  lab_dt <- rank_dt[gene == g, .(
+    cancer, n_0, n_alt, med_0, med_alt, abs_diff, p_value, p_adj
+  )]
+
+  sub_dt <- merge(sub_dt, lab_dt, by = "cancer", all.x = TRUE)
+
+  sub_dt[, cancer_label := paste0(
+    cancer,
+    "\nN0=", n_0,
+    " N>=1=", n_alt,
+    "\n|diff|=", signif(abs_diff, 3),
+    " FDR=", signif(p_adj, 3)
+  )]
+
+  # order panels by effect size
+  panel_order <- unique(lab_dt[order(-abs_diff), cancer])
+  sub_dt[, cancer_label := factor(
+    cancer_label,
+    levels = unique(sub_dt[match(panel_order, cancer), cancer_label])
+  )]
+
+  p <- ggplot(sub_dt, aes(x = altered_bin, y = expression)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width = 0.15, height = 0.02, alpha = 0.35, size = 0.8) +
+    facet_wrap(~ cancer_label, scales = "free_y", ncol = 3) +
+    theme_bw() +
+    labs(
+      title = paste("Expression vs alteration burden:", g),
+      subtitle = paste0(
+        "Top gene global score = ",
+        signif(top_genes_dt[gene == g, score], 3),
+        "   (best |diff|=",
+        signif(top_genes_dt[gene == g, best_diff], 3),
+        ", best FDR=",
+        signif(top_genes_dt[gene == g, best_padj], 3),
+        ")"
+      ),
+      x = "Alteration group",
+      y = "Raw expression"
+    ) +
+    theme(
+      strip.text = element_text(size = 8),
+      axis.text.x = element_text(size = 8)
+    )
+
+  print(p)
+}
+
+dev.off()
+cat("PDF written to:", out_pdf, "\n")
 
 
 ###############################################################################
