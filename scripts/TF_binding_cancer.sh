@@ -380,55 +380,6 @@ echo "[DONE] Wrote: $out"
 # TO GENERATE A MEME LOGO USE THIS :
 iupac2meme -logodds MOTIF > ./motifs/cg.meme
 
-
-###############################################################################
-# 1) MOTIF FILTERING (6-MER STRINGENCY) , I DONT USE IT.
-###############################################################################
-# Filter motifs with p-value threshold and sort them.
-mkdir -p ./motifs
-
-# zcat /data/genome/motifs/jaspar_2024/fimo/vertebrata/hg38/NRF1.MA0506.3.bed.gz | awk '($5<=1/4^6)' > ./motifs/NRF1_filtered_6mer.MA0506.3.bed
-# zcat ./motifs/BANP.bed.gz | awk '($5<=1/4^6)' > ./motifs/BANP_filtered_6mer.MA2503.1.bed
-
-###############################################################################
-# MOTIF COUNT BEFORE / AFTER FILTERING THE 6mer
-###############################################################################
-# barplot of the number of motifs before and after filtering 
-Rscript -e '
-library(ggplot2)
-motifs <- c("NRF1", "BANP")
-before_counts <- c( nrow(read.table(gzfile("/data/genome/motifs/jaspar_2024/fimo/vertebrata/hg38/NRF1.MA0506.3.bed.gz"))),
-                    nrow(read.table(gzfile("./motifs/BANP.bed.gz"))) )
-after_counts  <- c( nrow(read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed")),
-                    nrow(read.table("./motifs/BANP_filtered_6mer.MA2503.1.bed")) )
-
-statuses <- c("Before 6mer Filtering", "After 6mer Filtering")
-
-df <- data.frame(
-  Motif  = rep(motifs, times = 2),                 # NRF1, BANP, NRF1, BANP
-  Status = rep(statuses, each = length(motifs)),   # Before, Before, After, After
-  Count  = c(before_counts, after_counts)          # b_NRF1, b_BANP, a_NRF1, a_BANP
-)
-
-df$Status <- factor(df$Status,levels = c("Before 6mer Filtering", "After 6mer Filtering"))
-
-# Plot
-ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(aes(label = Count),
-          position = position_dodge(width = 0.9),
-          vjust = -0.3,
-          size = 3) +
-  theme_minimal() +
-  labs(title = "Number of motifs before and after 6mer filtering",
-       subtitle = "Filtering threshold: p-value <= 1/4^6",
-       y = "Count",
-       x = "Motif") +
-  theme(plot.title = element_text(hjust = 0.7 , size = 12),
-      plot.subtitle = element_text(hjust = 0.7 , size = 9))
-# Save plot
-ggsave("./results/motifs/motif_counts_before_after_6mer_filtering.pdf", width = 6, height = 4, dpi = 300, bg = "white")
-'
 ###############################################################################
 # MOTIF COUNT BEFORE / AFTER FILTERING Allowing 2 mismatches
 ###############################################################################
@@ -562,267 +513,10 @@ ggsave(
 )
 '
 
-###############################################################################
-# MOTIF COUNT AFTER FILTERING 6mer
-###############################################################################
-# barplot to see only the number of motifs after filtering
-Rscript -e '
-library(ggplot2)
-motifs <- c("NRF1", "BANP")
-after_counts  <- c( nrow(read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed")),
-                    nrow(read.table("./motifs/BANP_filtered_6mer.MA2503.1.bed")) )
-df <- data.frame(
-  Motif  = motifs,
-  Count  = after_counts
-)
-# Plot
-ggplot(df, aes(x = Motif, y = Count, fill = Motif)) +
-  geom_bar(stat = "identity", width = 0.5) +
-  geom_text(aes(label = Count),
-          vjust = -0.3,
-          size = 4) +
-  theme_minimal() +
-  labs(title = "Number of motifs after 6mer filtering",
-       subtitle = "Filtering threshold: p-value <= 1/4^6",
-       y = "Count",
-       x = "Motif") +
-  theme(plot.title = element_text(hjust = 0.7 , size = 12),
-      plot.subtitle = element_text(hjust = 0.7 , size = 9),
-      legend.position = "none")
-# Save plot
-ggsave("./results/motifs/motif_counts_after_6mer_filtering.pdf", width = 5, height = 4, dpi = 300, bg = "white")
-'
-
-###############################################################################
-# MOTIF LISTS (UNIQUE + NOT UNIQUE) for the 6mer
-###############################################################################
-mkdir -p ./motifs/motifs_list
-
-for file in ./motifs/*_filtered_6mer.*.bed; do
-  base=$(basename "$file" .bed)
-
-  # not-unique (keeps all occurrences), sorted for easier counting
-  awk '{print $4}' "$file" | sort > "./motifs/motifs_list/${base}_motifs_not_unique.txt"
-
-  # unique (one per distinct sequence)
-  awk '{print $4}' "$file" | sort -u > "./motifs/motifs_list/${base}_motifs_unique.txt"
-done
-
-###############################################################################
-# MOTIF MISMATCH SUMMARY for the 6 mer (3 PLOTS / TF)
-#  - Plot 1: positional mismatch tolerance (unique variants)
-#  - Plot 2: number of unique variants by total mismatches (includes bin 0)
-#  - Plot 3: number of motif occurrences (hits) by total mismatches (includes bin 0)
-###############################################################################
-Rscript -e '
-suppressPackageStartupMessages({
-  library(data.table)
-  library(ggplot2)
-})
-
-# ===============================
-# INPUTS
-# ===============================
-files <- list(
-  NRF1 = "./motifs/motifs_list/NRF1_filtered_6mer.GCGCATGCGC_motifs_not_unique.txt",
-  BANP = "./motifs/motifs_list/BANP_filtered_6mer.MA2503.1_motifs_not_unique.txt"
-)
-
-NRF1motif <- "GCGCATGCGC"   # length 10
-BANPmotif <- "TCTCGCGAGA"     # length 10
-
-out_pdf <- "./results/motifs/motif_variant_mismatch_visual_summary_TEST.pdf"
-dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-
-# ===============================
-# HELPERS
-# ===============================
-split_seq <- function(x) do.call(rbind, strsplit(x, ""))
-
-# ===============================
-# PDF OUTPUT
-# ===============================
-pdf(out_pdf, width = 10, height = 7)
-
-for (mot in names(files)) {
-
-  # -----------------------------
-  # LOAD NOT-UNIQUE HITS + COUNT OCCURRENCES PER VARIANT
-  # -----------------------------
-  all_hits <- fread(files[[mot]], header = FALSE)$V1
-
-  hit_counts <- as.data.table(table(all_hits))
-  setnames(hit_counts, c("variant", "hits"))
-  hit_counts[, hits := as.integer(hits)]
-
-  # Unique variants used for mismatch matrix
-  seqs <- hit_counts$variant
-
-  ref <- if (mot == "NRF1") NRF1motif else BANPmotif
-  L   <- nchar(ref)
-
-  # ensure same length as reference
-  if (!all(nchar(seqs) == L)) {
-    bad <- unique(nchar(seqs)[nchar(seqs) != L])
-    stop(paste0("[ERROR] ", mot, ": some sequences have length != ", L,
-                " (found lengths: ", paste(bad, collapse = ","), "). Check your input column 4 content."))
-  }
-
-  hit_mat <- split_seq(seqs)
-  ref_mat <- split_seq(rep(ref, length(seqs)))
-
-  mismatch_mat <- (hit_mat != ref_mat)
-  n_variants <- nrow(mismatch_mat)
-
-  # -----------------------------
-  # CORE POSITIONS
-  # -----------------------------
-  if (mot == "NRF1") {
-    core_pos <- c(2, 3, 8, 9)   # CG + CG (for 12-mer NRF1 ref)
-  } else {
-    core_pos <- c(4, 5, 6, 7)     # CGCG (for 10-mer BANP ref)
-  }
-
-  all_pos    <- seq_len(L)
-  before_pos <- all_pos[all_pos < min(core_pos)]
-  after_pos  <- all_pos[all_pos > max(core_pos)]
-
-  before <- rowSums(mismatch_mat[, before_pos, drop = FALSE])
-  core   <- rowSums(mismatch_mat[, core_pos, drop = FALSE])
-  after  <- rowSums(mismatch_mat[, after_pos, drop = FALSE])
-
-  dt <- data.table(
-    variant = seqs,
-    before  = before,
-    core    = core,
-    after   = after
-  )
-  dt[, total := before + core + after]
-
-  # attach occurrence counts
-  dt <- merge(dt, hit_counts, by = "variant", all.x = TRUE)
-  dt[is.na(hits), hits := 0L]
-
-  # -----------------------------
-  # PLOT 1 — POSITIONAL MISMATCH TOLERANCE (UNIQUE VARIANTS)
-  # -----------------------------
-  pos_df <- data.frame(
-    position   = seq_len(L),
-    mismatches = colSums(mismatch_mat),
-    total      = n_variants,
-    base       = strsplit(ref, "")[[1]]
-  )
-
-  print(
-    ggplot(pos_df, aes(x = position)) +
-      geom_col(aes(y = total), fill = "grey85") +
-      geom_col(aes(y = mismatches), fill = "firebrick") +
-      geom_text(aes(y = -0.5, label = base), size = 5) +
-      theme_minimal() +
-      labs(
-        title = paste(mot, "- positional mismatch tolerance"),
-        subtitle = "Red = variants with mismatch, Grey = total variants",
-        x = "Motif position",
-        y = "Number of unique variants"
-      ) +
-      coord_cartesian(ylim = c(-1, n_variants)) +
-      theme(
-        panel.grid.major.x = element_blank(),
-        axis.text.x = element_blank()
-      )
-  )
-
-  # -----------------------------
-  # CONFIGURATION PER VARIANT
-  # -----------------------------
-  dt[, config := fifelse(
-    total == 0, "perfect_match",
-    fifelse(core == total, "all_core",
-            fifelse(core == 0, "no_core",
-                    fifelse(core == 1, "mixed_1CG", "mixed_2CG")))
-  )]
-
-  cfg_pct <- dt[, .N, by = .(total, config)]
-  cfg_pct[, pct := round(100 * N / sum(N)), by = total]
-
-  labels_df <- cfg_pct[, .(
-    label = paste0(
-      "Perfect: ", ifelse(length(pct[config == "perfect_match"]) == 0, 0, pct[config == "perfect_match"]), "%\n",
-      "Core: ",    ifelse(length(pct[config == "all_core"]) == 0, 0, pct[config == "all_core"]), "%\n",
-      "Mixed 2CG: ", ifelse(length(pct[config == "mixed_2CG"]) == 0, 0, pct[config == "mixed_2CG"]), "%\n",
-      "Mixed 1CG: ", ifelse(length(pct[config == "mixed_1CG"]) == 0, 0, pct[config == "mixed_1CG"]), "%\n",
-      "NoCore: ",  ifelse(length(pct[config == "no_core"]) == 0, 0, pct[config == "no_core"]), "%"
-    )
-  ), by = total]
-
-  # -----------------------------
-  # PLOT 2 — UNIQUE VARIANTS BY TOTAL MISMATCHES
-  # -----------------------------
-  breaks_vec <- 0:max(dt$total)
-
-  print(
-    ggplot(dt, aes(x = total)) +
-      geom_bar(fill = "grey40") +
-      geom_text(
-        data = labels_df,
-        aes(x = total, y = Inf, label = label),
-        vjust = 1.15,
-        size = 3.1,
-        lineheight = 0.95
-      ) +
-      scale_x_continuous(breaks = breaks_vec, limits = c(-0.5, max(breaks_vec) + 0.5)) +
-      theme_minimal() +
-      labs(
-        title = paste(mot, "- unique variants by mismatch count"),
-        subtitle = "Counts unique motif sequences (variants). Labels show config % within each mismatch bin.",
-        x = "Number of mismatches",
-        y = "Number of unique variants"
-      )
-  )
-
-  # -----------------------------
-  # PLOT 3 — OCCURRENCES (HITS) BY TOTAL MISMATCHES
-  # -----------------------------
-  occ_df <- dt[, .(occurrences = sum(hits)), by = total][order(total)]
-
-  print(
-    ggplot(occ_df, aes(x = total, y = occurrences)) +
-      geom_col(fill = "grey40") +
-      geom_text(
-        data = occ_df[total == 0],
-        aes(label = occurrences),
-        vjust = -0.4
-      ) +
-      scale_x_continuous(breaks = breaks_vec, limits = c(-0.5, max(breaks_vec) + 0.5)) +
-      theme_minimal() +
-      labs(
-        title = paste(mot, "- motif occurrences by mismatch count"),
-        subtitle = "Counts total motif hits (not unique sequences).",
-        x = "Number of mismatches",
-        y = "Number of motif occurrences"
-      )
-  )
-}
-
-dev.off()
-
-cat("[DONE] PDF written:", out_pdf, "\\n")
-'
-
 
 ###############################################################################
 # 2) MOTIF DISTANCE TO TSS
 ###############################################################################
-# Distance of 6mer motifs to TSS : generate a file per sample with the distances of each motif to the nearest TSS
-mkdir -p ./motifs/dist_to_tss/
-
-for f in ./motifs/*_filtered_6mer.*.bed; do
-    base=$(basename "$f")                     
-    sample=${base%_filtered_6mer.*.bed} 
-    echo "Processing $sample ..."
-
-    closestBed -t first -d -a "$f" -b /data/genome/annotations/hg38_tss.bed | awk '{print $NF}' > "./motifs/dist_to_tss/${sample}_dist_tss.txt"
-done
 
 # Distance of 2mm motifs to TSS : generate a file per sample with the distances of each motif to the nearest TSS
 mkdir -p ./motifs/dist_to_tss/
@@ -879,37 +573,13 @@ dev.off()
 cat("[DONE] Wrote: ./results/motifs/dist_tss_motifs_hist.pdf\n")
 '
 
-
-
 ###############################################################################
 # 3) MOTIF ∩ HM450 METHYLATION PROBES
 ###############################################################################
-# Overlap 6mer motifs with annotated methylation data to find intersecting regions and 
-# see if the motifs fall within methylated probes regions.
-
-mkdir -p ./motifs/overlaps/intersected_motifs_HM450
-
-# intersect NRF1 6mer motifs with annotated methylation data
-bedtools intersect -u -a ./motifs/NRF1_filtered_6mer.MA0506.3.bed -b ./methylation/annotated_methylation_data_probes_filtered.bed > ./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed
-bedtools intersect -u -a ./motifs/BANP_filtered_6mer.MA2503.1.bed -b ./methylation/annotated_methylation_data_probes_filtered.bed > ./motifs/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed
-
-# Summarize the intersected results : 1   NRF1 29401 BANP 2919
-mkdir -p ./results/motifs
-
-# Count lines in bash and save to variables
-n_NRF1=$(cat ./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed | wc -l)
-n_BANP=$(cat ./motifs/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed | wc -l)
-# Create a summary table using R
-Rscript -e '
-table <- data.frame(
-  Motif = c("NRF1","BANP"),
-  Overlapping_regions = c('"$n_NRF1"','"$n_BANP"'))
-print(table)
-'
 
 mkdir -p ./motifs/overlaps/intersected_motifs2mm_HM450
 
-# intersect NRF1 6mer motifs with annotated methylation data
+# intersect 2mm motifs with annotated methylation data
 bedtools intersect -u -a <(zcat ./motifs/NRF1_mm0to2.bed.gz) -b ./methylation/annotated_methylation_data_probes_filtered.bed > ./motifs/overlaps/intersected_motifs2mm_HM450/NRF1_intersected_methylation.bed
 bedtools intersect -u -a <(zcat ./motifs/BANP_mm0to2.bed.gz) -b ./methylation/annotated_methylation_data_probes_filtered.bed > ./motifs/overlaps/intersected_motifs2mm_HM450/BANP_intersected_methylation.bed
 bedtools intersect -u -a <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) -b ./methylation/annotated_methylation_data_probes_filtered.bed > ./motifs/overlaps/intersected_motifs2mm_HM450/NRF1_noCGmm_intersected_methylation.bed
@@ -936,108 +606,6 @@ print(tab)
 ###############################################################################
 # VEN DIAGRAM OF MOTIF ∩ HM450 METHYLATION PROBES
 ###############################################################################
-# Create a Venn diagram to visualize the overlaps between motifs and methylation for NRF1 and BANP : output pdf file with 2 pages : page 1 NRF1 , page 2 BANP.
-Rscript -e '
-library(VennDiagram)
-library(grid)
-
-motifs_NRF1 <- as.numeric(
-  system("wc -l < ./motifs/NRF1_filtered_6mer.MA0506.3.bed", intern = TRUE)
-)
-
-overlap_NRF1 <- as.numeric(
-  system("wc -l < ./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed", intern = TRUE)
-)
-
-motifs_BANP <- as.numeric(
-  system("wc -l < ./motifs/BANP_filtered_6mer.MA2503.1.bed", intern = TRUE)
-)
-
-overlap_BANP <- as.numeric(
-  system("wc -l < ./motifs/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed", intern = TRUE)
-)
-
-probes <- as.numeric(
-  system("wc -l < ./methylation/annotated_methylation_data_probes_filtered.bed", intern = TRUE)
-)
-
-# -------------------- OUTPUT PDF --------------------
-out_pdf <- "./results/motifs/NRF1_BANP_motifs_vs_methylation_venn.pdf"
-pdf(out_pdf, width = 13, height = 13)
-
-# ==================== PAGE 1: NRF1 ====================
-grid.newpage()
-
-venn_NRF1 <- draw.pairwise.venn(
-  area1      = motifs_NRF1,
-  area2      = probes,
-  cross.area = overlap_NRF1,
-  category   = c("NRF1 6mer motifs", "Methylation probes"),
-  fill       = c("salmon", "skyblue"),
-  alpha      = 0.7,
-  cex        = 2,
-  cat.cex    = 2.2,
-  fontfamily = "Helvetica",
-  cat.pos    = c(-15, 20),
-  cat.dist   = c(0.03, 0.02),
-  print.mode = c("raw","percent"),
-  sigdig     = 2,
-  ind        = FALSE
-)
-
-grid.text(
-  "Overlap between NRF1 6mer motifs and methylation probes",
-  x = 0.5, y = 0.96,
-  gp = gpar(fontsize = 30, fontfamily = "Helvetica")
-)
-
-pushViewport(viewport(y = 0.45))
-grid.draw(venn_NRF1)
-popViewport()
-
-# ==================== PAGE 2: BANP ====================
-grid.newpage()
-
-venn_BANP <- draw.pairwise.venn(
-  area1      = motifs_BANP,
-  area2      = probes,
-  cross.area = overlap_BANP,
-  category   = c("", ""),
-  fill       = c("salmon", "skyblue"),
-  alpha      = 0.7,
-  cex        = 1.9,
-  fontfamily = "Helvetica",
-  print.mode = c("raw","percent"),
-  sigdig     = 2,
-  ind        = FALSE
-)
-
-grid.text(
-  "Overlap between BANP 6mer motifs and methylation probes",
-  x = 0.5, y = 0.95,
-  gp = gpar(fontsize = 30, fontfamily = "Helvetica")
-)
-
-grid.text(
-  "Methylation probes",
-  x = 0.37, y = 0.73,
-  gp = gpar(fontsize = 28, fontfamily = "Helvetica")
-)
-
-grid.text(
-  "BANP 6mer motifs",
-  x = 0.75, y = 0.65,
-  gp = gpar(fontsize = 28, fontfamily = "Helvetica")
-)
-
-pushViewport(viewport(y = 0.45))
-grid.draw(venn_BANP)
-popViewport()
-
-# -------------------- CLOSE PDF --------------------
-dev.off()
-cat("Wrote:", out_pdf, "\n")
-'
 # Create a Venn diagram to visualize the overlaps between 2mm motifs and methylation for NRF1 and BANP : output pdf file with 4 pages : 1 page NRF1 mm0to2, 1 page NRF1 mm0to_noCGmm,  1 page BANP mm0to2, 1 page BANP mm0to_noCGmm.
 Rscript -e '
 library(VennDiagram)
@@ -1112,33 +680,12 @@ cat("Wrote:", out_pdf, "\n")
 '
 
 ###############################################################################
-# 4) MOTIF ∩ ATAC PEAKS --> merged peaks from all samples has 557,832 peaks
+# 4) MOTIF ∩ ATAC PEAKS --> merged peaks from all samples has 534,646 peaks
 ###############################################################################
-# Overlap the 6mer motifs with the peaks to see which motifs fall within the peaks regions.
-mkdir -p ./motifs/overlaps/motif_peak_overlaps
-
-# Loop through each 6mer motif file and intersect with all peak files from peaks 
-for file in ./motifs/*_filtered_6mer*.bed; do
-   motif_name=$(basename "$file" .bed)
-   bedtools intersect -u -a "$file" -b ./peaks/filtered_peaks/merged_peaks.bed > ./motifs/overlaps/motif_peak_overlaps/"${motif_name}_peak_overlaps.bed"
-done
-
-# Summarize the intersected results : NRF1 376062 BANP 33226
-# Count lines in bash and save to variables
-n_NRF1=$(cat ./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed | wc -l)
-n_BANP=$(cat ./motifs/overlaps/motif_peak_overlaps/BANP_filtered_6mer.MA2503.1_peak_overlaps.bed | wc -l)
-# Create a summary table using R
-Rscript -e '
-table <- data.frame(
-  Motif = c("NRF1","BANP"),
-  Overlapping_regions = c('"$n_NRF1"','"$n_BANP"'))
-print(table)
-'
-
 # Overlap the 2mm motifs with the peaks to see which motifs fall within the peaks regions.
 mkdir -p ./motifs/overlaps/motif2mm_peak_overlaps
 
-# Loop through each 6mer motif file and intersect with all peak files from peaks
+# Loop through each 2mm motif file and intersect with all peak files from peaks
 
 for file in ./motifs/*_mm0to2_noCGmm_noXY.bed.gz ./motifs/*_mm0to2_noXY.bed.gz; do
   [ -e "$file" ] || continue
@@ -1202,24 +749,6 @@ dev.off()
 ###############################################################################
 # 5) MOTIF ∩ PEAK ∩ HM450
 ###############################################################################
-# Overlap the intersected methylation 6mer motifs with the peak overlapping motifs to find common regions
-mkdir -p ./motifs/overlaps/intersected_overlaps
-
-bedtools intersect -u -a ./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed -b ./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed > ./motifs/overlaps/intersected_overlaps/NRF1_methylation_peak_overlap.bed  
-bedtools intersect -u -a ./motifs/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed -b ./motifs/overlaps/motif_peak_overlaps/BANP_filtered_6mer.MA2503.1_peak_overlaps.bed > ./motifs/overlaps/intersected_overlaps/BANP_methylation_peak_overlap.bed
-
-# Summarize the intersected results : NRF1 23416 BANP 2217
-# Count lines in bash and save to variables
-n_NRF1=$(cat ./motifs/overlaps/intersected_overlaps/NRF1_methylation_peak_overlap.bed | wc -l)
-n_BANP=$(cat ./motifs/overlaps/intersected_overlaps/BANP_methylation_peak_overlap.bed | wc -l)
-# Create a summary table using R
-Rscript -e '
-table <- data.frame(
-  Motif = c("NRF1","BANP"),
-  Overlapping_regions = c('"$n_NRF1"','"$n_BANP"'))
-print(table)
-'
-
 # Overlap methylation-intersected 2mm motifs with peak-overlapping 2mm motifs 
 mkdir -p ./motifs/overlaps/intersected_overlaps2mm_peaks_HM450
 
@@ -1269,120 +798,6 @@ print(tab)
 ###############################################################################
 # ONE BARPLOT PER TF : MOTIFS, ATAC, HM450, SNVs 
 ###############################################################################
-# create a barplot : One page per TF: 6 mer motifs, ATAC, HM450, SNVs
-Rscript -e '
-library(ggplot2)
-
-out_pdf <- "./results/motifs/NRF1_BANP_3D_vs_peaks_vs_HM450_barplots.pdf"
-dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-
-pdf(out_pdf, width = 10, height = 8)
-
-# ===================== PAGE 1: NRF1 =====================
-## 1) Read motif sets and build unique IDs
-motif_all   <- read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed")
-motif_ids   <- unique(with(motif_all, paste(V1, V2, V3, sep=":")))
-
-motif_peak  <- read.table("./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed")
-peak_ids    <- unique(with(motif_peak, paste(V1, V2, V3, sep=":")))
-
-motif_hm450 <- read.table("./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed")
-hm450_ids   <- unique(with(motif_hm450, paste(V1, V2, V3, sep=":")))
-
-## 2) Counts
-total   <- length(motif_ids)
-in_atac <- length(peak_ids)
-in_hm450<- length(hm450_ids)
-in_both <- length(intersect(peak_ids, hm450_ids))
-
-## 3) Data frame
-df <- data.frame(
-  category = c("All NRF1 motifs",
-               "Motifs in ATAC peaks",
-               "Motifs with HM450 probes",
-               "Motifs in both ATAC + HM450"),
-  count = c(total, in_atac, in_hm450, in_both)
-)
-
-df$category <- factor(df$category, levels = df$category)
-df$percent  <- df$count / total * 100
-df$label    <- sprintf("%d (%.2f%%)", df$count, df$percent)
-
-## 4) Plot
-p1 <- ggplot(df, aes(x = reorder(category, -count), y = count, fill = category)) +
-  geom_col(width = 0.7) +
-  geom_text(aes(label = label), vjust = -0.4, size = 4) +
-  theme_minimal(base_size = 14) +
-  theme(
-    legend.position = "none",
-    axis.text.x = element_text(angle = 20, hjust = 1),
-    plot.title = element_text(hjust = 0.5),
-    plot.subtitle = element_text(hjust = 0.5)
-  ) +
-  labs(
-    title = "NRF1 6-mer motif distribution across datasets",
-    subtitle = sprintf("All NRF1 6-mer motifs (n = %d)", total),
-    y = "Number of motifs",
-    x = NULL
-  )
-
-print(p1)
-
-# ===================== PAGE 2: BANP =====================
-## 1) Read motif sets and build unique IDs
-motif_all   <- read.table("./motifs/BANP_filtered_6mer.MA2503.1.bed")
-motif_ids   <- unique(with(motif_all, paste(V1, V2, V3, sep=":")))
-
-motif_peak  <- read.table("./motifs/overlaps/motif_peak_overlaps/BANP_filtered_6mer.MA2503.1_peak_overlaps.bed")
-peak_ids    <- unique(with(motif_peak, paste(V1, V2, V3, sep=":")))
-
-motif_hm450 <- read.table("./motifs/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed")
-hm450_ids   <- unique(with(motif_hm450, paste(V1, V2, V3, sep=":")))
-
-## 2) Counts
-total   <- length(motif_ids)
-in_atac <- length(peak_ids)
-in_hm450<- length(hm450_ids)
-in_both <- length(intersect(peak_ids, hm450_ids))
-
-## 3) Data frame
-df <- data.frame(
-  category = c("All BANP motifs",
-               "Motifs in ATAC peaks",
-               "Motifs with HM450 probes",
-               "Motifs in both ATAC + HM450"),
-  count = c(total, in_atac, in_hm450, in_both)
-)
-
-df$category <- factor(df$category, levels = df$category)
-df$percent  <- df$count / total * 100
-df$label    <- sprintf("%d (%.2f%%)", df$count, df$percent)
-
-## 4) Plot
-p2 <- ggplot(df, aes(x = reorder(category, -count), y = count, fill = category)) +
-  geom_col(width = 0.7) +
-  geom_text(aes(label = label), vjust = -0.4, size = 4) +
-  theme_minimal(base_size = 14) +
-  theme(
-    legend.position = "none",
-    axis.text.x = element_text(angle = 20, hjust = 1),
-    plot.title = element_text(hjust = 0.5),
-    plot.subtitle = element_text(hjust = 0.5)
-  ) +
-  labs(
-    title = "BANP 6-mer motif distribution across datasets",
-    subtitle = sprintf("All BANP 6-mer motifs (n = %d)", total),
-    y = "Number of motifs",
-    x = NULL
-  )
-
-print(p2)
-
-# ===================== CLOSE =====================
-dev.off()
-cat("Wrote:", out_pdf, "\n")
-'
-
 # create a barplot : One page per TF: 2mm motifs, ATAC, HM450, SNVs
 Rscript -e '
 library(ggplot2)
@@ -1490,10 +905,10 @@ plot_one("BANP", "mm0to2_noCGmm")
 dev.off()
 cat("Wrote:", out_pdf, "\n")
 '
-# ATTENTION I M HERE !!! NOT CCORRECTED IN THE LAB BOOK YET  THE BARPLOT ABOVE 
+
 
 ###############################################################################
-# ONE BARPLOT FOR BOTH TF : MOTIFS, ATAC, HM450, SNVs 
+# ONE BARPLOT FOR BOTH TF : MOTIFS, ATAC, HM450, SNVs NOT DONE
 ###############################################################################
 # one barplot for both TFs NRF1 and BANP together : this script creates a small barplot showing the percentage of motifs in each category for both TFs one tf per page
 Rscript -e '
@@ -1592,148 +1007,6 @@ cat("DONE →", out_pdf, "\n")
 '
 
 ###############################################################################
-# PROPORTIONAL EULER DIAGRAM PER TF : 6 mer MOTIFS, ATAC, HM450, SNVs 
-###############################################################################
-# Proportional Euler diagram of motifs with peaks and methylation probes 
-# Venn diagram 3D with filtered SNVs in motifs and in peak 
-# Proportional Euler diagram of motifs with peaks and methylation probes
-
-Rscript -e '
-library(eulerr)
-
-out_pdf <- "./results/motifs/Euler_VENN_NRF1_BANP_Motifs_ATAC_HM450_SNV.pdf"
-dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-
-pdf(out_pdf, width = 10, height = 10)
-
-# margins: bottom, left, top, right
-par(mar = c(4, 4, 6, 2))
-
-################################
-## PAGE 1 — NRF1 : ATAC + SNVs ##
-################################
-plot.new()   
-
-motif_all <- unique(with(
-  read.table("./motifs/NRF1_filtered_6mer.MA0506.3.bed"),
-  paste(V1, V2, V3, sep=":")
-))
-motif_peak <- unique(with(
-  read.table("./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed"),
-  paste(V1, V2, V3, sep=":")
-))
-motif_variants <- unique(with(
-  read.table("./motifs/overlaps/motifs_snv_overlap/NRF1_filtered_SNVs_in_motifskept.bed"),
-  paste(V1, V2, V3, sep=":")
-))
-
-fit <- euler(list(
-  "All NRF1 motifs"       = motif_all,
-  "Motifs in ATAC"        = motif_peak,
-  "Motifs with variants" = motif_variants
-))
-
-plot(fit,
-     fills = c("steelblue","lightgreen","red"),
-     edges = "black",
-     quantities = list(type="counts", cex=0.9),
-     labels = list(cex=1.1),
-     main = NULL)
-
-mtext("NRF1 motifs: genome-wide, accessible,\nand overlapping SNVs",
-      side = 3, line = 2, cex = 1.2)
-
-##################################
-## PAGE 2 — NRF1 : ATAC + HM450 ##
-##################################
-plot.new()
-
-motif_hm450 <- unique(with(
-  read.table("./motifs/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed"),
-  paste(V1, V2, V3, sep=":")
-))
-
-fit <- euler(list(
-  "All NRF1 motifs"          = motif_all,
-  "Motifs in ATAC"           = motif_peak,
-  "Motifs with HM450 probes" = motif_hm450
-))
-
-plot(fit,
-     fills = c("steelblue","lightgreen","orange"),
-     edges = "black",
-     quantities = list(type="counts", cex=0.9),
-     labels = list(cex=1.1),
-     main = NULL)
-
-mtext("NRF1 motifs: genome-wide, accessible,\nand covered by HM450 probes",
-      side = 3, line = 2, cex = 1.2)
-
-################################
-## PAGE 3 — BANP : ATAC + SNVs ##
-################################
-plot.new()
-
-motif_all <- unique(with(
-  read.table("./motifs/BANP_filtered_6mer.MA2503.1.bed"),
-  paste(V1, V2, V3, sep=":")
-))
-motif_peak <- unique(with(
-  read.table("./motifs/overlaps/motif_peak_overlaps/BANP_filtered_6mer.MA2503.1_peak_overlaps.bed"),
-  paste(V1, V2, V3, sep=":")
-))
-motif_variants <- unique(with(
-  read.table("./motifs/overlaps/motifs_snv_overlap/BANP_filtered_SNVs_in_motifskept.bedd"),
-  paste(V1, V2, V3, sep=":")
-))
-
-fit <- euler(list(
-  "All BANP motifs"       = motif_all,
-  "Motifs in ATAC"        = motif_peak,
-  "Motifs with variants" = motif_variants
-))
-
-plot(fit,
-     fills = c("steelblue","lightgreen","red"),
-     edges = "black",
-     quantities = list(type="counts", cex=0.9),
-     labels = list(cex=1.1),
-     main = NULL)
-
-mtext("BANP motifs: genome-wide, accessible,\nand overlapping SNVs",
-      side = 3, line = 2, cex = 1.2)
-
-##################################
-## PAGE 4 — BANP : ATAC + HM450 ##
-##################################
-plot.new()
-
-motif_hm450 <- unique(with(
-  read.table("./motifs/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed"),
-  paste(V1, V2, V3, sep=":")
-))
-
-fit <- euler(list(
-  "All BANP motifs"          = motif_all,
-  "Motifs in ATAC"           = motif_peak,
-  "Motifs with HM450 probes" = motif_hm450
-))
-
-plot(fit,
-     fills = c("steelblue","lightgreen","orange"),
-     edges = "black",
-     quantities = list(type="counts", cex=0.9),
-     labels = list(cex=1.1),
-     main = NULL)
-
-mtext("BANP motifs: genome-wide, accessible,\nand covered by HM450 probes",
-      side = 3, line = 2, cex = 1.2)
-
-dev.off()
-cat("DONE →", out_pdf, "\n")
-'
-
-###############################################################################
 # PROPORTIONAL EULER DIAGRAM PER TF : 2mm MOTIFS, ATAC, HM450, SNVs 
 ###############################################################################
 Rscript -e '
@@ -1761,7 +1034,7 @@ for(motif in motifs){
   for(variant in variants){
 
     # ---------- inputs for this motif/variant ----------
-    motif_all_file  <- paste0("./motifs/", motif, "_", variant, ".bed.gz")
+    motif_all_file  <- paste0("./motifs/", motif, "_", variant, "noCGmm_noXY.bed.gz")
     motif_peak_file <- paste0("./motifs/overlaps/motif2mm_peak_overlaps/", motif, "_", variant, "_peak_overlaps.bed")
     motif_snv_file  <- paste0("./motifs/overlaps/motif2mm_snv_overlaps/", motif, "_", variant, "_motifs_with_SNVs.bed")
 
@@ -1836,13 +1109,13 @@ cat("DONE ->", out_pdf, "\n")
 # 7) Linking motifs with the closest gene using bedtools closest 
 ###############################################################################
 # Gene annotation file : /data/genome/annotations/hg38_genes.bed
-for files in ./motifs/*_mm0to2*.bed.gz; do 
+for files in ./motifs/*_mm0to2_noCGmm_noXY.bed.gz; do 
     echo "Processing $files ..."
     zcat "$files" | sort -k1,1 -k2,2n | closestBed -t "first" -d -a stdin -b /data/genome/annotations/hg38_tss.bed > "${files%.bed.gz}_closest_genes.bed"
 done
 
 # add header to the closest genes files
-for file in ./motifs/*_mm0to2*_closest_genes.bed; do
+for file in ./motifs/*_mm0to2_noCGmm_noXY_closest_genes.bed; do
   tmp="${file}.tmp"
   { echo -e "chrom_motif\tstart_motif\tend_motif\tmotif\tpvalue\tstrand_motif\tchrom_gene\tstart_gene\tend_gene\tgene\tstrand_gene\tgene_id\tdistance"; cat "$file"; } > "$tmp" && mv "$tmp" "$file"
 done
@@ -2201,29 +1474,6 @@ dev.off()
 ###############################################################################
 # 6) ATAC PEAKS ∩ MOTIFS OVERLAPPING PEAKS KEPT
 ###############################################################################
-# Look into the ATAC peaks overlapping with 6mer motifs
-mkdir -p ./peaks/overlaps/intersected_motifs/NRF1
-
-motif_sites="./motifs/NRF1_filtered_6mer.MA0506.3.bed"
-
-for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
-  sample=$(basename "$f" _peaks_macs.bed)
-  out="./peaks/overlaps/intersected_motifs/NRF1/${sample}_NRF1_intersected_peaks.bed"
-
-  bedtools intersect -u -a "$f" -b "$motif_sites" > "$out"
-  echo "Wrote: $out"
-done
-
-mkdir -p ./peaks/overlaps/intersected_motifs/BANP
-
-motif_sites="./motifs/BANP_filtered_6mer.MA2503.1.bed"
-
-for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
-  sample=$(basename "$f" _peaks_macs.bed)
-  out="./peaks/overlaps/intersected_motifs/BANP/${sample}_BANP_intersected_peaks.bed"
-  bedtools intersect -u -a "$f" -b "$motif_sites" > "$out"
-  echo "Wrote: $out"
-done
 #########################################################
 # Look into the ATAC peaks overlapping with 2mm motifs
 #########################################################
@@ -2274,132 +1524,6 @@ for f in ./peaks/filtered_peaks/ATAC_TCGA*peaks_macs.bed; do
   bedtools intersect -u -a "$f" -b <(zcat "$motif_sites") > "$out"
   echo "Wrote: $out"
 done
-
-
-###############################################################################
-# 7) 6 mer MOTIF THAT OVERLAP WITH PEAKS DISTANCE TO TSS
-###############################################################################
-# Distance of motifs in peaks to TSS : generate a file per sample with the distances of each motif to the nearest TSS
-
-# NRF1 
-mkdir -p ./peaks/dist_to_tss_motifs/NRF1
-
-for f in ./peaks/overlaps/intersected_motifs/NRF1/*_NRF1_intersected_peaks.bed; do
-  base=$(basename "$f" _NRF1_intersected_peaks.bed)
-  out="./peaks/dist_to_tss_motifs/NRF1/${base}_NRF1_dist_tss.txt"
-
-  closestBed -t first -d \
-    -a "$f" \
-    -b /data/genome/annotations/hg38_tss.bed \
-  | awk '{print $NF}' > "$out"
-
-  echo "Wrote: $out"
-done
-
-# BANP
-mkdir -p ./peaks/dist_to_tss_motifs/BANP
-
-for f in ./peaks/overlaps/intersected_motifs/BANP/*_BANP_intersected_peaks.bed; do
-  base=$(basename "$f" _BANP_intersected_peaks.bed)
-  out="./peaks/dist_to_tss_motifs/BANP/${base}_BANP_dist_tss.txt"
-
-  closestBed -t first -d \
-    -a "$f" \
-    -b /data/genome/annotations/hg38_tss.bed \
-  | awk '{print $NF}' > "$out"
-
-  echo "Wrote: $out"
-done
-
-# Plot histogram of distances to TSS for NRF1 and BANP motifs per cancer type
-Rscript -e '
-library(data.table)
-
-out_pdf <- "./results/peaks/ATAC_motifs_TSS/dist_tss_ATAC_NRF1_BANP_byCancer.pdf"
-dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-
-pdf(out_pdf, width = 11.7, height = 8.3)
-par(bg = "white")
-
-# =========================
-# RUN ONCE FOR EACH TF
-# =========================
-for (TF in c("NRF1", "BANP")) {
-
-  dist_dir <- paste0("./peaks/dist_to_tss_motifs/", TF)
-  out_tsv  <- paste0("./results/peaks/ATAC_motifs_TSS/", TF,"/summary_", TF, "_byCancer.tsv")
-
-  files <- list.files(dist_dir, pattern = paste0("_", TF, "_dist_tss.txt$"),full.names = TRUE)
-  if (!length(files)) {
-    plot.new()
-    title(main = paste0(TF, ": no distance files found"))
-    next
-  }
-
-  # extract cancer code from filename: TCGA-XXX-
-  get_cancer <- function(x) {
-    m <- regexpr("TCGA-[A-Z0-9]+", x)
-    if (m[1] == -1) return(NA_character_)
-    sub("^TCGA-", "", regmatches(x, m))
-  }
-
-
-  cancers <- vapply(basename(files), get_cancer, character(1))
-  ok <- !is.na(cancers) & cancers != ""
-  files <- files[ok]
-  cancers <- cancers[ok]
-
-  res <- list()
-  uniq_cancers <- sort(unique(cancers))
-
-  for (c in uniq_cancers) {
-    fc <- files[cancers == c]
-
-    d_list <- lapply(fc, function(f)
-      suppressWarnings(as.numeric(readLines(f))))
-    d <- unlist(d_list, use.names = FALSE)
-    d <- d[is.finite(d)]
-
-    n_samples <- length(fc)
-    n_vals <- length(d)
-
-    if (n_vals == 0) {
-      plot.new()
-      title(main = paste0("TCGA-", c, " | ", TF, " motif CpGs: none found"))
-      res[[c]] <- data.frame(cancer=c, n_samples=n_samples, n_values=0,pct_prox=NA, pct_dist=NA, median=NA)
-      next
-    }
-
-    proximal <- sum(d < 2000)
-    distal   <- sum(d >= 2000)
-    pct_prox <- round(100 * proximal / n_vals, 1)
-    pct_dist <- round(100 * distal   / n_vals, 1)
-
-    hist(log10(d + 1),
-         xlim = c(0, 8),
-         xlab = "Distance to TSS (log10)",
-         main = paste0("TCGA-", c, " | ", TF,
-                       " | samples=", n_samples,
-                       " | n=", n_vals,
-                       " | Proximal=", pct_prox,
-                       "% | Distal=", pct_dist, "%"),
-         breaks = 50,
-         col = "steelblue",
-         border = "black")
-    abline(v = log10(2000), col = "red", lwd = 2)
-
-    res[[c]] <- data.frame(cancer=c, n_samples=n_samples, n_values=n_vals,pct_prox=pct_prox, pct_dist=pct_dist, median=median(d))
-  }
-
-  dir.create(dirname(out_tsv), recursive = TRUE, showWarnings = FALSE)
-  write.table(do.call(rbind, res), out_tsv,sep = "\t", quote = FALSE, row.names = FALSE)
-
-}
-
-dev.off()
-
-cat("Wrote:", out_pdf, "\n")
-'
 
 ###############################################################################
 # 7) 2mm MOTIF THAT OVERLAP WITH PEAKS DISTANCE TO TSS
@@ -2564,7 +1688,6 @@ cat("Wrote:", out_pdf, "\n")
 ###############################################################################
 # METHYLATION SCRIPT
 ###############################################################################
-
 ###############################################################################
 # SECTION 1 — SETUP & DATA LINKING
 ###############################################################################
@@ -3123,26 +2246,38 @@ closestBed -t first -d -a "$file" -b /data/genome/annotations/hg38_tss.bed | awk
 
 Rscript -e '
 dist_file <- "./methylation/dist_to_tss/probes_dist_tss.txt"
-distances <- read.table(dist_file)[,1]
+distances <- read.table(dist_file, header = FALSE)[,1]
 
-pdf("./results/methylation/dist_tss_methylation_histogram.pdf", width=10, height=10)
+# Remove missing values if any
+distances <- distances[!is.na(distances)]
+
+pdf("./results/methylation/dist_tss_methylation_histogram.pdf", width = 10, height = 10)
 par(bg = "white")
 
-# compute proximal/distal percentages
-  proximal <- sum(distances < 2000)
-  distal   <- sum(distances >= 2000)
-  total    <- length(distances)
-  pct_prox <- round((proximal / total) * 100, 1)
-  pct_dist <- round((distal   / total) * 100, 1)
+# Compute proximal/distal percentages using absolute distance to TSS
+proximal <- sum(abs(distances) < 2000)
+distal   <- sum(abs(distances) >= 2000)
+total    <- length(distances)
 
-hist(log10(distances + 1),
-     xlim = c(0, 8),
-     xlab = "Distance to TSS (log10)",
-     main = paste0("All comon CpGs", "  | Proximal = ", pct_prox, "% Distal = ", pct_dist, "%"),
-     breaks = 50,
-     col = "steelblue",
-     border = "black")
-  abline(v = log10(2000), col = "red", lwd = 2)
+pct_prox <- round((proximal / total) * 100, 1)
+pct_dist <- round((distal   / total) * 100, 1)
+
+hist(
+  log10(abs(distances) + 1),
+  xlim = c(0, 8),
+  xlab = "Absolute distance to TSS (log10)",
+  main = paste0(
+    "All common CpGs",
+    " | Proximal = ", pct_prox, "%",
+    " Distal = ", pct_dist, "%"
+  ),
+  breaks = 50,
+  col = "steelblue",
+  border = "black"
+)
+
+abline(v = log10(2000 + 1), col = "red", lwd = 2)
+
 dev.off()
 '
 
@@ -3150,230 +2285,8 @@ dev.off()
 ###############################################################################
 # SECTION 8 — DELTA METHYLATION (ALL CpGs after filtering))
 ###############################################################################
-
 ###########################################################################################
-# SMOOTH SCATTER PLOT FOR ALL CANCER-HEALTHY SAMPLE PAIRS FILTERED with 6mer motif
-###########################################################################################
-# plot the methylation distribution for both healthy and cancer samples of all samples using a delta methylation histogram :
-#This script generates a single PDF where each page contains three plots for one tumor–normal pair: global CpG methylation, CpGs in NRF1 motifs, and CpGs in BANP motifs.
-#In the second and third plots, CpGs overlapping NRF1 or BANP binding sites with strong methylation changes (|Δβ| ≥ 20%) are highlighted in red to assess motif-specific epigenetic disruption.
-Rscript -e '
-suppressPackageStartupMessages({
-  library(data.table)
-  library(KernSmooth)
-})
-
-# =========================
-# INPUTS
-# =========================
-pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
-
-motif_files <- list(
-  NRF1 = "./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed",
-  BANP = "./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed"
-)
-
-out_pdf <- "./results/methylation/smoothScatter_vs_NRF1_vs_BANP_per_pair.pdf"
-thr <- 20
-
-dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-
-# =========================
-# LOAD DATA
-# =========================
-pairs <- fread(pairs_file)
-stopifnot(all(c("cancer","patient","tumor_file","healthy_file") %in% colnames(pairs)))
-
-motif_cpgs <- lapply(motif_files, function(f) unique(fread(f, header = FALSE)[[4]]))
-
-# =========================
-# HELPERS
-# =========================
-pct_fmt <- function(x, n) {
-  if (n == 0) return("NA")
-  sprintf("%.1f%%", 100 * x / n)
-}
-
-add_class_legend <- function(delta_vec, thr, title = "All CpGs") {
-  n <- length(delta_vec)
-  hypo <- sum(delta_vec <= -thr, na.rm = TRUE)
-  hyper <- sum(delta_vec >=  thr, na.rm = TRUE)
-  unch <- sum(abs(delta_vec) < thr, na.rm = TRUE)
-
-  lab <- paste0(
-    title, "\n",
-    "Hypo (Delta≤-", thr, "): ", pct_fmt(hypo, n), "\n",
-    "Unchanged (|Delta|<", thr, "): ", pct_fmt(unch, n), "\n",
-    "Hyper (Delta≥+", thr, "): ", pct_fmt(hyper, n)
-  )
-
-  usr <- par("usr")
-  x <- usr[1] + 0.02 * (usr[2] - usr[1])
-  y <- usr[4] - 0.02 * (usr[4] - usr[3])
-  text(x, y, labels = lab, adj = c(0, 1), cex = 0.85)
-}
-
-read_bed_gz <- function(path) {
-  cmd <- paste("zcat", shQuote(path))
-  fread(cmd = cmd, header = FALSE, showProgress = FALSE)
-}
-
-# =========================
-# START PDF
-# =========================
-pdf(out_pdf, width = 16, height = 6, colormodel = "rgb", useDingbats = FALSE)
-par(mfrow = c(1, 3), mar = c(4, 4, 4, 1))
-
-pages_written <- 0L
-
-# =========================
-# LOOP OVER PAIRS
-# =========================
-if (nrow(pairs) == 0) {
-  plot.new()
-  title(main = paste0("No rows in pairs file:\n", pairs_file))
-  pages_written <- 1L
-} else {
-
-  for (i in seq_len(nrow(pairs))) {
-
-    cat("Processing:", pairs$cancer[i], pairs$patient[i], "\n")
-
-    tryCatch({
-
-      # ---- read files (robust quoting) ----
-      tf <- pairs$tumor_file[i]
-      nf <- pairs$healthy_file[i]
-
-      if (!file.exists(tf) || !file.exists(nf)) {
-        plot.new()
-        title(main = paste0(
-          pairs$cancer[i], " | ", pairs$patient[i], "\n",
-          "Missing file(s):\n",
-          if (!file.exists(tf)) paste0("tumor_file: ", tf, "\n") else "",
-          if (!file.exists(nf)) paste0("healthy_file: ", nf) else ""
-        ))
-        pages_written <- pages_written + 1L
-        next
-      }
-
-      tumor  <- read_bed_gz(tf)
-      normal <- read_bed_gz(nf)
-
-      # ---- extract probe + beta ----
-      tumor_df  <- data.frame(probe = tumor[[4]],  meth_tumor  = tumor[[5]])
-      normal_df <- data.frame(probe = normal[[4]], meth_normal = normal[[5]])
-
-      merged <- merge(tumor_df, normal_df, by = "probe")
-      if (nrow(merged) == 0) {
-        plot.new()
-        title(main = paste0(
-          pairs$cancer[i], " | ", pairs$patient[i], "\n",
-          "Merged = 0 CpGs (no shared probes)"
-        ))
-        pages_written <- pages_written + 1L
-        next
-      }
-
-      # (optional but recommended) drop NA beta
-      merged <- merged[!is.na(merged$meth_tumor) & !is.na(merged$meth_normal), ]
-      if (nrow(merged) == 0) {
-        plot.new()
-        title(main = paste0(
-          pairs$cancer[i], " | ", pairs$patient[i], "\n",
-          "All shared probes had NA beta"
-        ))
-        pages_written <- pages_written + 1L
-        next
-      }
-
-      delta <- merged$meth_tumor - merged$meth_normal
-
-      # =========================
-      # PLOT 1 — ALL CpGs + %
-      # =========================
-      smoothScatter(
-        merged$meth_normal,
-        merged$meth_tumor,
-        xlab = "Healthy methylation (%)",
-        ylab = "Tumor methylation (%)",
-        main = paste0(pairs$cancer[i], " | ", pairs$patient[i], "\nAll CpGs")
-      )
-      abline(0, 1, col = "black", lwd = 2)
-      abline(a = -thr, b = 1, col = "blue", lwd = 2)
-      abline(a =  thr, b = 1, col = "blue", lwd = 2)
-      add_class_legend(delta, thr, title = "All CpGs")
-
-      # =========================
-      # PLOT 2 — NRF1
-      # =========================
-      smoothScatter(
-        merged$meth_normal,
-        merged$meth_tumor,
-        xlab = "Healthy methylation (%)",
-        ylab = "Tumor methylation (%)",
-        main = "NRF1 motif CpGs in red (|DeltaBeta| ≥ 20%)"
-      )
-      in_NRF1 <- merged$probe %in% motif_cpgs$NRF1
-      is_NRF1_red <- in_NRF1 & (abs(delta) >= thr)
-      points(
-        merged$meth_normal[is_NRF1_red],
-        merged$meth_tumor[is_NRF1_red],
-        pch = 16, cex = 0.5, col = rgb(1, 0, 0, 0.6)
-      )
-      abline(0, 1, col = "black", lwd = 2)
-      abline(a = -thr, b = 1, col = "blue", lwd = 2)
-      abline(a =  thr, b = 1, col = "blue", lwd = 2)
-      add_class_legend(delta[in_NRF1], thr, title = "NRF1 CpGs")
-
-      # =========================
-      # PLOT 3 — BANP
-      # =========================
-      smoothScatter(
-        merged$meth_normal,
-        merged$meth_tumor,
-        xlab = "Healthy methylation (%)",
-        ylab = "Tumor methylation (%)",
-        main = "BANP motif CpGs in red (|DeltaBeta| ≥ 20%)"
-      )
-      in_BANP <- merged$probe %in% motif_cpgs$BANP
-      is_BANP_red <- in_BANP & (abs(delta) >= thr)
-      points(
-        merged$meth_normal[is_BANP_red],
-        merged$meth_tumor[is_BANP_red],
-        pch = 16, cex = 0.5, col = rgb(1, 0, 0, 0.6)
-      )
-      abline(0, 1, col = "black", lwd = 2)
-      abline(a = -thr, b = 1, col = "blue", lwd = 2)
-      abline(a =  thr, b = 1, col = "blue", lwd = 2)
-      add_class_legend(delta[in_BANP], thr, title = "BANP CpGs")
-
-      pages_written <- pages_written + 1L
-
-    }, error = function(e) {
-      plot.new()
-      title(main = paste0(
-        pairs$cancer[i], " | ", pairs$patient[i], "\nERROR:\n", conditionMessage(e)
-      ))
-      pages_written <- pages_written + 1L
-    })
-  }
-}
-
-# If literally nothing got plotted , add a diagnostic page
-if (pages_written == 0L) {
-  plot.new()
-  title(main = paste0(
-    "No pages produced.\nCheck pairs file and file paths:\n", pairs_file
-  ))
-}
-
-dev.off()
-cat("DONE →", out_pdf, " (pages:", pages_written, ")\n")
-'
-
-###########################################################################################
-# Overlaps Mehtylaiton probes with 2mm motifs
+# Overlaps Methylation probes with 2mm motifs
 ########################################################################################### 
 mkdir -p ./methylation/overlaps/intersected_motifs2mm_HM450
 
@@ -5226,7 +4139,7 @@ mot <- fread(paste0(
   "/Motif_counts_per_cancer_", tf, "_proximal.tsv"
 ))
 
-g <- fread(paste0("./motifs/", tf, "_closest_genes.bed"), header=FALSE, skip=1)
+g <- fread(paste0("./motifs/", tf, "_noXY_closest_genes.bed"), header=FALSE, skip=1)
 
 g <- g[, .(
   motif_id = paste(V2, V3, V4, sep=":"),
@@ -5641,324 +4554,6 @@ for (i in seq_len(nrow(pairs))) {
 
 dev.off()
 cat("DONE -> ", out_pdf, "\n", sep="")
-'
-
-###########################################################################################
-# DELTA BOXPLOT PLOT FOR ALL CANCER-HEALTHY TYPES PAIRS FILTERED WITH ALL CPG AND CPG IN TF --> PER CANCER TYPE
-###########################################################################################
-mkdir -p ./methylation/overlaps/intersected_motifs_HM450/
-# get the CpGs that are in NRF1 motifs and BANP motifs
-bedtools intersect -u -a ./methylation/annotated_methylation_data_probes_filtered.bed -b ./motifs/NRF1_filtered_6mer.MA0506.3.bed > ./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed
-bedtools intersect -u -a ./methylation/annotated_methylation_data_probes_filtered.bed -b ./motifs/BANP_filtered_6mer.MA2503.1.bed  > ./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed
-# PLOT THE BOXPLOT FOR MOTIFS TAKIG THE MEDIAN FOR EACH CANCER TYPE
-# compute delta methylation per pair and classify into hypo hyper unchanged and make boxplot per cancer type for NRF1 and BANP motifs
-Rscript -e '
-library(data.table)
-library(ggplot2)
-
-# =========================
-# INPUTS
-# =========================
-pairs_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
-out_pdf    <- "./results/methylation/stacked_median_composition_delta_methylation_per_cancer.pdf"
-thr <- 10
-
-# =========================
-# HELPERS
-# =========================
-read_probe_meth <- function(f) {
-  dt <- fread(cmd = paste("zcat", shQuote(f)), header = FALSE, select = c(4,5))
-  setnames(dt, c("probe","meth"))
-  dt[, meth := as.numeric(meth)]
-  dt
-}
-
-# =========================
-# LOAD PAIRS
-# =========================
-pairs <- fread(pairs_file)[!is.na(tumor_file) & !is.na(healthy_file)]
-
-# =========================
-# LOAD MOTIF CpGs
-# =========================
-motif_cpgs <- list(
-  NRF1 = unique(fread(
-    "./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed",
-    header = FALSE
-  )[[4]]),
-  BANP = unique(fread(
-    "./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed",
-    header = FALSE
-  )[[4]])
-)
-
-# =========================
-# COMPUTE PER-PATIENT COMPOSITIONS
-# =========================
-res <- list()
-
-for (i in seq_len(nrow(pairs))) {
-    cat(
-      sprintf(
-        "Processing %d / %d — cancer: %s\n",
-        i, nrow(pairs), pairs$cancer[i]
-      )
-    )
-
-  tumor  <- read_probe_meth(pairs$tumor_file[i])
-  normal <- read_probe_meth(pairs$healthy_file[i])
-
-  if (!identical(tumor$probe, normal$probe))
-    stop("Probe order mismatch at pair ", i)
-
-  delta <- tumor$meth - normal$meth
-
-  class_idx <- list(
-    Unchanged = delta >= -thr & delta <= thr,
-    Hypomethylated = delta < -thr,
-    Hypermethylated = delta > thr
-  )
-
-  for (cl in names(class_idx)) {
-
-    idx <- class_idx[[cl]] & !is.na(delta)
-    n_all <- sum(idx)
-    if (n_all == 0) next
-
-    n_nrf1 <- sum(idx & tumor$probe %chin% motif_cpgs$NRF1)
-    n_banp <- sum(idx & tumor$probe %chin% motif_cpgs$BANP)
-    n_other <- n_all - n_nrf1 - n_banp
-
-    res[[length(res)+1]] <- data.table(
-      cancer = pairs$cancer[i],
-      class = cl,
-      context = "NRF1",
-      percentage = 100 * n_nrf1 / n_all
-    )
-    res[[length(res)+1]] <- data.table(
-      cancer = pairs$cancer[i],
-      class = cl,
-      context = "BANP",
-      percentage = 100 * n_banp / n_all
-    )
-    res[[length(res)+1]] <- data.table(
-      cancer = pairs$cancer[i],
-      class = cl,
-      context = "Other",
-      percentage = 100 * n_other / n_all
-    )
-  }
-}
-
-dt <- rbindlist(res)
-
-# =========================
-# MEDIAN PER CANCER
-# =========================
-dt_med <- dt[
-  , .(percentage = median(percentage, na.rm = TRUE)),
-  by = .(cancer, class, context)
-]
-
-dt_med[, class := factor(class,
-  levels = c("Unchanged","Hypomethylated","Hypermethylated")
-)]
-dt_med[, context := factor(context,
-  levels = c("NRF1","BANP","Other")
-)]
-
-# =========================
-# COLORS
-# =========================
-cols <- c(
-  NRF1  = "#1F78B4",
-  BANP  = "#E31A1C",
-  Other = "#BDBDBD"
-)
-
-# =========================
-# PLOTTING
-# =========================
-pdf(out_pdf, width = 14, height = 5)
-
-for (c in sort(unique(dt_med$cancer))) {
-
-  sub <- dt_med[cancer == c]
-
-  p <- ggplot(sub, aes(x = class, y = percentage, fill = context)) +
-    geom_bar(stat = "identity", width = 0.7) +
-    scale_fill_manual(values = cols) +
-    theme_minimal(base_size = 12) +
-    theme(
-      panel.grid.major.x = element_blank(),
-      axis.text.x = element_text(size = 11),
-      plot.title = element_text(hjust = 0.5)
-    ) +
-    labs(
-      title = paste0(
-        "Median CpG context composition within Delta-methylation classes — ", c
-      ),
-      x = "",
-      y = "Median percentage of CpGs (%)",
-      fill = "CpG context"
-    ) +
-    geom_text(
-      data = sub[context %in% c("NRF1","BANP")],
-      aes(
-        label = paste0(context, ": ", round(percentage, 1), "%"),
-        y = cumsum(percentage) - percentage/2 +
-            ifelse(context == "NRF1", 5, -3)
-      ),
-      color = "black",
-      size = 3.5
-    )
-  print(p)
-}
-dev.off()
-cat("Wrote:", out_pdf, "\n")
-'
-
-###############################################################################
-# SECTION 9 — Distance OF CpG PROBES IN 6 mer MOTIFS TO TSS
-###############################################################################
-# Look into the distance of CpG probes in motifs to othe TSS to see if they are proximal or distal
-# produce a tsv file per sample with two columns: CpG probe ID and distance to nearest TSS in the folder ./methylation/dist_to_tss/
-mkdir -p ./methylation/dist_to_tss/
-for file in ./methylation/filtered_methylation/HM450*_annotated_methylation_filtered.bed.gz; do
-  sample=$(basename "$file" .bed.gz)
-  out="./methylation/dist_to_tss/${sample}_cpg_dist_tss.tsv"
-
-  closestBed -t first -d \
-    -a "$file" \
-    -b /data/genome/annotations/hg38_tss.bed \
-  | awk 'BEGIN{FS=OFS="\t"} {print $4, $NF}' \
-  > "$out"
-
-  echo "Wrote: $out"
-done
-
-# for each tsv file in ./methylation/dist_to_tss/ filter only those in motif of NRF1 and make a histogram of distances to TSS for each sample
-# NRF1 
-mkdir -p ./results/methylation/methylation_motifs_TSS/NRF1
-mkdir -p ./methylation/dist_to_tss_motif/NRF1
-
-awk 'BEGIN{FS=OFS="\t"} {print $4}' \
-  ./methylation/overlaps/intersected_motifs_HM450/NRF1_intersected_methylation.bed \
-| grep -E '^cg' | sort -u \
-> ./methylation/overlaps/intersected_motifs_HM450/NRF1_probes.txt
-
-for f in ./methylation/dist_to_tss/*_cpg_dist_tss.tsv; do
-  base=$(basename "$f")
-  out="./methylation/dist_to_tss_motif/NRF1/${base/_cpg_dist_tss.tsv/_NRF1_dist_tss.txt}"
-
-  awk 'NR==FNR{a[$1]=1; next} ($1 in a){print $2}' \
-    ./methylation/overlaps/intersected_motifs_HM450/NRF1_probes.txt \
-    "$f" > "$out"
-done
-# BANP 
-mkdir -p ./results/methylation/methylation_motifs_TSS/BANP
-mkdir -p ./methylation/dist_to_tss_motif/BANP
-
-awk 'BEGIN{FS=OFS="\t"} {print $4}' \
-  ./methylation/overlaps/intersected_motifs_HM450/BANP_intersected_methylation.bed \
-| grep -E '^cg' | sort -u \
-> ./methylation/overlaps/intersected_motifs_HM450/BANP_probes.txt
-
-for f in ./methylation/dist_to_tss/*_cpg_dist_tss.tsv; do
-  base=$(basename "$f")
-  out="./methylation/dist_to_tss_motif/BANP/${base/_cpg_dist_tss.tsv/_BANP_dist_tss.txt}"
-  awk 'NR==FNR{a[$1]=1; next} ($1 in a){print $2}' \
-    ./methylation/overlaps/intersected_motifs_HM450/BANP_probes.txt \
-    "$f" > "$out"
-done
-
-# Plot histogram of distances to TSS for NRF1 and BANP motifs per cancer type
-Rscript -e '
-library(data.table)
-
-out_pdf <- "./results/methylation/methylation_motifs_TSS/dist_tss_methylation_NRF1_BANP_byCancer.pdf"
-dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-
-pdf(out_pdf, width = 11.7, height = 8.3)
-par(bg = "white")
-
-# =========================
-# RUN ONCE FOR EACH TF
-# =========================
-for (TF in c("NRF1", "BANP")) {
-
-  dist_dir <- paste0("./methylation/dist_to_tss_motif/", TF)
-  out_tsv  <- paste0("./results/methylation/methylation_motifs_TSS/", TF,"/summary_", TF, "_byCancer.tsv")
-
-  files <- list.files(dist_dir, pattern = paste0("_", TF, "_dist_tss.txt$"),full.names = TRUE)
-  if (!length(files)) {
-    plot.new()
-    title(main = paste0(TF, ": no distance files found"))
-    next
-  }
-
-  # extract cancer code from filename: TCGA-XXX-
-  get_cancer <- function(x) {
-    m <- regexpr("TCGA-[A-Z0-9]+-", x)
-    if (m[1] == -1) return(NA_character_)
-    sub("^TCGA-|-$", "", regmatches(x, m))
-  }
-
-  cancers <- vapply(basename(files), get_cancer, character(1))
-  ok <- !is.na(cancers) & cancers != ""
-  files <- files[ok]
-  cancers <- cancers[ok]
-
-  res <- list()
-  uniq_cancers <- sort(unique(cancers))
-
-  for (c in uniq_cancers) {
-    fc <- files[cancers == c]
-
-    d_list <- lapply(fc, function(f)
-      suppressWarnings(as.numeric(readLines(f))))
-    d <- unlist(d_list, use.names = FALSE)
-    d <- d[is.finite(d)]
-
-    n_samples <- length(fc)
-    n_vals <- length(d)
-
-    if (n_vals == 0) {
-      plot.new()
-      title(main = paste0("TCGA-", c, " | ", TF, " motif CpGs: none found"))
-      res[[c]] <- data.frame(cancer=c, n_samples=n_samples, n_values=0,pct_prox=NA, pct_dist=NA, median=NA)
-      next
-    }
-
-    proximal <- sum(d < 2000)
-    distal   <- sum(d >= 2000)
-    pct_prox <- round(100 * proximal / n_vals, 1)
-    pct_dist <- round(100 * distal   / n_vals, 1)
-
-    hist(log10(d + 1),
-         xlim = c(0, 8),
-         xlab = "Distance to TSS (log10)",
-         main = paste0("TCGA-", c, " | ", TF,
-                       " | samples=", n_samples,
-                       " | n=", n_vals,
-                       " | Proximal=", pct_prox,
-                       "% | Distal=", pct_dist, "%"),
-         breaks = 50,
-         col = "steelblue",
-         border = "black")
-    abline(v = log10(2000), col = "red", lwd = 2)
-
-    res[[c]] <- data.frame(cancer=c, n_samples=n_samples, n_values=n_vals,pct_prox=pct_prox, pct_dist=pct_dist, median=median(d))
-  }
-
-  dir.create(dirname(out_tsv), recursive = TRUE, showWarnings = FALSE)
-  write.table(do.call(rbind, res), out_tsv,sep = "\t", quote = FALSE, row.names = FALSE)
-
-}
-
-dev.off()
-
-cat("Wrote:", out_pdf, "\n")
 '
 
 ###############################################################################
@@ -6415,42 +5010,57 @@ done
 
 # Plot histogram of SNVs per cancer type
 Rscript -e '
-
-data <- read.table("./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv")
-
-cancer_names <- data[,1]
-snv_counts   <- data[,2]
+data <- read.table("./snv/snv_counts_per_cancer_type/snv_unique_per_cancer.tsv",header = FALSE, sep = "\t", stringsAsFactors = FALSE)
+cancer_names <- trimws(data[,1])
+snv_counts   <- as.numeric(data[,2])
 
 # Sort from biggest to smallest
 ord <- order(snv_counts, decreasing = TRUE)
 cancer_names <- cancer_names[ord]
-snv_counts  <- snv_counts[ord]
-# reverse order for horizontal barplot (largest at top)
+snv_counts   <- snv_counts[ord]
+
+# Reverse order for horizontal barplot (largest at top)
 cancer_names <- rev(cancer_names)
-snv_counts  <- rev(snv_counts)
+snv_counts   <- rev(snv_counts)
 
 snv_millions <- snv_counts / 1e6
-# Build consistent colors
-all_cancers <- scan("./results/multi_omics/cancer_color_order.txt", what = "")
-palette <- rainbow(length(all_cancers))
-names(palette) <- all_cancers
+
+# Read defined colors
+color_df <- read.table("./results/multi_omics/cancer_color_order_with_defined_colours.tsv",header = FALSE, sep = "\t", stringsAsFactors = FALSE,comment.char = "", quote = "")
+colnames(color_df) <- c("Cancer_full", "Color")
+color_df$Cancer <- sub("^TCGA-", "", trimws(color_df$Cancer_full))
+color_df$Color  <- trimws(gsub("\r", "", color_df$Color))
+
+# Build named palette
+palette <- color_df$Color
+names(palette) <- color_df$Cancer
+
+# Match colors to cancers in plot
 bar_colors <- palette[cancer_names]
-
-pdf("./results/snv/snv_per_cancer_type_barplot.pdf",width=12, height=9, bg = "white")
-
+pdf("./results/snv/snv_per_cancer_type_barplot.pdf", width = 12, height = 9, bg = "white")
 nice_max <- max(pretty(snv_millions))
-barplot(
+bp <- barplot(
   snv_millions,
   names.arg = cancer_names,
   horiz = TRUE,
   las = 1,
-  col = bar_colors,
+  col = unname(bar_colors),
   border = "black",
   main = "SNVs per Cancer Type",
   cex.main = 3,
   cex.lab  = 1.5,
   xlab = "Total SNVs (millions)",
-  xlim = c(0, nice_max))
+  xlim = c(0, nice_max * 1.08)
+)
+text(
+  x = snv_millions,
+  y = bp,
+  labels = format(snv_counts, big.mark = ",", scientific = FALSE),
+  pos = 4,
+  cex = 0.8,
+  xpd = TRUE
+)
+
 dev.off()
 '
 
@@ -6976,44 +5586,6 @@ p <- ggplot(df, aes(x = category, y = count, fill = category)) +
   theme(axis.text.x = element_text(angle = 15, hjust = 1),legend.position = "none")
 ggsave("./results/snv/SNV_in_vs_out_Methylation_barplot.pdf",p, width = 7, height = 5, bg = "white")
 '
-###############################################################################
-# 7) MOTIFS (NRF1 / BANP)
-###############################################################################
-# kept means kept the motifs after the intersection.
-# !!!NOT Done AGAIN , DONE FOR THE MM0TO2M!!!
-# Overlap filtered SNV in TF 6mer motifs and ATAC peaks 
-mkdir -p ./snv/overlaps/snv_motifs_peaks_overlap/
-bedtools intersect -u -a ./snv/all_unique_variants_across_cancers.bed -b ./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed > ./snv/overlaps/snv_motifs_peaks_overlap/NRF1_SNVs_in_motifs_in_peaks.bed
-bedtools intersect -u -a ./snv/all_unique_variants_across_cancers.bed -b ./motifs/overlaps/motif_peak_overlaps/BANP_filtered_6mer.MA2503.1_peak_overlaps.bed > ./snv/overlaps/snv_motifs_peaks_overlap/BANP_SNVs_in_motifs_in_peaks.bed
-# Overlap filtered SNV in TF motifs only
-mkdir -p ./snv/overlaps/snv_motifs_overlap/
-bedtools intersect -u -a ./snv/all_unique_variants_across_cancers.bed -b ./motifs/NRF1_filtered_6mer.MA0506.3.bed > ./snv/overlaps/snv_motifs_overlap/NRF1_intersected_SNVs.bed 
-bedtools intersect -u -a ./snv/all_unique_variants_across_cancers.bed -b ./motifs/BANP_filtered_6mer.MA2503.1.bed > ./snv/overlaps/snv_motifs_overlap/BANP_intersected_SNVs.bed
-
-mkdir -p ./motifs/overlaps/motifs_snv_overlap/
-# overlap with NRF1 motifs 
-bedtools intersect -u \
-  -a ./motifs/NRF1_filtered_6mer.MA0506.3.bed \
-  -b ./snv/all_unique_variants_across_cancers.bed \
-  > ./motifs/overlaps/motifs_snv_overlap/NRF1_filtered_SNVs_in_motifskept.bed
-
-# overlap with BANP motifs 
-bedtools intersect -u \
-  -a ./motifs/BANP_filtered_6mer.MA2503.1.bed \
-  -b ./snv/all_unique_variants_across_cancers.bed \
-  > ./motifs/overlaps/motifs_snv_overlap/BANP_filtered_SNVs_in_motifskept.bed
-
-# overlap with NRF1 motifs in peaks 
-bedtools intersect -u \
-  -a ./motifs/overlaps/motif_peak_overlaps/NRF1_filtered_6mer.MA0506.3_peak_overlaps.bed \
-  -b ./snv/all_unique_variants_across_cancers.bed \
-  > ./snv/overlaps/snv_motifs_peaks_overlap/NRF1_filtered_SNVs_in_motifs_in_peaks_kept.bed
-
-# overlap with BANP motifs in peaks
-bedtools intersect -u \
-  -a ./motifs/overlaps/motif_peak_overlaps/BANP_filtered_6mer.MA2503.1_peak_overlaps.bed \
-  -b ./snv/all_unique_variants_across_cancers.bed \
-  > ./snv/overlaps/snv_motifs_peaks_overlap/BANP_filtered_SNVs_in_motifs_in_peaks_kept.bed
 
 ######################################################
 # Overlap filtered SNV in TF 2mm motifs and ATAC peaks
@@ -7033,23 +5605,23 @@ mkdir -p ./motifs/overlaps/motifs2mm_in_peaks_snv
 # NRF1 
 bedtools intersect -u \
   -a ./snv/all_unique_variants_across_cancers.bed \
-  -b <(zcat ./motifs/NRF1_mm0to2.bed.gz) \
+  -b <(zcat ./motifs/NRF1_mm0to2_noXY.bed.gz) \
   > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_SNVs_in_motifs.bed
 
 bedtools intersect -u \
   -a ./snv/all_unique_variants_across_cancers.bed \
-  -b <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) \
+  -b <(zcat ./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz) \
   > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_noCGmm_SNVs_in_motifs.bed
 
 # BANP
 bedtools intersect -u \
   -a ./snv/all_unique_variants_across_cancers.bed \
-  -b <(zcat ./motifs/BANP_mm0to2.bed.gz) \
+  -b <(zcat ./motifs/BANP_mm0to2_noXY.bed.gz) \
   > ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_SNVs_in_motifs.bed
 
 bedtools intersect -u \
   -a ./snv/all_unique_variants_across_cancers.bed \
-  -b <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) \
+  -b <(zcat ./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz) \
   > ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_noCGmm_SNVs_in_motifs.bed
 
 
@@ -7058,22 +5630,22 @@ bedtools intersect -u \
 # -------------------------
 # NRF1 
 bedtools intersect -u \
-  -a <(zcat ./motifs/NRF1_mm0to2.bed.gz) \
+  -a <(zcat ./motifs/NRF1_mm0to2_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motif2mm_snv_overlaps/NRF1_mm0to2_motifs_with_SNVs.bed
 bedtools intersect -u \
-  -a <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) \
+  -a <(zcat ./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motif2mm_snv_overlaps/NRF1_mm0to2_noCGmm_motifs_with_SNVs.bed
 
 # BANP
 bedtools intersect -u \
-  -a <(zcat ./motifs/BANP_mm0to2.bed.gz) \
+  -a <(zcat ./motifs/BANP_mm0to2_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motif2mm_snv_overlaps/BANP_mm0to2_motifs_with_SNVs.bed
 
 bedtools intersect -u \
-  -a <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) \
+  -a <(zcat ./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./motifs/overlaps/motif2mm_snv_overlaps/BANP_mm0to2_noCGmm_motifs_with_SNVs.bed
 
@@ -7083,21 +5655,21 @@ bedtools intersect -u \
 # -------------------------
 # NRF1 
 bedtools intersect -wa -wb \
-  -a <(zcat ./motifs/NRF1_mm0to2.bed.gz) \
+  -a <(zcat ./motifs/NRF1_mm0to2_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_SNVs_in_motifs_SNVidxmotif.bed
 bedtools intersect -wa -wb\
-  -a <(zcat ./motifs/NRF1_mm0to2_noCGmm.bed.gz) \
+  -a <(zcat ./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif.bed
 # BANP
 bedtools intersect -wa -wb \
-  -a <(zcat ./motifs/BANP_mm0to2.bed.gz) \
+  -a <(zcat ./motifs/BANP_mm0to2_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_SNVs_in_motifs_SNVidxmotif.bed
 
 bedtools intersect -wa -wb \
-  -a <(zcat ./motifs/BANP_mm0to2_noCGmm.bed.gz) \
+  -a <(zcat ./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz) \
   -b ./snv/all_unique_variants_across_cancers.bed \
   > ./snv/overlaps/snv_in_motifs2mm/BANP_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif.bed
 
@@ -7795,7 +6367,7 @@ set -euo pipefail
 
 PROBES_TXT="./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probes.txt"
 ALL_CPG_BED="./methylation/annotated_methylation_data_probes_filtered.bed"
-MOTIF_BED="./motifs/BANP_mm0to2_noCGmm.bed.gz"
+MOTIF_BED="./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz"
 OUTDIR="./results/methylation/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes"
 mkdir -p "$OUTDIR"
 
@@ -8234,7 +6806,7 @@ library(data.table)
 motif_name <- "BANP_mm0to2_noCGmm"
 
 overlap_file <- paste0("./snv/overlaps/snv_in_motifs2mm/", motif_name, "_SNVs_in_motifs_SNVidxmotif_filtered_snvs.bed")
-gene_file    <- paste0("./motifs/", motif_name, "_closest_genes.bed")
+gene_file    <- paste0("./motifs/", motif_name, "_noXY_closest_genes.bed")
 matrix_file  <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_SNV_presence_matrix.tsv")
 out_file     <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_SNV_presence_matrix_annotated_with_gene.tsv")
 
@@ -9002,19 +7574,24 @@ df <- read.delim(in_file, header = TRUE, stringsAsFactors = FALSE) %>%
 # ---- total number of RNA-seq files
 total_files <- sum(df$Count, na.rm = TRUE)
 
-# Load canonical cancer list/order
-cancer_order <- scan("./results/multi_omics/cancer_color_order.txt", what = "", quiet = TRUE)
+# Read defined color file
+color_df <- read.table("./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
+                       header = FALSE, sep = "\t", stringsAsFactors = FALSE,
+                       comment.char = "", quote = "")
 
-# Same palette as peaks plot
-palette_main <- rainbow(length(cancer_order))
-names(palette_main) <- cancer_order
+colnames(color_df) <- c("Cancer_full", "Color")
+color_df$Cancer <- sub("^TCGA-", "", trimws(color_df$Cancer_full))
+color_df$Color  <- trimws(gsub("\r", "", color_df$Color))
+
+palette_main <- color_df$Color
+names(palette_main) <- color_df$Cancer
 
 # Keep all cancers (unknown ones will be grey)
 palette_plot <- c(
   palette_main,
   setNames(
-    rep("grey70", length(setdiff(unique(df$Cancer), cancer_order))),
-    setdiff(unique(df$Cancer), cancer_order)
+    rep("grey70", length(setdiff(unique(df$Cancer), names(palette_main)))),
+    setdiff(unique(df$Cancer), names(palette_main))
   )
 )
 
@@ -9825,7 +8402,7 @@ dir.create(dirname(out_file), recursive=TRUE, showWarnings=FALSE)
 
 # ---- motif_instance -> gene from closest_genes.bed
 gene_lookup <- rbindlist(lapply(TF_LIST, function(tf){
-  f <- file.path(gene_dir, paste0(tf, "_closest_genes.bed"))
+  f <- file.path(gene_dir, paste0(tf, "_noXY_closest_genes.bed"))
   if (!file.exists(f)) stop("Missing: ", f)
   g <- fread(f, header=FALSE, select=c(1,2,3,6,10))
   setnames(g, c("V1","V2","V3","V6","V10"), c("chr","s","e","st","gene"))
@@ -9895,26 +8472,42 @@ Rscript -e '
 library(data.table)
 library(ggplot2)
 
-dt <- fread("./results/multi_omics/samples_3d+4d.tsv", header=FALSE)
+dt <- fread("./results/multi_omics/samples_3d+4d.tsv", header = FALSE)
 setnames(dt, c("sample","cancer","SNV","METH","RNA","ATAC"))
 
-counts <- dt[, .N, by=cancer]
+counts <- dt[, .N, by = cancer]
 total_samples <- nrow(dt)
 
-ggplot(counts, aes(x=reorder(cancer, N), y=N)) +
-  geom_bar(stat="identity") +
-  geom_text(aes(label=N), hjust=-0.15, size=3) +  
+# Read defined color file
+color_df <- fread(
+  "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
+  header = FALSE
+)
+setnames(color_df, c("Cancer_full", "Color"))
+color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
+color_df[, Color  := trimws(gsub("\r", "", Color))]
+palette <- setNames(color_df$Color, color_df$Cancer)
+
+# Match colors to cancers in the plot
+counts[, Color := palette[cancer]]
+counts[is.na(Color), Color := "grey70"]
+
+p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = N), hjust = -0.15, size = 3) +
   coord_flip() +
+  scale_fill_manual(values = setNames(counts$Color, counts$cancer)) +
   labs(
-    x="Cancer type",
-    y="Number of samples",
-    title="Samples per Cancer Type",
-    subtitle=paste0("Multi-omics cohort (n = ", total_samples, ")")
+    x = "Cancer type",
+    y = "Number of samples",
+    title = "Samples per Cancer Type",
+    subtitle = paste0("Multi-omics cohort (n = ", total_samples, ")")
   ) +
-  expand_limits(y = max(counts$N) * 1.08) +       
-  theme_minimal()
-# Save plot
-ggsave("./results/multi_omics/samples_3+4datasets_barplot.pdf", width = 5, height = 5, dpi = 300, bg = "white")
+  expand_limits(y = max(counts$N) * 1.08) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggsave("./results/multi_omics/samples_3+4datasets_barplot.pdf",plot = p, width = 5, height = 5, dpi = 300, bg = "white")
 '
 
 #################################################################################################
@@ -11080,7 +9673,7 @@ NR==1 {next}
   prev_chr=$1
   prev_end=$3
   prev_line=$0
-}' ./motifs/BANP_mm0to2_closest_genes.bed | awk '$1!="chrY" && $1!="chrM" && $1!="chrX" {print $0}' > ./motifs_overlapping_BANP_mm0to2_closest_genes.bed
+}' ./motifs/BANP_mm0to2_noXY_closest_genes.bed | awk '$1!="chrY" && $1!="chrM" && $1!="chrX" {print $0}' > ./motifs_overlapping_BANP_mm0to2_noXY_closest_genes.bed
 
 awk 'BEGIN{FS=OFS="\t"}
 NR==1 {next}
@@ -11089,7 +9682,7 @@ NR==1 {next}
   prev_chr=$1
   prev_end=$3
   prev_line=$0
-}' ./motifs/NRF1_mm0to2_closest_genes.bed | awk '$1!="chrY" && $1!="chrM" && $1!="chrX" {print $0}' > ./motifs_overlapping_NRF1_mm0to2_closest_genes.bed
+}' ./motifs/NRF1_mm0to2_noXY_closest_genes.bed | awk '$1!="chrY" && $1!="chrM" && $1!="chrX" {print $0}' > ./motifs_overlapping_NRF1_mm0to2_noXY_closest_genes.bed
 
 
 
