@@ -1140,7 +1140,7 @@ done
 # 2) FILTERING OUT PEAKS FILES --> 217 FILES LEFT and filter out peaks on chrX and chrY
 ########################################################################################
 # Filter out the peak files corresponding to failing samples from the previous analysis of /data/hichamif/pred_tf_cancer/QC_results/failing_samples_by_step/all_failing_samples.txt
-# Filters : NFR 15% Mapping rate > 80% Peakcount >20,000 FRIP > 0.2
+# Filters : NFR > 15% Mapping rate > 80% Peakcount >20,000 FRIP > 0.2
 mkdir -p ./peaks/filtered_peaks/
 
 FAIL_TSV="./all_failing_samples.txt"
@@ -2542,6 +2542,8 @@ dev.off()
 cat("DONE -> ", out_pdf, " (pages:", pages_written, ")\n", sep="")
 '
 
+
+
 #############################################################################
 # create an annotated file with probe_id distance and label proximal distal
 #############################################################################
@@ -3087,6 +3089,255 @@ plot_motif_red(merged, delta, thr, merged$probe %in% motif_cpgs$BANP_noCGmm_mm0t
 dev.off()
 cat("DONE -> ", out_pdf, "\n", sep="")
 '
+
+###########################################################################################################################
+# plot heatmap of % of changed CpGs in each motif∩peaks set comparing samples from same cancer type or other or same organ..
+###########################################################################################################################
+# create a metadata file with the pairs and their categories (same cancer type, same organ, different organ)
+Rscript -e '
+library(data.table)
+pairs <- fread("./methylation/sample_pairs_files/methylation_pairs_filtered.tsv")
+
+# small cancer -> organ mapping
+cancer_to_organ <- c(
+  "TCGA-BLCA" = "Bladder",
+  "TCGA-BRCA" = "Breast",
+  "TCGA-COAD" = "Colon",
+  "TCGA-READ" = "Colon",
+  "TCGA-GBM"  = "Brain",
+  "TCGA-LGG"  = "Brain",
+  "TCGA-HNSC" = "HeadNeck",
+  "TCGA-KICH" = "Kidney",
+  "TCGA-KIRC" = "Kidney",
+  "TCGA-KIRP" = "Kidney",
+  "TCGA-LIHC" = "Liver",
+  "TCGA-LUAD" = "Lung",
+  "TCGA-LUSC" = "Lung",
+  "TCGA-OV"   = "Ovary",
+  "TCGA-PAAD" = "Pancreas",
+  "TCGA-PRAD" = "Prostate",
+  "TCGA-SKCM" = "Skin",
+  "TCGA-STAD" = "Stomach",
+  "TCGA-THCA" = "Thyroid",
+  "TCGA-UCEC" = "Uterus"
+)
+
+tumor <- pairs[, .(
+  cancer = cancer,
+  patient = patient,
+  type = "Tumor",
+  file = tumor_file
+)]
+
+healthy <- pairs[, .(
+  cancer = cancer,
+  patient = patient,
+  type = "Healthy",
+  file = healthy_file
+)]
+
+meta <- rbindlist(list(tumor, healthy), use.names = TRUE)
+
+# extract sample_id from file name
+meta[, sample_id := sub(".*HM450_[^-]+-[^-]+-(TCGA-[A-Z0-9-]+)_[^/]*$", "\\1", file)]
+
+# if the above does not work with your file names, use this instead:
+# meta[, sample_id := sub(".*HM450_[^-]+-(TCGA-[A-Z0-9-]+-[0-9]{2}[A-Z])_1_.*", "\\1", file)]
+
+meta[, organ := cancer_to_organ[cancer]]
+
+# reorder columns
+meta <- meta[, .(sample_id, cancer, organ, type, file, patient)]
+
+# remove missing files / duplicates
+meta <- unique(meta[!is.na(file) & file != ""])
+
+fwrite(meta, "./methylation/sample_metadata_for_comparisons.tsv", sep = "\t")
+'
+
+# plot the heatmap using the output from the previous code 
+Rscript -e '
+suppressPackageStartupMessages({
+  library(data.table)
+  library(pheatmap)
+})
+
+meta_file <- "./methylation/sample_pairs_files/methylation_pairs_filtered.tsv"
+delta_thr <- 20
+
+motifs <- list(
+  NRF1 = "./motifs/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_probeXmotif.tsv",
+  BANP = "./motifs/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probeXmotif.tsv"
+)
+
+outdir <- "./results/methylation/pairwise_cancer_heatmaps_FULL"
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+find_probe_col <- function(dt) {
+  cand <- c("probe","Probe","probe_id","Probe_ID","cg","cg_id","ID_REF","IlmnID","V4")
+  hit <- cand[cand %in% names(dt)]
+  if (length(hit) == 0) stop("No probe column found: ", paste(names(dt), collapse=", "))
+  hit[1]
+}
+
+find_beta_col <- function(dt) {
+  cand <- c("beta","Beta","beta_value","Beta_value","b","V5")
+  hit <- cand[cand %in% names(dt)]
+  if (length(hit) == 0) stop("No beta column found: ", paste(names(dt), collapse=", "))
+  hit[1]
+}
+
+read_meth <- function(f) {
+  x <- fread(cmd = paste("zcat", shQuote(f)))
+  probe_col <- find_probe_col(x)
+  beta_col  <- find_beta_col(x)
+  x <- x[, .(probe = get(probe_col), beta = suppressWarnings(as.numeric(get(beta_col))))]
+  x <- x[!is.na(probe) & !is.na(beta)]
+  x
+}
+
+meta <- fread(meta_file)
+
+tumor_by_cancer   <- split(meta$tumor_file, meta$cancer)
+healthy_by_cancer <- split(meta$healthy_file, meta$cancer)
+
+cancers <- sort(intersect(names(tumor_by_cancer), names(healthy_by_cancer)))
+tumor_by_cancer   <- lapply(tumor_by_cancer[cancers], unique)
+healthy_by_cancer <- lapply(healthy_by_cancer[cancers], unique)
+
+cat("Cancers included:\n")
+print(cancers)
+
+all_files <- unique(c(unlist(tumor_by_cancer), unlist(healthy_by_cancer)))
+cat("Loading", length(all_files), "methylation files...\n")
+
+methylation_data <- setNames(vector("list", length(all_files)), all_files)
+for (k in seq_along(all_files)) {
+  f <- all_files[k]
+  cat("  ", k, "/", length(all_files), " ", basename(f), "\n", sep = "")
+  methylation_data[[f]] <- read_meth(f)
+}
+
+for (nm in names(motifs)) {
+  cat("\n============================\n")
+  cat("Processing ", nm, "\n", sep = "")
+  cat("============================\n")
+
+  motif_dt <- fread(motifs[[nm]])
+  motif_probe_col <- find_probe_col(motif_dt)
+  probes_keep <- unique(motif_dt[[motif_probe_col]])
+  probes_keep <- probes_keep[!is.na(probes_keep)]
+
+  cat("Motif probes: ", length(probes_keep), "\n", sep = "")
+
+  cat("Building tumor vs healthy matrix...\n")
+  mat_TH <- matrix(NA_real_, length(cancers), length(cancers),dimnames = list(cancers, cancers))
+
+  for (i in seq_along(cancers)) {
+    ci <- cancers[i]
+    cat("\n  Row cancer (tumor): ", ci, "\n", sep = "")
+    files_i <- tumor_by_cancer[[ci]]
+
+    for (j in seq_along(cancers)) {
+      cj <- cancers[j]
+      files_j <- healthy_by_cancer[[cj]]
+
+      cat("    vs column cancer (healthy): ", cj,
+          " | comparing ", length(files_i), " tumor samples vs ",
+          length(files_j), " healthy samples\n", sep = "")
+
+      vals <- c()
+
+      for (f1 in files_i) {
+        x1 <- methylation_data[[f1]][probe %in% probes_keep]
+
+        for (f2 in files_j) {
+          x2 <- methylation_data[[f2]][probe %in% probes_keep]
+
+          m <- merge(x1, x2, by = "probe", suffixes = c(".1", ".2"))
+          m <- m[!is.na(beta.1) & !is.na(beta.2)]
+          if (nrow(m) == 0) next
+
+          vals <- c(vals, mean(abs(m$beta.1 - m$beta.2) >= delta_thr) * 100)
+        }
+      }
+
+      mat_TH[i, j] <- if (length(vals)) median(vals, na.rm = TRUE) else NA_real_
+
+      cat("      -> cell value: ", ifelse(is.na(mat_TH[i, j]), "NA", sprintf("%.2f", mat_TH[i, j])), "\n", sep = "")
+    }
+  }
+
+  fwrite(as.data.table(mat_TH, keep.rownames = "Cancer"),file.path(outdir, paste0(nm, "_tumor_vs_healthy_matrix.tsv")),sep = "\t")
+
+  pdf(file.path(outdir, paste0(nm, "_tumor_vs_healthy_heatmap.pdf")), width = 12, height = 10)
+  pheatmap(mat_TH,
+           main = paste0(nm, " tumor vs healthy\nMedian % CpGs with absolute beta difference >= 20"),
+           cluster_rows = TRUE,
+           cluster_cols = TRUE,
+           display_numbers = TRUE,
+           number_format = "%.1f",
+           na_col = "grey90")
+  dev.off()
+
+  cat("\nSaved tumor vs healthy outputs for ", nm, "\n", sep = "")
+
+  cat("\nBuilding tumor vs tumor matrix...\n")
+  mat_TT <- matrix(NA_real_, length(cancers), length(cancers),dimnames = list(cancers, cancers))
+
+  for (i in seq_along(cancers)) {
+    ci <- cancers[i]
+    cat("\n  Row cancer (tumor): ", ci, "\n", sep = "")
+    files_i <- tumor_by_cancer[[ci]]
+
+    for (j in seq_along(cancers)) {
+      cj <- cancers[j]
+      files_j <- tumor_by_cancer[[cj]]
+
+      cat("    vs column cancer (tumor): ", cj,
+          " | comparing ", length(files_i), " tumor samples vs ",
+          length(files_j), " tumor samples\n", sep = "")
+
+      vals <- c()
+
+      for (f1 in files_i) {
+        x1 <- methylation_data[[f1]][probe %in% probes_keep]
+
+        for (f2 in files_j) {
+          x2 <- methylation_data[[f2]][probe %in% probes_keep]
+
+          m <- merge(x1, x2, by = "probe", suffixes = c(".1", ".2"))
+          m <- m[!is.na(beta.1) & !is.na(beta.2)]
+          if (nrow(m) == 0) next
+
+          vals <- c(vals, mean(abs(m$beta.1 - m$beta.2) >= delta_thr) * 100)
+        }
+      }
+
+      mat_TT[i, j] <- if (length(vals)) median(vals, na.rm = TRUE) else NA_real_
+
+      cat("      -> cell value: ", ifelse(is.na(mat_TT[i, j]), "NA", sprintf("%.2f", mat_TT[i, j])), "\n", sep = "")
+    }
+  }
+
+  fwrite(as.data.table(mat_TT, keep.rownames = "Cancer"),file.path(outdir, paste0(nm, "_tumor_vs_tumor_matrix.tsv")),sep = "\t")
+
+  pdf(file.path(outdir, paste0(nm, "_tumor_vs_tumor_heatmap.pdf")), width = 12, height = 10)
+  pheatmap(mat_TT,
+           main = paste0(nm, " tumor vs tumor\nMedian % CpGs with absolute beta difference >= 20"),
+           cluster_rows = TRUE,
+           cluster_cols = TRUE,
+           display_numbers = TRUE,
+           number_format = "%.1f",
+           na_col = "grey90")
+  dev.off()
+
+  cat("\nSaved tumor vs tumor outputs for ", nm, "\n", sep = "")
+}
+
+cat("\nFULL run done.\n")
+'
+
 
 
 ###########################################################################################################################
@@ -3643,8 +3894,6 @@ for (setdir in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
 }
 '
 
-
-# IM HERE 
 # merge the big matrix so that probes that affect the same motif are merged together and the motif associated with each probe is indicated in the rownames. 
 Rscript -e '
 library(data.table)
@@ -3924,10 +4173,10 @@ for (d in list.dirs(in_root, recursive=FALSE, full.names=TRUE)) {
   dev.off()
 }
 '
-# not done yet
-#############################################################
-# All tumor vz all healthy samples not only on paired samples
-#############################################################
+
+#################################################################################################
+# Redo altered motif with cg change more than 20% across all samples in 3d+4d without OV 
+#################################################################################################
 
 
 
@@ -4903,6 +5152,628 @@ writeLines(rownames(beta_var), "./methylation/top10000_variable_CpGs_pan_cancer.
 
 # verify how many of the CpGs in cpg_list.txt are in the top 10000 variable CpGs pan-cancer filtered list
 awk 'NR==FNR {a[$0]; next} ($0 in a) {c++} END{print c}' ./methylation/top10000_variable_CpGs_pan_cancer.txt ./10k_yspill_cpg_list.txt
+
+
+###########################################
+# Find altered motifs in the 3d+4d samples this outputs a matrix with motif by sample table for all altered motifs (altered cpg change more than 20% in methylation) in the tumor samples from the 3d+4d samples. 
+###########################################
+Rscript - <<'EOF'
+suppressPackageStartupMessages(library(data.table))
+
+samples_file <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+motif_file   <- "./motifs/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probeXmotif.tsv"
+out_file     <- "./results/methylation/Cpg_altered/BANP_motif_sample_matrix_noOV.tsv.gz"
+
+delta_thr <- 20
+min_normals_same <- 3
+min_normals_related <- 3
+
+dir.create(dirname(out_file), recursive = TRUE, showWarnings = FALSE)
+
+fallback_ref <- c(
+  ACC=NA, BLCA=NA, BRCA=NA, CESC="UCEC", CHOL="LIHC", COAD="READ", DLBC=NA,
+  ESCA="STAD", GBM="LGG", HNSC="ESCA", KICH="KIRP", KIRC="KIRP", KIRP="KIRC",
+  LAML=NA, LGG="GBM", LIHC="CHOL", LUAD="LUSC", LUSC="LUAD", MESO=NA, PAAD=NA,
+  PCPG="ACC", PRAD=NA, READ="COAD", SARC=NA, SKCM=NA, STAD="ESCA", TGCT=NA,
+  THCA=NA, THYM=NA, UCEC="CESC", UCS="UCEC", UVM="SKCM"
+)
+
+read_meth <- function(f) {
+  x <- fread(cmd = paste("zcat", shQuote(f)), header = FALSE,
+             na.strings = c("NA","","NaN"), showProgress = FALSE)
+  x[, .(probe = as.character(V4), beta = as.numeric(V5))]
+}
+
+extract_sample_type <- function(x) {
+  x <- basename(x)
+  if (grepl("-01A([_.-]|$)", x)) return("tumor")
+  if (grepl("-11A([_.-]|$)", x)) return("normal")
+  NA_character_
+}
+extract_patient_id <- function(x) sub("^HM450_TCGA-[^-]+-(TCGA-[^-]+-[^-]+)-.*$", "\\1", basename(x))
+extract_cancer     <- function(x) sub("^HM450_TCGA-([^-]+)-.*$", "\\1", basename(x))
+
+samples <- fread(samples_file, header = FALSE)
+setnames(samples, c("sample","cancer","SNV","METH","RNA","ATAC"))
+samples <- samples[METH == 1, .(sample, cancer)]
+
+motif_raw <- fread(motif_file, header = FALSE, showProgress = FALSE)
+motif_map <- unique(motif_raw[, .(
+  probe    = as.character(V4),
+  motif_id = paste(V5, V6, V7, V10, sep=":")
+)])
+
+all_files <- list.files(
+  "./methylation/filtered_methylation",
+  pattern = "annotated_methylation_filtered[.]bed[.]gz$",
+  full.names = TRUE
+)
+
+file_index <- data.table(
+  meth_file   = all_files,
+  patient_id  = vapply(all_files, extract_patient_id, character(1)),
+  cancer      = vapply(all_files, extract_cancer, character(1)),
+  sample_type = vapply(all_files, extract_sample_type, character(1))
+)[!is.na(sample_type)]
+
+tumor_index  <- file_index[sample_type == "tumor"]
+normal_index <- file_index[sample_type == "normal"]
+
+tumor_samples <- merge(
+  samples, tumor_index,
+  by.x = c("sample","cancer"),
+  by.y = c("patient_id","cancer")
+)
+
+if (nrow(tumor_samples) == 0) stop("No tumor methylation files matched to cohort.")
+if (nrow(normal_index) == 0) stop("No normal methylation files found.")
+
+cat("Tumor files matched :", nrow(tumor_samples), "\n")
+cat("Normal files found  :", nrow(normal_index), "\n")
+cat("Unique motif probes :", uniqueN(motif_map$probe), "\n")
+cat("Unique motifs       :", uniqueN(motif_map$motif_id), "\n")
+
+# =========================
+# READ NORMALS ONCE
+# =========================
+t_ref1 <- Sys.time()
+cat("Reading normal methylation files once...\n")
+
+norm_list <- vector("list", nrow(normal_index))
+
+for (i in seq_len(nrow(normal_index))) {
+  if (i %% 10 == 0 || i == 1 || i == nrow(normal_index)) {
+    cat("[", i, "/", nrow(normal_index), "] normals\n", sep = "")
+  }
+  f  <- normal_index$meth_file[i]
+  cc <- normal_index$cancer[i]
+
+  dt <- read_meth(f)
+  dt <- motif_map[dt, on = "probe", nomatch = 0]
+  dt <- dt[!is.na(beta)]
+  if (nrow(dt) == 0) next
+  dt[, cancer := cc]
+  norm_list[[i]] <- dt[, .(cancer, probe, beta)]
+}
+
+norm_dt <- rbindlist(norm_list, fill = TRUE)
+if (nrow(norm_dt) == 0) stop("No motif-overlapping normal beta values found.")
+
+cat("Building cancer-specific and pan-cancer references...\n")
+
+ref_by_cancer <- norm_dt[, .(ref_beta = median(beta, na.rm = TRUE)), by = .(cancer, probe)]
+ref_pan       <- norm_dt[, .(ref_beta = median(beta, na.rm = TRUE)), by = probe]
+
+t_ref2 <- Sys.time()
+cat("Reference build time:", round(as.numeric(difftime(t_ref2, t_ref1, units = "mins")), 2), "minutes\n")
+
+# counts of available normal files by cancer
+normal_counts <- normal_index[, .N, by = cancer]
+setnames(normal_counts, "N", "n_normals")
+
+# =========================
+# PROCESS TUMORS
+# =========================
+cat("Processing tumor samples...\n")
+t_tum1 <- Sys.time()
+
+res <- vector("list", nrow(tumor_samples))
+
+for (i in seq_len(nrow(tumor_samples))) {
+  s <- tumor_samples[i]
+  sample_id <- s$sample
+  ccur <- s$cancer
+
+  if (i %% 25 == 0 || i == 1 || i == nrow(tumor_samples)) {
+    cat("[", i, "/", nrow(tumor_samples), "] ", sample_id, " ", ccur, "\n", sep = "")
+  }
+
+  dt <- read_meth(s$meth_file)
+  dt <- motif_map[dt, on = "probe", nomatch = 0]
+  dt <- dt[!is.na(beta)]
+  if (nrow(dt) == 0) next
+
+  n_same <- normal_counts[cancer == ccur, n_normals]
+  if (length(n_same) == 0) n_same <- 0L
+
+  related <- if (ccur %in% names(fallback_ref)) fallback_ref[[ccur]] else NA_character_
+  n_related <- if (!is.na(related)) normal_counts[cancer == related, n_normals] else 0L
+  if (length(n_related) == 0) n_related <- 0L
+
+  if (n_same >= min_normals_same && any(ref_by_cancer$cancer == ccur)) {
+    ref_dt <- ref_by_cancer[cancer == ccur, .(probe, ref_beta)]
+  } else if (!is.na(related) && n_related >= min_normals_related &&
+             any(ref_by_cancer$cancer == related)) {
+    ref_dt <- ref_by_cancer[cancer == related, .(probe, ref_beta)]
+  } else {
+    ref_dt <- ref_pan
+  }
+
+  dt <- ref_dt[dt, on = "probe", nomatch = 0]
+  if (nrow(dt) == 0) next
+
+  dt <- dt[abs(beta - ref_beta) >= delta_thr]
+  if (nrow(dt) == 0) next
+
+  res[[i]] <- unique(dt[, .(motif_id, sample_id)])[, motif_altered := 1L]
+}
+
+motif_sample_dt <- rbindlist(res, fill = TRUE)
+if (nrow(motif_sample_dt) == 0) stop("No altered motifs detected.")
+
+motif_matrix <- dcast(
+  motif_sample_dt,
+  motif_id ~ sample_id,
+  value.var = "motif_altered",
+  fill = 0
+)
+
+fwrite(motif_matrix, out_file, sep = "\t")
+cat("[DONE] Wrote:", out_file, "\n")
+
+t_tum2 <- Sys.time()
+cat("Tumor processing time:", round(as.numeric(difftime(t_tum2, t_tum1, units = "mins")), 2), "minutes\n")
+cat("Total time:", round(as.numeric(difftime(t_tum2, t_ref1, units = "mins")), 2), "minutes\n")
+EOF
+
+# plot all motifs 
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(pheatmap)
+})
+
+mat_file     <- "./results/methylation/Cpg_altered/NRF1_motif_sample_matrix_noOV.tsv.gz"
+samples_file <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+col_file     <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+out_pdf      <- "./results/methylation/Cpg_altered/NRF1_motif_sample_matrix_noOV_heatmap_allMotifs.pdf"
+
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# =========================
+# LOAD MATRIX
+# =========================
+mat_dt <- fread(mat_file)
+if (ncol(mat_dt) < 2) stop("Matrix file has no sample columns: ", mat_file)
+
+motif_ids <- mat_dt$motif_id
+mat <- as.matrix(mat_dt[, -1, with = FALSE])
+rownames(mat) <- motif_ids
+mode(mat) <- "numeric"
+
+cat("Number of motifs plotted :", nrow(mat), "\n")
+cat("Number of samples plotted:", ncol(mat), "\n")
+
+# =========================
+# LOAD SAMPLE ANNOTATION
+# =========================
+samples <- fread(samples_file, header = FALSE)
+setnames(samples, c("sample", "cancer", "SNV", "METH", "RNA", "ATAC"))
+samples <- unique(samples[METH == 1, .(sample, cancer)])
+
+ann <- samples[sample %in% colnames(mat)]
+if (nrow(ann) == 0) stop("No matrix columns matched sample annotation.")
+
+ann[, Cancer := as.character(cancer)]
+
+# keep only annotated samples and order matrix accordingly
+sample_order <- ann$sample[ann$sample %in% colnames(mat)]
+mat <- mat[, sample_order, drop = FALSE]
+
+# =========================
+# LOAD CANCER COLORS / ORDER
+# =========================
+cols <- fread(col_file, header = FALSE)[, 1:2]
+setnames(cols, c("Cancer", "Color"))
+cols[, Cancer := gsub("\r", "", trimws(as.character(Cancer)))]
+cols[, Color  := gsub("\r", "", trimws(as.character(Color)))]
+cols[, Cancer := sub("^TCGA-", "", Cancer)]
+
+cancer_levels <- unique(cols$Cancer)
+cancer_cols_all <- setNames(cols$Color, cols$Cancer)
+
+missing_cancers <- setdiff(unique(ann$Cancer), names(cancer_cols_all))
+if (length(missing_cancers) > 0) {
+  extra_cols <- grDevices::rainbow(length(missing_cancers))
+  names(extra_cols) <- missing_cancers
+  cancer_cols_all <- c(cancer_cols_all, extra_cols)
+  cancer_levels <- c(cancer_levels, missing_cancers)
+}
+
+ann[, Cancer := factor(Cancer, levels = cancer_levels)]
+setorder(ann, Cancer, sample)
+
+sample_order <- ann$sample
+mat <- mat[, sample_order, drop = FALSE]
+
+ann_df <- data.frame(
+  Cancer = ann$Cancer,
+  row.names = ann$sample,
+  stringsAsFactors = FALSE
+)
+
+# =========================
+# COLUMN GROUPS / LABELS
+# =========================
+group_sizes <- ann[, .N, by = Cancer][order(match(Cancer, cancer_levels))]$N
+gaps_col <- cumsum(group_sizes)
+gaps_col <- gaps_col[gaps_col < ncol(mat)]
+
+labels_col <- rep("", ncol(mat))
+group_dt <- ann[, .(
+  start = .I[1],
+  end   = .I[.N]
+), by = Cancer]
+group_dt[, mid := floor((start + end) / 2)]
+labels_col[group_dt$mid] <- as.character(group_dt$Cancer)
+
+ann_colors <- list(Cancer = cancer_cols_all)
+
+# =========================
+# PLOT
+# =========================
+pdf(out_pdf, width = 20, height = 30)
+
+pheatmap(
+  mat,
+  color = c("white", "red"),
+  breaks = c(-0.001, 0.5, 1.001),
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  gaps_col = gaps_col,
+  show_rownames = FALSE,
+  show_colnames = TRUE,
+  labels_col = labels_col,
+  angle_col = 90,
+  fontsize_col = 8,
+  annotation_col = ann_df,
+  annotation_colors = ann_colors,
+  main = "NRF1 altered motifs across 3d+4d noOV tumor samples\nBinary matrix: 1 = altered (|Delta beta| >= 20), 0 = not altered",
+  border_color = NA
+)
+
+dev.off()
+
+cat("[DONE] Wrote:", out_pdf, "\n")
+EOF
+
+# the same heatmap but only the first 50 altered motifs to have a more readable heatmap for presentations 
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(pheatmap)
+})
+
+mat_file     <- "./results/methylation/Cpg_altered/BANP_motif_sample_matrix_noOV.tsv.gz"
+samples_file <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+col_file     <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+out_pdf      <- "./results/methylation/Cpg_altered/BANP_motif_sample_matrix_noOV_heatmap_first50.pdf"
+
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# =========================
+# LOAD MATRIX
+# =========================
+mat_dt <- fread(mat_file)
+if (ncol(mat_dt) < 2) stop("Matrix file has no sample columns: ", mat_file)
+
+mat_dt <- mat_dt[1:min(50, .N)]   # keep only first 50 motifs
+
+motif_ids <- mat_dt$motif_id
+mat <- as.matrix(mat_dt[, -1, with = FALSE])
+rownames(mat) <- motif_ids
+mode(mat) <- "numeric"
+
+cat("Number of motifs plotted :", nrow(mat), "\n")
+cat("Number of samples plotted:", ncol(mat), "\n")
+
+# =========================
+# LOAD SAMPLE ANNOTATION
+# =========================
+samples <- fread(samples_file, header = FALSE)
+setnames(samples, c("sample", "cancer", "SNV", "METH", "RNA", "ATAC"))
+samples <- unique(samples[METH == 1, .(sample, cancer)])
+
+ann <- samples[sample %in% colnames(mat)]
+if (nrow(ann) == 0) stop("No matrix columns matched sample annotation.")
+
+ann[, Cancer := as.character(cancer)]
+
+sample_order <- ann$sample[ann$sample %in% colnames(mat)]
+mat <- mat[, sample_order, drop = FALSE]
+
+# =========================
+# LOAD CANCER COLORS / ORDER
+# =========================
+cols <- fread(col_file, header = FALSE)[, 1:2]
+setnames(cols, c("Cancer", "Color"))
+cols[, Cancer := gsub("\r", "", trimws(as.character(Cancer)))]
+cols[, Color  := gsub("\r", "", trimws(as.character(Color)))]
+cols[, Cancer := sub("^TCGA-", "", Cancer)]
+
+cancer_levels <- unique(cols$Cancer)
+cancer_cols_all <- setNames(cols$Color, cols$Cancer)
+
+missing_cancers <- setdiff(unique(ann$Cancer), names(cancer_cols_all))
+if (length(missing_cancers) > 0) {
+  extra_cols <- grDevices::rainbow(length(missing_cancers))
+  names(extra_cols) <- missing_cancers
+  cancer_cols_all <- c(cancer_cols_all, extra_cols)
+  cancer_levels <- c(cancer_levels, missing_cancers)
+}
+
+ann[, Cancer := factor(Cancer, levels = cancer_levels)]
+setorder(ann, Cancer, sample)
+
+sample_order <- ann$sample
+mat <- mat[, sample_order, drop = FALSE]
+
+ann_df <- data.frame(
+  Cancer = ann$Cancer,
+  row.names = ann$sample,
+  stringsAsFactors = FALSE
+)
+
+group_sizes <- ann[, .N, by = Cancer][order(match(Cancer, cancer_levels))]$N
+gaps_col <- cumsum(group_sizes)
+gaps_col <- gaps_col[gaps_col < ncol(mat)]
+
+labels_col <- rep("", ncol(mat))
+group_dt <- ann[, .(start = .I[1], end = .I[.N]), by = Cancer]
+group_dt[, mid := floor((start + end) / 2)]
+labels_col[group_dt$mid] <- as.character(group_dt$Cancer)
+
+ann_colors <- list(Cancer = cancer_cols_all)
+
+# =========================
+# PLOT
+# =========================
+pdf(out_pdf, width = 20, height = 12)
+
+pheatmap(
+  mat,
+  color = c("white", "red"),
+  breaks = c(-0.001, 0.5, 1.001),
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  gaps_col = gaps_col,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  labels_col = labels_col,
+  angle_col = 90,
+  fontsize_row = 6,
+  fontsize_col = 8,
+  annotation_col = ann_df,
+  annotation_colors = ann_colors,
+  main = "BANP altered motifs across 3d+4d noOV tumor samples\nFirst 50 motifs | 1 = altered (|Delta beta| >= 20), 0 = not altered",
+  border_color = NA
+)
+
+dev.off()
+
+cat("[DONE] Wrote:", out_pdf, "\n")
+EOF
+
+# !!!
+# look at the altered motifs to see if the expression of their linked genes change :
+# 1) First generate the long format of the motif-sample matrix to have one line per motif-sample combination for the altered motifs (motif_altered == 1) and then we can link this to the expression data of the linked genes to see if there is a correlation between altered motifs and gene expression changes.
+Rscript - <<'EOF'
+suppressPackageStartupMessages(library(data.table))
+
+mat_file  <- "./results/methylation/Cpg_altered/NRF1_motif_sample_matrix_noOV.tsv.gz"
+out_long  <- "./results/methylation/Cpg_altered/NRF1_motif_sample_matrix_noOV_long.tsv.gz"
+
+dt <- fread(mat_file)
+
+long_dt <- melt(
+  dt,
+  id.vars = "motif_id",
+  variable.name = "sample_id",
+  value.name = "motif_altered"
+)
+
+long_dt <- long_dt[motif_altered == 1]
+
+fwrite(long_dt, out_long, sep = "\t")
+cat("[DONE] Wrote:", out_long, "\n")
+cat("Rows:", nrow(long_dt), "\n")
+EOF
+# 2) Adding gene information to the long format motif-sample table by merging with a motif-to-gene mapping file.
+Rscript - <<'EOF'
+suppressPackageStartupMessages(library(data.table))
+
+mat_file <- "./results/methylation/Cpg_altered/NRF1_motif_sample_matrix_noOV.tsv.gz"
+map_file <- "./methylation/probe_gene_pairs_in_motifs.tsv"
+out_file <- "./results/methylation/Cpg_altered/NRF1_motif_sample_gene_pairs_noOV.tsv.gz"
+
+# 1) Load matrix
+mat <- fread(mat_file)
+mat[, motif_id := trimws(as.character(motif_id))]
+
+# 2) Convert matrix to long altered motif/sample pairs
+alt <- melt(
+  mat,
+  id.vars = "motif_id",
+  variable.name = "sample_id",
+  value.name = "motif_altered"
+)[motif_altered == 1, .(motif_id, sample_id)]
+
+# 3) Load motif -> gene map
+map <- fread(map_file)
+map[, TF := trimws(as.character(TF))]
+map[, motif_instance_id := trimws(as.character(motif_instance_id))]
+map[, gene := trimws(as.character(gene))]
+
+map <- map[TF == "NRF1_mm0to2_noCGmm", .(
+  motif_id = motif_instance_id,
+  gene
+)]
+
+# keep one gene per motif
+map <- unique(map)
+map1 <- map[, .(gene = unique(gene)[1]), by = motif_id]
+
+# 4) Merge = add linked gene column
+x <- merge(alt, map1, by = "motif_id", all.x = TRUE)
+
+# 5) Quick checks
+cat("Rows in altered long table:", nrow(alt), "\n")
+cat("Rows after merge:", nrow(x), "\n")
+cat("Rows with gene found:", sum(!is.na(x$gene) & x$gene != ""), "\n")
+cat("Rows missing gene:", sum(is.na(x$gene) | x$gene == ""), "\n")
+
+cat("\nExample rows:\n")
+print(head(x, 10))
+
+# 6) Save
+fwrite(x, out_file, sep = "\t")
+cat("\n[DONE] Wrote:", out_file, "\n")
+EOF
+#!!!
+# 3) plot the boxplot of the expression of one gene 
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+})
+
+# =========================
+# INPUTS
+# =========================
+gene_of_interest <- "TBX15"
+
+alt_file  <- "./results/methylation/Cpg_altered/BANP_motif_sample_gene_pairs_noOV.tsv.gz"
+expr_file <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
+out_pdf   <- paste0("./results/methylation/Cpg_altered/BANP_", gene_of_interest, "_expression_boxplots_per_cancer.pdf")
+
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# =========================
+# HELPERS
+# =========================
+extract_patient_id_expr <- function(x) {
+  sub("^TCGA-[^-]+-(TCGA-[^-]+-[^-]+)-.*$", "\\1", x)
+}
+
+# =========================
+# LOAD ALTERED SAMPLE-GENE TABLE
+# =========================
+alt <- fread(alt_file)
+
+# keep only the gene of interest
+alt_gene <- unique(alt[gene == gene_of_interest, .(sample_id, gene)])
+alt_gene[, altered := 1L]
+
+cat("Samples with altered motifs linked to", gene_of_interest, ":", nrow(alt_gene), "\n")
+
+# =========================
+# LOAD EXPRESSION
+# format:
+# sample | GENE1 | GENE2 | ...
+# =========================
+expr <- fread(expr_file)
+
+if (!("sample" %in% names(expr))) stop("Expression file must contain a 'sample' column.")
+if (!(gene_of_interest %in% names(expr))) stop(paste("Gene not found in expression matrix:", gene_of_interest))
+
+plot_dt <- expr[, .(
+  expr_sample = sample,
+  expression  = as.numeric(get(gene_of_interest))
+)]
+
+# extract patient-level ID to match altered table
+plot_dt[, sample_id := extract_patient_id_expr(expr_sample)]
+
+# extract cancer from expression sample name
+plot_dt[, cancer := sub("^TCGA-([^-]+)-.*$", "\\1", expr_sample)]
+
+# add altered / non-altered status
+plot_dt <- merge(
+  plot_dt,
+  alt_gene[, .(sample_id, altered)],
+  by = "sample_id",
+  all.x = TRUE
+)
+
+plot_dt[is.na(altered), altered := 0L]
+plot_dt[, altered_label := ifelse(altered == 1L, "Altered motif", "No altered motif")]
+
+plot_dt <- plot_dt[!is.na(expression) & !is.na(cancer)]
+
+cat("Total samples with expression:", nrow(plot_dt), "\n")
+cat("Altered samples:", sum(plot_dt$altered == 1), "\n")
+cat("Non-altered samples:", sum(plot_dt$altered == 0), "\n")
+
+# keep only cancers where both groups exist
+keep_cancers <- plot_dt[, .(
+  n_alt = sum(altered == 1),
+  n_non = sum(altered == 0)
+), by = cancer][n_alt > 0 & n_non > 0, cancer]
+
+plot_dt <- plot_dt[cancer %in% keep_cancers]
+
+if (nrow(plot_dt) == 0) {
+  stop("No cancer type has both altered and non-altered samples for this gene.")
+}
+
+cat("Cancer types plotted:", length(unique(plot_dt$cancer)), "\n")
+
+# =========================
+# PLOT: one page per cancer
+# =========================
+pdf(out_pdf, width = 6, height = 5)
+
+for (cc in sort(unique(plot_dt$cancer))) {
+  subdt <- plot_dt[cancer == cc]
+
+  p <- ggplot(subdt, aes(x = altered_label, y = expression)) +
+    geom_boxplot(aes(fill = altered_label), outlier.shape = NA, width = 0.7) +
+    geom_jitter(aes(color = altered_label), width = 0.15, size = 1, alpha = 0.7) +
+    scale_fill_manual(values = c("No altered motif" = "black", "Altered motif" = "red")) +
+    scale_color_manual(values = c("No altered motif" = "black", "Altered motif" = "red")) +
+    labs(
+      title = paste0(gene_of_interest, " expression in ", cc),
+      subtitle = paste0(
+        "Altered n = ", sum(subdt$altered == 1),
+        " | Non-altered n = ", sum(subdt$altered == 0)
+      ),
+      x = "",
+      y = "Expression"
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+
+  print(p)
+}
+
+dev.off()
+
+cat("[DONE] Wrote:", out_pdf, "\n")
+EOF
+# !!IM HERE!! 
 
 
 ###################################################################################
@@ -6338,256 +7209,6 @@ cat ./snv/all_unique_variants_across_cancers.bed | grep 'chr9' | awk ' $2 >=3329
 
 # LOOKED INTO THE PAPER WHERE IT WAS FOUND , THEY MAPPED ON THE HG19 GENOME WHILE MINE ARE ON HG38. PLUS THE FOUND SNP IS A GERMLINE VARIATION WHILE MUTECT2 IS FOR SOMATIC MUTATIONS.
 
-############################################################################
-# 11) LOOKING INTO IF MUTATION AFFECT METHYLATION LEVELS AT A CG SITE 
-############################################################################
-# 1) Get the list of HM450 probes that overlap with NRF1 motif (2 CG in motif)
-set -euo pipefail
-
-PROBES_TXT="./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_probes.txt"
-ALL_CPG_BED="./methylation/annotated_methylation_data_probes_filtered.bed"
-MOTIF_BED="./motifs/NRF1_mm0to2_noCGmm.bed.gz"
-OUTDIR="./results/methylation/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes"
-mkdir -p "$OUTDIR"
-
-# Output: chr  start  end  cg_id  motif_chr  motif_start  motif_end  
-bedtools intersect -wa -wb \
-  -a <(
-        awk 'BEGIN{FS=OFS="\t"}
-             NR==FNR {keep[$1]=1; next}
-             ($4 in keep) {print $1,$2,$3,$4}' \
-          <(grep -v "^[[:space:]]*$" "$PROBES_TXT" | awk '{print $1}' | sort -u) \
-          "$ALL_CPG_BED" \
-        | sort -k1,1 -k2,2n
-      ) \
-  -b <(zcat "$MOTIF_BED") \
-> "$OUTDIR/NRF1_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
-
-set -euo pipefail
-
-PROBES_TXT="./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probes.txt"
-ALL_CPG_BED="./methylation/annotated_methylation_data_probes_filtered.bed"
-MOTIF_BED="./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz"
-OUTDIR="./results/methylation/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes"
-mkdir -p "$OUTDIR"
-
-# Output: chr  start  end  cg_id  motif_chr  motif_start  motif_end  
-bedtools intersect -wa -wb \
-  -a <(
-        awk 'BEGIN{FS=OFS="\t"}
-             NR==FNR {keep[$1]=1; next}
-             ($4 in keep) {print $1,$2,$3,$4}' \
-          <(grep -v "^[[:space:]]*$" "$PROBES_TXT" | awk '{print $1}' | sort -u) \
-          "$ALL_CPG_BED" \
-        | sort -k1,1 -k2,2n
-      ) \
-  -b <(zcat "$MOTIF_BED") \
-> "$OUTDIR/BANP_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
-
-# 2) Get the list of SNVs that overlap with these probes in motifs (using the TSV above) and the VCF files per cancer type (filtered SNVs without structural variants)
-#!/usr/bin/env bash
-set -euo pipefail
-VCF_GLOB="./snv/snv_filtered_without_structural_variants/*.vcf.gz"
-TSV="./results/methylation/methylation_motif_mutation_overlap/NRF1_mm0to2_noCGmm_probes/NRF1_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
-OUT_DIR="./results/methylation/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
-mkdir -p "$OUT_DIR"
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
-# Build a BED with motif intervals FROM TSV (these are the motifs that overlap cg probes) and attach cg as 4th column for bedtools -wb output.
-# TSV columns: cg=$4, motif_chr=$5, motif_start=$6, motif_end=$7
-TSV_BED_CG="$TMPDIR/tsv_motifs_with_cg.bed"
-awk 'BEGIN{FS=OFS="\t"} NR>1 && $4!="" && $5!="" {print $5,$6,$7,$4}' "$TSV" | sort -k1,1 -k2,2n -k3,3n -k4,4 -u > "$TSV_BED_CG"
-for vcf in $VCF_GLOB; do
-  sample=$(basename "$vcf" .vcf.gz)
-  # cancer code from "SNV_TCGA-ACC-...." -> ACC
-  cancer=$(echo "$sample" | sed -n 's/^SNV_TCGA-\([A-Za-z0-9]\+\)-.*/\1/p')
-  [[ -n "${cancer:-}" ]]
-  out_subdir="$OUT_DIR/$cancer"
-  mkdir -p "$out_subdir"
-  out="$out_subdir/${sample}.tsv"
-  echo "[RUN] $cancer / $sample"
-  # Variant stream: chrom, start0, end1, chrom, pos, ref, alt
-  bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\n' "$vcf" \
-    | awk 'BEGIN{OFS="\t"}{print $1,$2-1,$2,$1,$2,$3,$4}' \
-    | bedtools intersect -wa -wb \
-        -a "$TSV_BED_CG" \
-        -b - \
-    | awk 'BEGIN{OFS="\t"}{
-        # A (from TSV_BED_CG): $1 $2 $3 $4 = motif_chr motif_start motif_end cg
-        # B (from variants): starts at $5
-        #   $8=var_chr  $9=var_pos  $10=ref  $11=alt
-        print $1,$2,$3,$4,$8,$9,$10">"$11
-      }' > "$out"
-  echo -e "[OK] Wrote $out\t(hits: $(wc -l < "$out"))"
-done
-echo "[DONE] Outputs in $OUT_DIR/<CANCER>/"
-
-#!/usr/bin/env bash
-set -euo pipefail
-VCF_GLOB="./snv/snv_filtered_without_structural_variants/*.vcf.gz"
-TSV="./results/methylation/methylation_motif_mutation_overlap/BANP_mm0to2_noCGmm_probes/BANP_mm0to2_noCGmm_probes_with_coords_and_motif.tsv"
-OUT_DIR="./results/methylation/methylation_motif_mutation_overlap/vcf_hits_in_BANP_mm0to2_noCGmm_motifs"
-mkdir -p "$OUT_DIR"
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
-# Build a BED with motif intervals FROM TSV (these are the motifs that overlap cg probes) and attach cg as 4th column for bedtools -wb output.
-# TSV columns: cg=$4, motif_chr=$5, motif_start=$6, motif_end=$7
-TSV_BED_CG="$TMPDIR/tsv_motifs_with_cg.bed"
-awk 'BEGIN{FS=OFS="\t"} NR>1 && $4!="" && $5!="" {print $5,$6,$7,$4}' "$TSV" | sort -k1,1 -k2,2n -k3,3n -k4,4 -u > "$TSV_BED_CG"
-for vcf in $VCF_GLOB; do
-  sample=$(basename "$vcf" .vcf.gz)
-  # cancer code from "SNV_TCGA-ACC-...." -> ACC
-  cancer=$(echo "$sample" | sed -n 's/^SNV_TCGA-\([A-Za-z0-9]\+\)-.*/\1/p')
-  [[ -n "${cancer:-}" ]]
-  out_subdir="$OUT_DIR/$cancer"
-  mkdir -p "$out_subdir"
-  out="$out_subdir/${sample}.tsv"
-  echo "[RUN] $cancer / $sample"
-  # Variant stream: chrom, start0, end1, chrom, pos, ref, alt
-  bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\n' "$vcf" \
-    | awk 'BEGIN{OFS="\t"}{print $1,$2-1,$2,$1,$2,$3,$4}' \
-    | bedtools intersect -wa -wb \
-        -a "$TSV_BED_CG" \
-        -b - \
-    | awk 'BEGIN{OFS="\t"}{
-        # A (from TSV_BED_CG): $1 $2 $3 $4 = motif_chr motif_start motif_end cg
-        # B (from variants): starts at $5
-        #   $8=var_chr  $9=var_pos  $10=ref  $11=alt
-        print $1,$2,$3,$4,$8,$9,$10">"$11
-      }' > "$out"
-  echo -e "[OK] Wrote $out\t(hits: $(wc -l < "$out"))"
-done
-echo "[DONE] Outputs in $OUT_DIR/<CANCER>/"
-
-# 3) For each hit, get the beta values for the mutated sample and a non-mutated sample (if available) from the methylation files, and compile into a TSV for statistical testing.
-#!/usr/bin/env bash
-set -euo pipefail
-HITS_ROOT="./results/methylation/methylation_motif_mutation_overlap/vcf_hits_in_NRF1_mm0to2_noCGmm_motifs"
-METH_DIR="./methylation/filtered_methylation"
-OUT="./results/methylation/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv"
-mkdir -p "$(dirname "$OUT")"
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
-echo -e "cancer\tsample_mut\tsample_nomut\tmotif_chr\tmotif_start\tmotif_end\tcg\tvar_chr\tvar_pos\tref_alt\tbeta_nomut\tbeta_mut" > "$OUT"
-extract_cancer_from_sample() {
-  echo "$1" | sed -n 's/^SNV_TCGA-\([A-Za-z0-9]\+\)-.*/\1/p'
-}
-
-extract_tumor_id_01A() {
-  local base
-  base=$(echo "$1" | grep -oE 'TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-01A' | head -n 1 || true)
-  [[ -n "${base:-}" ]] && echo "${base}_1" || echo ""
-}
-
-find_meth_file() {
-  local cancer="$1"
-  local tumor_id="$2"
-  ls -1 "$METH_DIR"/HM450_TCGA-"$cancer"-"$tumor_id"_annotated_methylation_filtered.bed.gz 2>/dev/null | head -n 1 || true
-}
-
-# Build cached cg->beta map for a methylation file (no sorting randomness: keep first seen)
-build_beta_map() {
-  local meth="$1"
-  local key out
-  key=$(basename "$meth" .bed.gz)
-  out="$TMPDIR/${key}.cg_beta.tsv"
-  [[ -s "$out" ]] && { echo "$out"; return; }
-
-  zcat "$meth" | awk 'BEGIN{FS=OFS="\t"}
-    {
-      # Find cg anywhere in line, then pick the numeric beta immediately after it
-      cg=""; beta=""
-      for(i=1;i<=NF;i++){
-        if($i ~ /^cg[0-9]+$/){ cg=$i; cg_i=i; break }
-      }
-      if(cg!=""){
-        for(j=cg_i+1;j<=NF;j++){
-          if($j ~ /^[0-9]*\.?[0-9]+$/){ beta=$j; break }
-        }
-      }
-      if(cg!="" && beta!="" && !seen[cg]++){ print cg,beta }
-    }' > "$out"
-  echo "$out"
-}
-
-lookup_beta() {
-  local map="$1"
-  local cg="$2"
-  awk -v cg="$cg" 'BEGIN{FS="\t"} $1==cg {print $2; exit}' "$map"
-}
-
-for cancer_dir in "$HITS_ROOT"/*; do
-  [[ -d "$cancer_dir" ]] || continue
-  cancer=$(basename "$cancer_dir")
-  echo "[CANCER] $cancer"
-  mapfile -t files < <(ls -1 "$cancer_dir"/*.tsv 2>/dev/null | sort)
-  [[ ${#files[@]} -ge 2 ]] || { echo "  [SKIP] <2 samples"; continue; }
-  found=0
-
-  # Try mutated sample files first (non-empty)
-  for mut_file in "${files[@]}"; do
-    [[ -s "$mut_file" ]] || continue
-    sample_mut=$(basename "$mut_file" .tsv)
-    # Find methylation file for the mutated sample (01A)
-    c_mut=$(extract_cancer_from_sample "$sample_mut")
-    id_mut=$(extract_tumor_id_01A "$sample_mut")
-    mut_meth=$(find_meth_file "$c_mut" "$id_mut")
-    [[ -n "${mut_meth:-}" ]] || continue
-    mut_map=$(build_beta_map "$mut_meth")
-
-    # Candidate non-mutated files: simplest definition = empty hit file
-    for nomut_file in "${files[@]}"; do
-      [[ "$nomut_file" == "$mut_file" ]] && continue
-      [[ ! -s "$nomut_file" ]] || continue
-      sample_nomut=$(basename "$nomut_file" .tsv)
-      c_nomut=$(extract_cancer_from_sample "$sample_nomut")
-      id_nomut=$(extract_tumor_id_01A "$sample_nomut")
-      nomut_meth=$(find_meth_file "$c_nomut" "$id_nomut")
-      [[ -n "${nomut_meth:-}" ]] || continue
-      nomut_map=$(build_beta_map "$nomut_meth")
-
-      # Now iterate over hits in mutated file until we find a cg with non-NA beta in both
-      while IFS=$'\t' read -r motif_chr motif_start motif_end cg var_chr var_pos ref_alt; do
-        [[ -n "${cg:-}" ]] || continue
-        beta_mut=$(lookup_beta "$mut_map" "$cg" || true)
-        beta_nomut=$(lookup_beta "$nomut_map" "$cg" || true)
-        [[ -n "${beta_mut:-}" && -n "${beta_nomut:-}" ]] || continue
-        echo -e "${cancer}\t${sample_mut}\t${sample_nomut}\t${motif_chr}\t${motif_start}\t${motif_end}\t${cg}\t${var_chr}\t${var_pos}\t${ref_alt}\t${beta_nomut}\t${beta_mut}" >> "$OUT"
-        echo "  [OK] pair chosen: $sample_mut vs $sample_nomut (cg=$cg)"
-        found=1
-        break
-      done < "$mut_file"
-      [[ "$found" -eq 1 ]] && break
-    done
-    [[ "$found" -eq 1 ]] && break
-  done
-  [[ "$found" -eq 0 ]] && echo "  [WARN] no valid pair with beta found for $cancer"
-done
-
-echo "[DONE] Wrote $OUT"
-
-# plot the difference in beta values between mutated and non-mutated samples for the cg sites in the motifs, per cancer type (boxplot or similar)
-Rscript -e '
-library(readr)
-library(dplyr)
-library(ggplot2)
-
-df <- read_tsv("./results/methylation/methylation_motif_mutation_overlap/NRF1_one_pair_per_cancer_mut_vs_nomut_with_beta.tsv") %>%
-  mutate(
-    beta_mut   = as.numeric(beta_mut),
-    beta_nomut = as.numeric(beta_nomut),
-    delta = beta_mut - beta_nomut
-  )
-
-p <- ggplot(df, aes(x = reorder(cancer, delta), y = delta)) +
-  geom_hline(yintercept = 0) +
-  geom_point() +
-  coord_flip() +
-  theme_bw() +
-  labs(x = NULL, y = "deltabeta = beta_mut - beta_nomut",title = "Difference in DNA methylation at TF binding motifs when a mutation is present")
-
-ggsave("./results/methylation/methylation_motif_mutation_overlap/NRF1_delta_beta_per_cancer.pdf", plot = p, width = 12, height = 12)
-'
 
 # IM HERE
 ####################################################################################################
@@ -6627,7 +7248,7 @@ awk -F'\t' '{
     # Keep only if both Ref and Alt are 1 character long
     if (length(ref) == 1 && length(alt) == 1) print $0 
 }' ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif.bed > ./snv/overlaps/snv_in_motifs2mm/NRF1_mm0to2_noCGmm_SNVs_in_motifs_SNVidxmotif_filtered_snvs.bed
-# IM HERE 
+
 # filter out OV samples from the metadata file to keep only 3d and 4d samples for the presence/absence matrix
 awk '$2!="OV"' ./results/multi_omics/samples_3d+4d.tsv > ./results/multi_omics/samples_3d+4d_noOV.tsv
 
@@ -7112,425 +7733,19 @@ ggplot(plot_dt, aes(x=cancer, y=gene, size=freq)) +
 
 dev.off()
 '
+
 # NOT DONE YET
-
-# Link altered motifs with expression of linked genes 
-library(data.table)
-library(ggplot2)
-
-expr_file <- "./expression/gene_expression_matrix_protein_coding.tsv"
-alt_file  <- "./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/all_cancers_GENE_presence_matrix.tsv"
-
-out_stats <- "./results/snv/NRF1_expression_vs_alteration_stats_by_cancer.tsv"
-out_pdf   <- "./results/snv/NRF1_expression_vs_alteration_one_page_per_gene.pdf"
-
-dir.create(dirname(out_stats), recursive = TRUE, showWarnings = FALSE)
-
-cat("STEP 1 - Loading alteration matrix\n")
-alt <- fread(alt_file)
-alt_cols <- setdiff(names(alt), "gene")
-
-alt_long <- melt(
-  alt,
-  id.vars = "gene",
-  measure.vars = alt_cols,
-  variable.name = "alt_sample",
-  value.name = "altered"
-)
-
-alt_long[, c("cancer", "patient_id") := tstrsplit(as.character(alt_sample), "_", fixed = TRUE)]
-alt_long[, altered := as.numeric(altered)]
-alt_long[, altered_bin := as.integer(altered >= 1)]
-
-alt_long <- alt_long[
-  ,
-  .(
-    altered = max(altered, na.rm = TRUE),
-    altered_bin = as.integer(any(altered_bin == 1, na.rm = TRUE))
-  ),
-  by = .(gene, patient_id, cancer)
-]
-
-pair_stats <- alt_long[
-  ,
-  .(
-    n_alt = sum(altered_bin == 1, na.rm = TRUE),
-    n_noalt = sum(altered_bin == 0, na.rm = TRUE),
-    n_tested = .N
-  ),
-  by = .(gene, cancer)
-][n_alt >= 5 & n_noalt >= 5]
-
-cat("Usable gene-cancer pairs from alteration matrix:", nrow(pair_stats), "\n")
-
-top_genes <- pair_stats[
-  ,
-  .(total_alt = sum(n_alt, na.rm = TRUE)),
-  by = gene
-][order(-total_alt)][1:min(5, .N), gene]
-
-cat("Top genes selected:", length(top_genes), "\n")
-if (length(top_genes) == 0) stop("No top_genes found. Check alteration matrix filtering.")
-
-alt_long <- alt_long[gene %in% top_genes]
-
-cat("STEP 2 - Loading expression matrix\n")
-expr <- fread(expr_file)
-
-expr <- expr[grepl("-01A", sample)]
-
-tmp <- tstrsplit(expr$sample, "-", fixed = TRUE)
-expr[, cancer := tmp[[2]]]
-expr[, patient_id := paste(tmp[[3]], tmp[[4]], tmp[[5]], sep = "-")]
-
-keep_cols <- intersect(c("sample", "cancer", "patient_id", top_genes), names(expr))
-cat("Gene columns found in expression matrix:", length(setdiff(keep_cols, c("sample", "cancer", "patient_id"))), "\n")
-
-if (length(keep_cols) <= 3) {
-  stop("None of the selected genes were found in the expression matrix columns.")
-}
-
-expr <- expr[, ..keep_cols]
-
-expr_long <- melt(
-  expr,
-  id.vars = c("sample", "cancer", "patient_id"),
-  variable.name = "gene",
-  value.name = "expression"
-)
-
-expr_long[, expression := log2(as.numeric(expression) + 1)]
-
-expr_long <- expr_long[
-  ,
-  .(expression = median(expression, na.rm = TRUE)),
-  by = .(gene, patient_id, cancer)
-]
-
-cat("Rows in expression long table:", nrow(expr_long), "\n")
-
-cat("STEP 3 - Merging expression and alteration\n")
-dt <- merge(
-  expr_long,
-  alt_long[, .(gene, patient_id, cancer, altered, altered_bin)],
-  by = c("gene", "patient_id", "cancer")
-)
-
-cat("Rows after merge:", nrow(dt), "\n")
-if (nrow(dt) == 0) {
-  stop("Merged table dt is empty. Expression and alteration sample IDs do not match after filtering.")
-}
-
-usable <- dt[
-  ,
-  .(
-    n_alt = sum(altered_bin == 1, na.rm = TRUE),
-    n_noalt = sum(altered_bin == 0, na.rm = TRUE),
-    n_tested = .N
-  ),
-  by = .(gene, cancer)
-][n_alt >= 5 & n_noalt >= 5]
-
-cat("Usable gene-cancer pairs after merge:", nrow(usable), "\n")
-if (nrow(usable) == 0) {
-  stop("No usable gene-cancer pairs remain after merge.")
-}
-
-dt <- merge(dt, usable[, .(gene, cancer)], by = c("gene", "cancer"))
-
-cat("Rows kept for plotting:", nrow(dt), "\n")
-cat("Genes to plot:", length(unique(dt$gene)), "\n")
-
-cat("STEP 4 - Computing stats\n")
-stats <- dt[
-  ,
-  {
-    grp <- sort(unique(altered_bin[!is.na(altered_bin)]))
-    p <- if (length(grp) == 2) wilcox.test(expression ~ altered_bin)$p.value else NA_real_
-    list(
-      n_alt = sum(altered_bin == 1, na.rm = TRUE),
-      n_noalt = sum(altered_bin == 0, na.rm = TRUE),
-      n_tested = .N,
-      p_value = p
-    )
-  },
-  by = .(gene, cancer)
-]
-
-stats[, p_adj := p.adjust(p_value, method = "BH")]
-fwrite(stats, out_stats, sep = "\t")
-cat("Stats written to:", out_stats, "\n")
-
-cat("STEP 5 - Writing PDF\n")
-pdf(out_pdf, width = 16, height = 10)
-
-genes_to_plot <- unique(dt$gene)
-
-for (g in genes_to_plot) {
-  cat("Plotting gene:", g, "\n")
-
-  sub_dt <- dt[gene == g]
-  sub_stats <- stats[gene == g]
-
-  sub_dt <- merge(
-    sub_dt,
-    sub_stats[, .(cancer, n_tested, p_adj)],
-    by = "cancer",
-    all.x = TRUE
-  )
-
-  sub_dt[, cancer_label := paste0(cancer, "\nN=", n_tested, " | FDR=", signif(p_adj, 2))]
-
-  p <- ggplot(sub_dt, aes(x = factor(altered_bin), y = expression)) +
-    geom_boxplot() +
-    facet_wrap(~ cancer_label, scales = "free_y") +
-    theme_bw() +
-    labs(
-      title = paste("Expression vs alteration:", g),
-      x = "Alteration status (0=no, 1=>=1 alteration)",
-      y = "log2(expression + 1)"
-    )
-
-  print(p)
-}
-
-dev.off()
-cat("PDF written to:", out_pdf, "\n")
 
 ################################################
 # Multiple Mutations needed analysis 
 ################################################
-library(data.table)
-library(ggplot2)
+# look into if there are mutations that coexist 
 
-# =========================
-# ALL GENE x CANCER RESULTS
-# TOP 10 GENES GLOBALLY
-# PLOT ONE PAGE PER GENE WITH ONE PANEL PER CANCER
-# =========================
 
-motif_name <- "BANP_mm0to2_noCGmm"
-# motif_name <- "NRF1_mm0to2_noCGmm"
 
-motif_file <- paste0("./snv/SNVs_presence_matrix_motifs2mm/", motif_name, "/all_cancers_MOTIF_presence_matrix.tsv")
-expr_file  <- "./expression/gene_expression_matrix_protein_coding.tsv"
 
-out_all_tsv   <- paste0("./results/snv/", motif_name, "_ALL_gene_cancer_results.tsv")
-out_top_tsv   <- paste0("./results/snv/", motif_name, "_TOP10_genes_global_summary.tsv")
-out_pdf       <- paste0("./results/snv/", motif_name, "_TOP10_genes_global_one_page_per_gene.pdf")
 
-dir.create("./results/snv", recursive = TRUE, showWarnings = FALSE)
 
-cat("STEP 1 - Loading motif matrix\n")
-motif_dt <- fread(motif_file)
-
-annot_cols <- c(
-  "motif_id","motif_name","motif_chr","motif_start","motif_end","motif_seq",
-  "motif_score","motif_strand","gene","gene_id","transcript_id","gene_chr",
-  "gene_start","gene_end","gene_strand","distance"
-)
-
-sample_cols <- setdiff(names(motif_dt), annot_cols)
-motif_dt[, (sample_cols) := lapply(.SD, as.numeric), .SDcols = sample_cols]
-
-cat("STEP 2 - Counting altered motifs per gene per sample\n")
-gene_count_dt <- motif_dt[
-  ,
-  lapply(.SD, sum, na.rm = TRUE),
-  by = gene,
-  .SDcols = sample_cols
-]
-
-gene_count_long <- melt(
-  gene_count_dt,
-  id.vars = "gene",
-  measure.vars = setdiff(names(gene_count_dt), "gene"),
-  variable.name = "alt_sample",
-  value.name = "altered_count"
-)
-
-# alt_sample format: ACC_TCGA-OR-A5J5
-gene_count_long[, cancer := sub("_.*", "", alt_sample)]
-gene_count_long[, patient_id := sub("^[^_]+_", "", alt_sample)]
-gene_count_long[, altered_count := as.numeric(altered_count)]
-
-# binary grouping for comparison
-gene_count_long[, altered_bin := ifelse(altered_count == 0, "0", ">=1")]
-
-cat("STEP 3 - Loading expression matrix\n")
-expr <- fread(expr_file)
-expr <- expr[grepl("-01A", sample)]
-
-# expression sample format: TCGA-ACC-TCGA-OR-A5J5-01A_1
-expr[, cancer := sub("^TCGA-([^-]+)-.*$", "\\1", sample)]
-expr[, patient_id := sub("^TCGA-[^-]+-(TCGA-[^-]+-[^-]+)-.*$", "\\1", sample)]
-
-keep_genes <- intersect(unique(gene_count_long$gene), names(expr))
-cat("Genes found in both datasets:", length(keep_genes), "\n")
-
-if (length(keep_genes) == 0) {
-  stop("No common genes between alteration and expression tables.")
-}
-
-expr <- expr[, c("sample", "cancer", "patient_id", keep_genes), with = FALSE]
-
-expr_long <- melt(
-  expr,
-  id.vars = c("sample", "cancer", "patient_id"),
-  variable.name = "gene",
-  value.name = "expression"
-)
-
-# raw expression
-expr_long[, expression := as.numeric(expression)]
-
-cat("STEP 4 - Merging\n")
-dt <- merge(
-  expr_long,
-  gene_count_long[, .(gene, cancer, patient_id, altered_count, altered_bin)],
-  by = c("gene", "cancer", "patient_id")
-)
-
-cat("Rows after merge:", nrow(dt), "\n")
-if (nrow(dt) == 0) {
-  stop("Merged table is empty.")
-}
-
-cat("STEP 5 - Computing all gene x cancer results\n")
-rank_dt <- dt[
-  ,
-  .(
-    n_0   = sum(altered_bin == "0", na.rm = TRUE),
-    n_alt = sum(altered_bin == ">=1", na.rm = TRUE),
-    med_0 = median(expression[altered_bin == "0"], na.rm = TRUE),
-    med_alt = median(expression[altered_bin == ">=1"], na.rm = TRUE)
-  ),
-  by = .(gene, cancer)
-]
-
-rank_dt[, abs_diff := abs(med_alt - med_0)]
-
-# Wilcoxon 0 vs >=1 for every gene x cancer
-wilcox_dt <- dt[
-  ,
-  .(
-    p_value = tryCatch(
-      wilcox.test(expression ~ altered_bin)$p.value,
-      error = function(e) NA_real_
-    )
-  ),
-  by = .(gene, cancer)
-]
-
-rank_dt <- merge(
-  rank_dt,
-  wilcox_dt,
-  by = c("gene", "cancer"),
-  all.x = TRUE
-)
-
-# BH correction across all gene-cancer tests
-rank_dt[, p_adj := p.adjust(p_value, method = "BH")]
-
-# keep valid rows
-rank_dt <- rank_dt[is.finite(abs_diff) & !is.na(abs_diff)]
-
-# keep only rows with enough samples in both groups
-rank_dt <- rank_dt[n_0 >= 5 & n_alt >= 5]
-
-if (nrow(rank_dt) == 0) {
-  stop("No gene-cancer pairs remain after filtering n_0 >= 5 and n_alt >= 5.")
-}
-
-# save ALL gene x cancer results
-fwrite(rank_dt, out_all_tsv, sep = "\t")
-cat("All gene-cancer results written to:", out_all_tsv, "\n")
-
-cat("STEP 6 - Ranking genes globally across cancers\n")
-gene_rank <- rank_dt[
-  ,
-  .(
-    best_diff = max(abs_diff, na.rm = TRUE),
-    best_padj = min(p_adj, na.rm = TRUE)
-  ),
-  by = gene
-]
-
-# global ranking score: big effect + strong significance
-gene_rank[, score := best_diff * -log10(best_padj + 1e-300)]
-
-top_genes_dt <- gene_rank[order(-score)][1:min(10, .N)]
-top_genes <- top_genes_dt$gene
-
-fwrite(top_genes_dt, out_top_tsv, sep = "\t")
-cat("Top 10 genes global summary written to:", out_top_tsv, "\n")
-print(top_genes_dt)
-
-cat("STEP 7 - Plotting one page per gene with panels per cancer\n")
-pdf(out_pdf, width = 14, height = 8)
-
-for (g in top_genes) {
-  sub_dt <- dt[gene == g]
-
-  # keep only cancers that passed the usable filter
-  keep_cancers <- rank_dt[gene == g, unique(cancer)]
-  sub_dt <- sub_dt[cancer %in% keep_cancers]
-
-  if (nrow(sub_dt) == 0) next
-
-  sub_dt[, altered_bin := factor(altered_bin, levels = c("0", ">=1"))]
-
-  # stats per cancer for labels
-  lab_dt <- rank_dt[gene == g, .(
-    cancer, n_0, n_alt, med_0, med_alt, abs_diff, p_value, p_adj
-  )]
-
-  sub_dt <- merge(sub_dt, lab_dt, by = "cancer", all.x = TRUE)
-
-  sub_dt[, cancer_label := paste0(
-    cancer,
-    "\nN0=", n_0,
-    " N>=1=", n_alt,
-    "\n|diff|=", signif(abs_diff, 3),
-    " FDR=", signif(p_adj, 3)
-  )]
-
-  # order panels by effect size
-  panel_order <- unique(lab_dt[order(-abs_diff), cancer])
-  sub_dt[, cancer_label := factor(
-    cancer_label,
-    levels = unique(sub_dt[match(panel_order, cancer), cancer_label])
-  )]
-
-  p <- ggplot(sub_dt, aes(x = altered_bin, y = expression)) +
-    geom_boxplot(outlier.shape = NA) +
-    geom_jitter(width = 0.15, height = 0.02, alpha = 0.35, size = 0.8) +
-    facet_wrap(~ cancer_label, scales = "free_y", ncol = 3) +
-    theme_bw() +
-    labs(
-      title = paste("Expression vs alteration burden:", g),
-      subtitle = paste0(
-        "Top gene global score = ",
-        signif(top_genes_dt[gene == g, score], 3),
-        "   (best |diff|=",
-        signif(top_genes_dt[gene == g, best_diff], 3),
-        ", best FDR=",
-        signif(top_genes_dt[gene == g, best_padj], 3),
-        ")"
-      ),
-      x = "Alteration group",
-      y = "Raw expression"
-    ) +
-    theme(
-      strip.text = element_text(size = 8),
-      axis.text.x = element_text(size = 8)
-    )
-
-  print(p)
-}
-
-dev.off()
-cat("PDF written to:", out_pdf, "\n")
 
 
 ###############################################################################

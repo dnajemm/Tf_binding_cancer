@@ -21,10 +21,10 @@ library(Polychrome)
 peaks_dir <- "./peaks/filtered_peaks/"
 file_pattern <- "^ATAC_TCGA-[A-Z]+_.*_peaks_macs\\.bed$"
 
-out_pdf <- "./results/peaks/tSNE_ATAC_ALLCANCERS_peakPresence.pdf"
-out_tsv <- "./results/peaks/tSNE_ATAC_ALLCANCERS_coords.tsv"
+out_pdf <- "./results/peaks/tSNE_ATAC_ALLCANCERS_peakPresence_10000.pdf"
+out_tsv <- "./results/peaks/tSNE_ATAC_ALLCANCERS_coords_10000.tsv"
 
-top_k_peaks <- 3000
+top_k_peaks <- 10000
 n_pcs <- 30
 seed <- 1
 
@@ -137,16 +137,28 @@ plot_dt <- data.table(
 fwrite(plot_dt, out_tsv, sep = "\t")
 
 # =======================
-# DISTINCT COLORS (Polychrome)
+# COLORS FROM FILE
 # =======================
-cancers <- sort(unique(plot_dt$cancer))
-pal <- Polychrome::createPalette(length(cancers), seedcolors = "#000000")
-names(pal) <- cancers
+color_df <- fread("./results/multi_omics/cancer_color_order_with_defined_colours.tsv", header = FALSE)
+setnames(color_df, c("Cancer_full", "Color"))
+
+color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
+color_df[, Color := trimws(gsub("\r", "", Color))]
+
+plot_dt[, cancer_short := sub("^TCGA-", "", cancer)]
+
+pal <- setNames(color_df$Color, color_df$Cancer)
+
+# optional safety
+missing_cancers <- setdiff(unique(plot_dt$cancer_short), names(pal))
+if (length(missing_cancers) > 0) {
+  stop("Missing colors for: ", paste(missing_cancers, collapse = ", "))
+}
 
 # =======================
 # PLOT
 # =======================
-p <- ggplot(plot_dt, aes(tSNE1, tSNE2, color = cancer)) +
+p <- ggplot(plot_dt, aes(tSNE1, tSNE2, color = cancer_short)) +
   geom_point(alpha = 0.85, size = 1.4) +
   scale_color_manual(values = pal) +
   theme_bw() +
@@ -166,11 +178,12 @@ cat("Wrote:", out_tsv, "\n")
 
 
 ###################################################################################################################################################################
-# this code is for a one-page PDF with 3 separate t-SNE panels (Cancer / Organ group / Tissue type), each with its OWN Polychrome legend placed BELOW its plot.
+# this code is for a one-page PDF with 3 separate t-SNE panels (Cancer / Organ group / Tissue type), each with its OWN legend placed BELOW its plot.
+# Cancer colors are taken from: ./results/multi_omics/cancer_color_order_with_defined_colours.tsv
 ###################################################################################################################################################################
 #!/usr/bin/env Rscript
 # One-page PDF with 3 separate t-SNE panels (Cancer / Organ group / Tissue type),
-# each with its OWN Polychrome legend placed BELOW its plot.
+# each with its OWN legend placed BELOW its plot.
 # Input: TSV with columns: sample, cancer, tSNE1, tSNE2
 
 suppressPackageStartupMessages({
@@ -178,15 +191,20 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(Polychrome)
   library(patchwork)
+  library(grid)
 })
 
 # ------------------ inputs / outputs ------------------
 in_tsv  <- "./results/peaks/tSNE_ATAC_ALLCANCERS_coords.tsv"
 out_pdf <- "./results/peaks/tSNE_ATAC_3views.pdf"
+color_tsv <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
 
 # ------------------ load tSNE coords ------------------
 dt <- fread(in_tsv)
 stopifnot(all(c("sample","cancer","tSNE1","tSNE2") %in% names(dt)))
+
+# remove TCGA- prefix if present so cancer names match the color file after cleaning
+dt[, cancer := gsub("^TCGA-", "", cancer)]
 
 # ------------------ mappings ------------------
 organ_map <- list(
@@ -234,13 +252,22 @@ dt[, organ_group := factor(vapply(cancer, map_group, character(1), mapping = org
 dt[, tissue_type := factor(vapply(cancer, map_group, character(1), mapping = tissue_map))]
 dt[, cancer := factor(cancer)]
 
-# ------------------ Polychrome palettes ------------------
-pal_cancer <- Polychrome::createPalette(
-  nlevels(dt$cancer),
-  seedcolors = c("#ff0000ff", "#E69F00", "#56B4E9", "#009E73")
-)
-names(pal_cancer) <- levels(dt$cancer)
+# ------------------ cancer colors from file ------------------
+color_df <- fread(color_tsv, header = FALSE)
+setnames(color_df, c("Cancer_full", "Color"))
+color_df[, Cancer := gsub("^TCGA-", "", trimws(Cancer_full))]
+color_df[, Color := trimws(gsub("\r", "", Color))]
 
+pal_cancer <- setNames(color_df$Color, color_df$Cancer)
+
+missing_cancers <- setdiff(levels(dt$cancer), names(pal_cancer))
+if (length(missing_cancers) > 0) {
+  stop("Missing colors for cancer types: ", paste(missing_cancers, collapse = ", "))
+}
+
+pal_cancer <- pal_cancer[levels(dt$cancer)]
+
+# ------------------ Polychrome palettes for organ/tissue ------------------
 pal_organ <- Polychrome::createPalette(
   nlevels(dt$organ_group),
   seedcolors = c("#ff00c3ff", "#815801ff", "#24099eff", "#55ffd2ff")
@@ -294,5 +321,3 @@ pdf(out_pdf, width = 18, height = 7)
 dev.off()
 
 cat("Wrote:", out_pdf, "\n")
-
-
