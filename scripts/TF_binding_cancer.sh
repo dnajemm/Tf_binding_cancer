@@ -6143,12 +6143,12 @@ cat("  PDF pages:", n_pages, "\n")
 EOF
 
 
-# IM HERE LAUNCHED
+# IM HERE
 ##########################################################################################
 # Redo the altered motifs of above but also separating up and down methylation changes 
 ##########################################################################################
 mkdir -p ./results/methylation/Cpg_altered_direction/
-
+# This script generates a motif-sample matrix for TF where the values indicate the direction of methylation change (1 for higher methylation in altered samples, -1 for lower methylation in altered samples, and 0 for no alteration) based on a specified delta beta threshold. It uses the same cohort and motif mapping as before but now distinguishes between hypermethylation and hypomethylation alterations in the motifs. The output is saved as a gzipped TSV file for downstream analysis and visualization and put in the ./results/methylation/Cpg_altered_direction/ directory.
 Rscript - <<'EOF'
 suppressPackageStartupMessages(library(data.table))
 
@@ -6372,16 +6372,1319 @@ cat("Total time:",
 
 EOF
 
+# plot the heatmap of all motifs 
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(pheatmap)
+})
 
+mat_file     <- "./results/methylation/Cpg_altered_direction/BANP_motif_sample_matrix_sameCancer_signed_noOV.tsv.gz"
+samples_file <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+col_file     <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+out_pdf      <- "./results/methylation/Cpg_altered_direction/Heatmap_BANP_motif_sample_matrix_allMotifs_directional.pdf"
 
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
+# =========================
+# LOAD MATRIX
+# =========================
+mat_dt <- fread(mat_file)
+if (ncol(mat_dt) < 2) stop("Matrix file has no sample columns: ", mat_file)
 
+motif_ids <- mat_dt$motif_id
+mat <- as.matrix(mat_dt[, -1, with = FALSE])
+rownames(mat) <- motif_ids
+mode(mat) <- "numeric"
 
+# optional safety check
+vals <- sort(unique(as.numeric(mat)))
+cat("Unique matrix values:", paste(vals, collapse = ", "), "\n")
 
+cat("Number of motifs plotted :", nrow(mat), "\n")
+cat("Number of samples plotted:", ncol(mat), "\n")
 
+# =========================
+# LOAD SAMPLE ANNOTATION
+# =========================
+samples <- fread(samples_file, header = FALSE)
+setnames(samples, c("sample", "cancer", "SNV", "METH", "RNA", "ATAC"))
+samples <- unique(samples[METH == 1, .(sample, cancer)])
 
+ann <- samples[sample %in% colnames(mat)]
+if (nrow(ann) == 0) stop("No matrix columns matched sample annotation.")
 
+ann[, Cancer := as.character(cancer)]
 
+# keep only annotated samples and order matrix accordingly
+sample_order <- ann$sample[ann$sample %in% colnames(mat)]
+mat <- mat[, sample_order, drop = FALSE]
+
+# =========================
+# LOAD CANCER COLORS / ORDER
+# =========================
+cols <- fread(col_file, header = FALSE)[, 1:2]
+setnames(cols, c("Cancer", "Color"))
+cols[, Cancer := gsub("\r", "", trimws(as.character(Cancer)))]
+cols[, Color  := gsub("\r", "", trimws(as.character(Color)))]
+cols[, Cancer := sub("^TCGA-", "", Cancer)]
+
+cancer_levels <- unique(cols$Cancer)
+cancer_cols_all <- setNames(cols$Color, cols$Cancer)
+
+missing_cancers <- setdiff(unique(ann$Cancer), names(cancer_cols_all))
+if (length(missing_cancers) > 0) {
+  extra_cols <- grDevices::rainbow(length(missing_cancers))
+  names(extra_cols) <- missing_cancers
+  cancer_cols_all <- c(cancer_cols_all, extra_cols)
+  cancer_levels <- c(cancer_levels, missing_cancers)
+}
+
+ann[, Cancer := factor(Cancer, levels = cancer_levels)]
+setorder(ann, Cancer, sample)
+
+sample_order <- ann$sample
+mat <- mat[, sample_order, drop = FALSE]
+
+ann_df <- data.frame(
+  Cancer = ann$Cancer,
+  row.names = ann$sample,
+  stringsAsFactors = FALSE
+)
+
+# =========================
+# COLUMN GROUPS / LABELS
+# =========================
+group_sizes <- ann[, .N, by = Cancer][order(match(Cancer, cancer_levels))]$N
+gaps_col <- cumsum(group_sizes)
+gaps_col <- gaps_col[gaps_col < ncol(mat)]
+
+labels_col <- rep("", ncol(mat))
+group_dt <- ann[, .(
+  start = .I[1],
+  end   = .I[.N]
+), by = Cancer]
+group_dt[, mid := floor((start + end) / 2)]
+labels_col[group_dt$mid] <- as.character(group_dt$Cancer)
+
+ann_colors <- list(Cancer = cancer_cols_all)
+
+# =========================
+# PLOT
+# =========================
+pdf(out_pdf, width = 20, height = 30)
+
+pheatmap(
+  mat,
+  color = c("blue", "white", "red"),
+  breaks = c(-1.5, -0.5, 0.5, 1.5),
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  gaps_col = gaps_col,
+  show_rownames = FALSE,
+  show_colnames = TRUE,
+  labels_col = labels_col,
+  angle_col = 90,
+  fontsize_col = 8,
+  annotation_col = ann_df,
+  annotation_colors = ann_colors,
+  main = "BANP altered motifs across 3d+4d noOV tumor samples\n-1 = hypomethylated, 0 = unchanged, +1 = hypermethylated",
+  border_color = NA,
+  legend_breaks = c(-1, 0, 1),
+  legend_labels = c("Hypo", "Unchanged", "Hyper")
+)
+
+dev.off()
+
+cat("[DONE] Wrote:", out_pdf, "\n")
+EOF
+
+# plot the heatmap of motifs that are altered in at least % of samples of at least one cancer type
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(pheatmap)
+})
+
+mat_file     <- "./results/methylation/Cpg_altered_direction/BANP_motif_sample_matrix_sameCancer_signed_noOV.tsv.gz"
+samples_file <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+col_file     <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+out_pdf      <- "./results/methylation/Cpg_altered_direction/Heatmap_BANP_motif_sample_matrix_min50pctOneCancer.pdf"
+
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+min_frac <- 0.50   # keep motif if altered in >=50% of samples in at least one cancer
+
+cat("[1/6] Loading matrix...\n")
+
+# =========================
+# LOAD MATRIX
+# =========================
+mat_dt <- fread(mat_file)
+if (ncol(mat_dt) < 2) stop("Matrix file has no sample columns: ", mat_file)
+
+motif_ids <- mat_dt$motif_id
+mat <- as.matrix(mat_dt[, -1, with = FALSE])
+rownames(mat) <- motif_ids
+mode(mat) <- "numeric"
+
+vals <- sort(unique(as.numeric(mat)))
+cat("Unique matrix values:", paste(vals, collapse = ", "), "\n")
+cat("Number of motifs loaded :", nrow(mat), "\n")
+cat("Number of samples loaded:", ncol(mat), "\n")
+cat("Total NA values in matrix:", sum(is.na(mat)), "\n")
+
+cat("[2/6] Loading sample annotation...\n")
+
+# =========================
+# LOAD SAMPLE ANNOTATION
+# =========================
+samples <- fread(samples_file, header = FALSE)
+setnames(samples, c("sample", "cancer", "SNV", "METH", "RNA", "ATAC"))
+samples <- unique(samples[METH == 1, .(sample, cancer)])
+
+ann <- samples[sample %in% colnames(mat)]
+if (nrow(ann) == 0) stop("No matrix columns matched sample annotation.")
+
+ann[, Cancer := as.character(cancer)]
+
+# keep only annotated samples
+sample_order <- ann$sample[ann$sample %in% colnames(mat)]
+mat <- mat[, sample_order, drop = FALSE]
+
+cat("[3/6] Loading cancer colors and ordering samples...\n")
+
+# =========================
+# LOAD CANCER COLORS / ORDER
+# =========================
+cols <- fread(col_file, header = FALSE)[, 1:2]
+setnames(cols, c("Cancer", "Color"))
+cols[, Cancer := gsub("\r", "", trimws(as.character(Cancer)))]
+cols[, Color  := gsub("\r", "", trimws(as.character(Color)))]
+cols[, Cancer := sub("^TCGA-", "", Cancer)]
+
+cancer_levels <- unique(cols$Cancer)
+cancer_cols_all <- setNames(cols$Color, cols$Cancer)
+
+missing_cancers <- setdiff(unique(ann$Cancer), names(cancer_cols_all))
+if (length(missing_cancers) > 0) {
+  extra_cols <- grDevices::rainbow(length(missing_cancers))
+  names(extra_cols) <- missing_cancers
+  cancer_cols_all <- c(cancer_cols_all, extra_cols)
+  cancer_levels <- c(cancer_levels, missing_cancers)
+}
+
+ann[, Cancer := factor(Cancer, levels = cancer_levels)]
+setorder(ann, Cancer, sample)
+
+sample_order <- ann$sample
+mat <- mat[, sample_order, drop = FALSE]
+
+if (!identical(colnames(mat), ann$sample)) {
+  stop("Matrix columns do not match annotation sample order.")
+}
+
+cat("[4/6] Filtering motifs by cancer-specific frequency...\n")
+
+# =========================
+# FILTER MOTIFS:
+# keep motif if altered (!=0) in >=50% of samples of at least one cancer type
+# =========================
+cancer_sample_idx <- split(seq_len(nrow(ann)), ann$Cancer)
+
+n_motifs <- nrow(mat)
+keep_motif <- logical(n_motifs)
+
+for (i in seq_len(n_motifs)) {
+  cat(sprintf("Processing motif %d / %d\r", i, n_motifs))
+  x <- mat[i, ]
+
+  keep_motif[i] <- any(vapply(cancer_sample_idx, function(idx) {
+    vals <- x[idx]
+    n_valid <- sum(!is.na(vals))
+    if (n_valid == 0) return(FALSE)
+    frac_alt <- sum(vals != 0, na.rm = TRUE) / n_valid
+    frac_alt >= min_frac
+  }, logical(1)), na.rm = TRUE)
+}
+cat("\n")
+
+cat("Motifs before filter:", nrow(mat), "\n")
+cat("Motifs kept         :", sum(keep_motif, na.rm = TRUE), "\n")
+cat("Motifs removed      :", sum(!keep_motif, na.rm = TRUE), "\n")
+
+mat <- mat[keep_motif, , drop = FALSE]
+
+if (nrow(mat) == 0) {
+  stop("No motifs passed the >=50% in at least one cancer type filter.")
+}
+
+n_kept_motifs <- nrow(mat)
+
+cat("[5/6] Preparing annotations and labels...\n")
+
+# =========================
+# COLUMN ANNOTATION
+# =========================
+ann_df <- data.frame(
+  Cancer = ann$Cancer,
+  row.names = ann$sample,
+  stringsAsFactors = FALSE
+)
+
+group_sizes <- ann[, .N, by = Cancer][order(match(Cancer, cancer_levels))]$N
+gaps_col <- cumsum(group_sizes)
+gaps_col <- gaps_col[gaps_col < ncol(mat)]
+
+labels_col <- rep("", ncol(mat))
+group_dt <- ann[, .(
+  start = .I[1],
+  end   = .I[.N]
+), by = Cancer]
+group_dt[, mid := floor((start + end) / 2)]
+labels_col[group_dt$mid] <- as.character(group_dt$Cancer)
+
+ann_colors <- list(Cancer = cancer_cols_all)
+
+cat("[6/6] Plotting heatmap...\n")
+
+# =========================
+# PLOT
+# =========================
+pdf(out_pdf, width = 22, height = max(12, nrow(mat) * 0.18))
+
+pheatmap(
+  mat,
+  color = c("blue", "white", "red"),
+  breaks = c(-1.5, -0.5, 0.5, 1.5),
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  gaps_col = gaps_col,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  labels_row = rownames(mat),
+  labels_col = labels_col,
+  angle_col = 90,
+  fontsize_row = max(4, min(8, 100 / max(1, nrow(mat)))),
+  fontsize_col = 8,
+  annotation_col = ann_df,
+  annotation_colors = ann_colors,
+  main = paste0(
+    "BANP altered motifs across 3d+4d noOV tumor samples\n",
+    "Retained motifs: ", n_kept_motifs, " / ", length(motif_ids), "\n",
+    "Filtered: altered in >= ", min_frac * 100, "% of samples in at least one cancer type\n",
+    "-1 = hypomethylated, 0 = unchanged, +1 = hypermethylated"
+  ),
+  border_color = NA,
+  legend_breaks = c(-1, 0, 1),
+  legend_labels = c("Hypo", "Unchanged", "Hyper")
+)
+
+dev.off()
+
+cat("[DONE] Wrote:", out_pdf, "\n")
+EOF
+
+# reshape the matrix to long format for easier plotting of alteration frequencies in each cancer type and direction (hypo vs hyper)
+Rscript - <<'EOF'
+suppressPackageStartupMessages(library(data.table))
+
+mat_file <- "./results/methylation/Cpg_altered_direction/BANP_motif_sample_matrix_sameCancer_signed_noOV.tsv.gz"
+out_long <- "./results/methylation/Cpg_altered_direction/BANP_motif_sample_matrix_sameCancer_signed_noOV_long.tsv.gz"
+
+dt <- fread(mat_file)
+dt[, motif_id := trimws(as.character(motif_id))]
+
+long_dt <- melt(
+  dt,
+  id.vars = "motif_id",
+  variable.name = "sample_id",
+  value.name = "motif_altered"
+)
+
+# keep all altered motifs: -1 or +1
+long_dt <- long_dt[!is.na(motif_altered) & motif_altered != 0]
+
+fwrite(long_dt, out_long, sep = "\t")
+cat("[DONE] Wrote:", out_long, "\n")
+cat("Rows:", nrow(long_dt), "\n")
+cat("Hypo rows:", sum(long_dt$motif_altered == -1, na.rm = TRUE), "\n")
+cat("Hyper rows:", sum(long_dt$motif_altered == 1, na.rm = TRUE), "\n")
+EOF
+
+# add linked gene 
+Rscript - <<'EOF'
+suppressPackageStartupMessages(library(data.table))
+
+mat_file  <- "./results/methylation/Cpg_altered_direction/NRF1_motif_sample_matrix_sameCancer_signed_noOV.tsv.gz"
+map_file  <- "./methylation/probe_gene_pairs_in_motifs.tsv"
+dist_file <- "./methylation/dist_to_tss/HM450_TCGA-ACC-TCGA-OR-A5J2-01A_1_annotated_methylation_filtered_cpg_dist_tss.tsv"
+out_file  <- "./results/methylation/Cpg_altered_direction/NRF1_motif_sample_gene_pairs_sameCancer_signed_noOV.tsv.gz"
+
+prox_thr <- 2000
+
+collapse_unique <- function(x) {
+  x <- unique(trimws(as.character(x)))
+  x <- x[!is.na(x) & nzchar(x)]
+  if (length(x) == 0) return(NA_character_)
+  paste(sort(x), collapse = ",")
+}
+
+# =========================
+# 1) Load matrix
+# =========================
+mat <- fread(mat_file)
+mat[, motif_id := trimws(as.character(motif_id))]
+
+# =========================
+# 2) Convert matrix to long altered motif/sample pairs
+# =========================
+alt <- melt(
+  mat,
+  id.vars = "motif_id",
+  variable.name = "sample_id",
+  value.name = "motif_altered"
+)[!is.na(motif_altered) & motif_altered != 0, .(motif_id, sample_id, motif_altered)]
+
+alt[, motif_id := trimws(as.character(motif_id))]
+alt[, sample_id := trimws(as.character(sample_id))]
+alt[, motif_altered := as.integer(motif_altered)]
+
+# =========================
+# 3) Load motif -> probe -> gene map
+# =========================
+map <- fread(map_file)
+names(map) <- trimws(names(map))
+
+req_map <- c("TF", "probe", "gene", "motif_instance_id")
+miss_map <- setdiff(req_map, names(map))
+if (length(miss_map)) stop("Missing columns in map_file: ", paste(miss_map, collapse = ", "))
+
+map[, TF := trimws(as.character(TF))]
+map[, probe := trimws(as.character(probe))]
+map[, gene := trimws(as.character(gene))]
+map[, motif_instance_id := trimws(as.character(motif_instance_id))]
+
+map <- map[TF == "NRF1_mm0to2_noCGmm", .(
+  motif_id = motif_instance_id,
+  probe,
+  gene
+)]
+
+map <- unique(map)
+
+# =========================
+# 4) Load probe -> TSS distance
+# =========================
+dist_dt <- fread(dist_file, header = FALSE, col.names = c("probe", "dist_to_tss"))
+dist_dt[, probe := trimws(as.character(probe))]
+dist_dt[, dist_to_tss := as.numeric(dist_to_tss)]
+dist_dt[, is_proximal_probe := !is.na(dist_to_tss) & abs(dist_to_tss) <= prox_thr]
+dist_dt <- unique(dist_dt, by = "probe")
+
+# =========================
+# 5) Annotate map with TSS distance
+# =========================
+map <- merge(map, dist_dt, by = "probe", all.x = TRUE)
+
+# =========================
+# 6) Collapse to one row per motif
+# =========================
+map_motif <- map[, .(
+  gene = unique(gene)[1],
+  probes = collapse_unique(probe),
+  n_probes = uniqueN(probe),
+  probe_distances = collapse_unique(
+    ifelse(is.na(dist_to_tss), NA_character_, as.character(dist_to_tss))
+  ),
+  min_abs_dist_to_tss = if (all(is.na(dist_to_tss))) NA_real_ else min(abs(dist_to_tss), na.rm = TRUE),
+  is_proximal = any(is_proximal_probe %in% TRUE, na.rm = TRUE)
+), by = motif_id]
+
+# optional: check motifs with multiple genes
+motif_gene_check <- map[, .(n_genes = uniqueN(gene)), by = motif_id]
+cat("Motifs mapping to >1 gene:", sum(motif_gene_check$n_genes > 1), "\n")
+
+# =========================
+# 7) Merge with altered motif/sample pairs
+# =========================
+x <- merge(alt, map_motif, by = "motif_id", all.x = TRUE)
+
+# optional readable label
+x[, motif_direction := fifelse(
+  motif_altered == -1L, "hypo",
+  fifelse(motif_altered == 1L, "hyper", NA_character_)
+)]
+
+setcolorder(x, c(
+  "motif_id", "gene", "sample_id", "motif_altered", "motif_direction",
+  "probes", "n_probes", "probe_distances", "min_abs_dist_to_tss", "is_proximal"
+))
+
+# =========================
+# 8) Checks
+# =========================
+cat("Rows in altered long table:", nrow(alt), "\n")
+cat("Rows after collapsed merge:", nrow(x), "\n")
+cat("Rows with gene found:", sum(!is.na(x$gene) & x$gene != ""), "\n")
+cat("Rows proximal motifs:", sum(x$is_proximal %in% TRUE, na.rm = TRUE), "\n")
+cat("Rows distal motifs:", sum(x$is_proximal %in% FALSE, na.rm = TRUE), "\n")
+cat("Hypo rows:", sum(x$motif_altered == -1L, na.rm = TRUE), "\n")
+cat("Hyper rows:", sum(x$motif_altered == 1L, na.rm = TRUE), "\n")
+
+cat("\nExample rows:\n")
+print(head(x, 10))
+
+# =========================
+# 9) Save
+# =========================
+fwrite(x, out_file, sep = "\t")
+cat("\n[DONE] Wrote:", out_file, "\n")
+EOF
+
+# plot the expression of genes 
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+})
+
+# =========================
+# INPUTS
+# =========================
+alt_file      <- "./results/methylation/Cpg_altered_direction/NRF1_motif_sample_gene_pairs_sameCancer_signed_noOV.tsv.gz"
+expr_file     <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
+out_pdf       <- "./results/methylation/Cpg_altered_direction/NRF1_sigGenes_log2FC_violin_allCancers_tumorOnly_pairwiseWilcox_geneMin30pctAnyAltered_PROXIMALonly.pdf"
+out_tsv       <- "./results/methylation/Cpg_altered_direction/NRF1_sigGenes_log2FC_stats_allCancers_tumorOnly_pairwiseWilcox_geneMin30pctAnyAltered_PROXIMALonly.tsv.gz"
+out_sig_tsv   <- "./results/methylation/Cpg_altered_direction/NRF1_sigOnly_log2FC_stats_allCancers_tumorOnly_pairwiseWilcox_geneMin30pctAnyAltered_PROXIMALonly.tsv.gz"
+out_mixed_tsv <- "./results/methylation/Cpg_altered_direction/NRF1_mixed_gene_sample_cases_with_cancer_PROXIMALonly.tsv.gz"
+
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+min_frac_gene     <- 0.30
+pseudocount       <- 1
+use_proximal_only <- TRUE
+
+# =========================
+# HELPERS
+# =========================
+extract_patient_id_expr <- function(x) {
+  sub("^TCGA-[^-]+-(TCGA-[^-]+-[^-]+)-.*$", "\\1", x)
+}
+
+is_tumor_expr <- function(x) {
+  grepl("-01A([_.-]|$)", x)
+}
+
+fmt_p <- function(x) {
+  ifelse(is.na(x), "NA", formatC(x, format = "e", digits = 2))
+}
+
+p_to_star <- function(p) {
+  if (is.na(p)) "ns"
+  else if (p < 0.001) "***"
+  else if (p < 0.01) "**"
+  else if (p < 0.05) "*"
+  else "ns"
+}
+
+collapse_unique <- function(x) {
+  x <- unique(na.omit(as.character(x)))
+  x <- trimws(x)
+  x <- x[nzchar(x)]
+  if (length(x) == 0) NA_character_ else paste(sort(x), collapse = ", ")
+}
+
+short_label <- function(x, max_show = 3) {
+  x <- unique(na.omit(as.character(x)))
+  x <- trimws(x)
+  x <- x[nzchar(x)]
+  if (length(x) == 0) return("NA")
+  if (length(x) <= max_show) return(paste(sort(x), collapse = ", "))
+  paste0(paste(sort(x)[1:max_show], collapse = ", "), " ... (n=", length(x), ")")
+}
+
+collapse_status <- function(x) {
+  x <- unique(na.omit(as.integer(x)))
+  x <- x[x != 0]
+  if (length(x) == 0) return(0L)
+  if (all(x == 1L)) return(1L)
+  if (all(x == -1L)) return(-1L)
+  return(2L)  # mixed hypo+hyper
+}
+
+status_to_label <- function(x) {
+  fifelse(
+    x == -1L, "Hypo altered motif",
+    fifelse(
+      x == 0L, "Unchanged motif",
+      fifelse(
+        x == 1L, "Hyper altered motif",
+        "Mixed altered motif"
+      )
+    )
+  )
+}
+
+safe_wilcox <- function(x, y) {
+  if (length(x) == 0 || length(y) == 0) return(NA_real_)
+  if (all(is.na(x)) || all(is.na(y))) return(NA_real_)
+  tryCatch(
+    wilcox.test(x, y)$p.value,
+    error = function(e) NA_real_
+  )
+}
+
+# =========================
+# LOAD DATA
+# =========================
+cat("[1/5] Loading altered table...\n")
+alt <- fread(alt_file)
+
+req_alt <- c("motif_id", "sample_id", "gene", "motif_altered")
+miss_alt <- setdiff(req_alt, names(alt))
+if (length(miss_alt)) stop("Missing columns in altered table: ", paste(miss_alt, collapse = ", "))
+
+alt[, motif_altered := as.integer(motif_altered)]
+alt[, motif_id := as.character(motif_id)]
+alt[, gene := as.character(gene)]
+alt[, sample_id := as.character(sample_id)]
+
+if ("is_proximal" %in% names(alt)) {
+  alt[, is_proximal := as.logical(is_proximal)]
+} else {
+  stop("Column 'is_proximal' not found in altered table. Rebuild upstream file first.")
+}
+
+cat("  Rows before proximal filter:", nrow(alt), "\n")
+cat("  Unique genes before proximal filter:", uniqueN(alt$gene), "\n")
+
+if (use_proximal_only) {
+  alt <- alt[!is.na(is_proximal) & is_proximal == TRUE]
+  cat("  Rows after proximal filter:", nrow(alt), "\n")
+  cat("  Unique genes after proximal filter:", uniqueN(alt$gene), "\n")
+}
+
+if (nrow(alt) == 0) stop("No rows left after proximal filter.")
+
+cat("[2/5] Loading expression matrix...\n")
+expr <- fread(expr_file)
+if (!("sample" %in% names(expr))) stop("Expression file must contain a 'sample' column.")
+cat("  Rows:", nrow(expr), "\n")
+cat("  Columns:", ncol(expr), "\n")
+
+cat("[3/5] Preparing tumor sample -> cancer map from expression...\n")
+expr_samples <- unique(expr[, .(expr_sample = sample)])
+expr_samples <- expr_samples[is_tumor_expr(expr_sample)]
+expr_samples[, sample_id := extract_patient_id_expr(expr_sample)]
+expr_samples[, cancer := sub("^TCGA-([^-]+)-.*$", "\\1", expr_sample)]
+sample_cancer_map <- unique(expr_samples[, .(sample_id, cancer)])
+cat("  Tumor sample-cancer pairs:", nrow(sample_cancer_map), "\n")
+
+cat("[4/5] Building mixed motif cases table...\n")
+
+# =========================
+# MIXED GENE-SAMPLE CASES
+# =========================
+extra_cols <- intersect(c("probes", "n_probes", "min_abs_dist_to_tss"), names(alt))
+
+mixed_cases <- alt[, {
+  base_list <- list(
+    motif_status   = collapse_status(motif_altered),
+    n_hypo_motifs  = sum(motif_altered == -1L, na.rm = TRUE),
+    n_hyper_motifs = sum(motif_altered == 1L, na.rm = TRUE),
+    motif_ids_hypo = collapse_unique(motif_id[motif_altered == -1L]),
+    motif_ids_hyper = collapse_unique(motif_id[motif_altered == 1L]),
+    motif_ids_all  = collapse_unique(motif_id)
+  )
+
+  if ("probes" %in% extra_cols) {
+    base_list$probes_all <- collapse_unique(probes)
+  }
+  if ("n_probes" %in% extra_cols) {
+    base_list$total_n_probes <- sum(as.numeric(n_probes), na.rm = TRUE)
+  }
+  if ("min_abs_dist_to_tss" %in% extra_cols) {
+    mad <- suppressWarnings(as.numeric(min_abs_dist_to_tss))
+    base_list$min_abs_dist_to_tss <- if (all(is.na(mad))) NA_real_ else min(mad, na.rm = TRUE)
+  }
+
+  base_list
+}, by = .(gene, sample_id)]
+
+mixed_cases <- mixed_cases[motif_status == 2L]
+mixed_cases <- merge(mixed_cases, sample_cancer_map, by = "sample_id", all.x = TRUE)
+
+core_order <- c(
+  "gene", "sample_id", "cancer", "motif_status",
+  "n_hypo_motifs", "n_hyper_motifs",
+  "motif_ids_hypo", "motif_ids_hyper", "motif_ids_all"
+)
+extra_order <- intersect(c("probes_all", "total_n_probes", "min_abs_dist_to_tss"), names(mixed_cases))
+setcolorder(mixed_cases, c(core_order, extra_order))
+
+fwrite(mixed_cases, out_mixed_tsv, sep = "\t")
+cat("  Mixed gene-sample cases:", nrow(mixed_cases), "\n")
+cat("  [DONE] Wrote mixed cases:", out_mixed_tsv, "\n")
+
+cat("[5/5] Starting expression analysis...\n")
+
+# =========================
+# GENE LIST
+# =========================
+genes_all <- sort(intersect(unique(alt$gene), setdiff(names(expr), "sample")))
+if (length(genes_all) == 0) stop("No overlapping genes between altered table and expression matrix.")
+cat("  Genes to test:", length(genes_all), "\n")
+
+# =========================
+# MAIN LOOP
+# =========================
+all_stats <- list()
+pdf_open <- FALSE
+n_pages <- 0L
+n_sig_genes <- 0L
+
+for (i in seq_along(genes_all)) {
+  g <- genes_all[i]
+  cat("\n[Gene", i, "/", length(genes_all), "]", g, "\n")
+
+  alt_gene_full <- alt[gene == g]
+  if (nrow(alt_gene_full) == 0) next
+
+  motifs_full  <- collapse_unique(alt_gene_full$motif_id)
+  motifs_short <- short_label(alt_gene_full$motif_id, max_show = 3)
+  n_motifs     <- uniqueN(alt_gene_full$motif_id)
+
+  probes_full  <- if ("probes" %in% names(alt_gene_full)) collapse_unique(alt_gene_full$probes) else NA_character_
+  probes_short <- if ("probes" %in% names(alt_gene_full)) short_label(unlist(strsplit(collapse_unique(alt_gene_full$probes), ",\\s*")), max_show = 3) else NA_character_
+
+  alt_gene <- alt_gene_full[, .(
+    motif_status = collapse_status(motif_altered)
+  ), by = sample_id]
+
+  cat("  Samples linked to altered proximal motifs:", nrow(alt_gene), "\n")
+  cat("  Motif instances:", n_motifs, "\n")
+  cat("  Hypo samples:", sum(alt_gene$motif_status == -1L), "\n")
+  cat("  Hyper samples:", sum(alt_gene$motif_status == 1L), "\n")
+  cat("  Mixed samples:", sum(alt_gene$motif_status == 2L), "\n")
+
+  plot_dt <- expr[, .(
+    expr_sample = sample,
+    raw_expression = suppressWarnings(as.numeric(get(g)))
+  )]
+
+  plot_dt <- plot_dt[is_tumor_expr(expr_sample)]
+  plot_dt <- plot_dt[!is.na(raw_expression)]
+  plot_dt[, sample_id := extract_patient_id_expr(expr_sample)]
+  plot_dt[, cancer := sub("^TCGA-([^-]+)-.*$", "\\1", expr_sample)]
+
+  cat("  Tumor samples with expression:", nrow(plot_dt), "\n")
+
+  plot_dt <- merge(plot_dt, alt_gene, by = "sample_id", all.x = TRUE)
+  plot_dt[is.na(motif_status), motif_status := 0L]
+  plot_dt[, altered_label := status_to_label(motif_status)]
+
+  # exclude mixed from testing
+  plot_dt <- plot_dt[motif_status != 2L]
+
+  if (nrow(plot_dt) == 0) {
+    cat("  -> Skipped: no usable rows after excluding mixed\n")
+    next
+  }
+
+  # =========================
+  # GENE-LEVEL PRE-FILTER
+  # =========================
+  gene_prev <- plot_dt[, .(
+    n_total = .N,
+    n_altered = sum(motif_status != 0L, na.rm = TRUE),
+    frac_altered = sum(motif_status != 0L, na.rm = TRUE) / .N
+  ), by = cancer]
+
+  max_frac <- if (nrow(gene_prev) > 0) max(gene_prev$frac_altered, na.rm = TRUE) else NA_real_
+  cat("  Max altered fraction across cancers:", sprintf("%.3f", max_frac), "\n")
+
+  if (!any(gene_prev$frac_altered >= min_frac_gene, na.rm = TRUE)) {
+    cat("  -> Skipped: gene altered in <30% of samples in every cancer type\n")
+    next
+  }
+
+  # =========================
+  # KEEP CANCERS WITH VALID GROUPS
+  # =========================
+  keep_stats <- plot_dt[, .(
+    n_total = .N,
+    n_hypo = sum(motif_status == -1L, na.rm = TRUE),
+    n_unch = sum(motif_status == 0L, na.rm = TRUE),
+    n_hyper = sum(motif_status == 1L, na.rm = TRUE),
+    n_altered = sum(motif_status != 0L, na.rm = TRUE),
+    frac_altered = sum(motif_status != 0L, na.rm = TRUE) / .N
+  ), by = cancer]
+
+  keep_cancers <- keep_stats[
+    n_unch > 0 & (n_hypo > 0 | n_hyper > 0),
+    cancer
+  ]
+
+  plot_dt <- plot_dt[cancer %in% keep_cancers]
+
+  cat("  Cancer types kept:", length(keep_cancers), "\n")
+
+  if (nrow(plot_dt) == 0) {
+    cat("  -> Skipped: no cancer has valid comparison groups\n")
+    next
+  }
+
+  # =========================
+  # COMPUTE per-sample log2FC relative to unchanged median in same cancer
+  # =========================
+  baseline_dt <- plot_dt[motif_status == 0L, .(
+    unchanged_median = median(raw_expression, na.rm = TRUE)
+  ), by = cancer]
+
+  plot_dt <- merge(plot_dt, baseline_dt, by = "cancer", all.x = TRUE)
+  plot_dt <- plot_dt[!is.na(unchanged_median)]
+
+  if (nrow(plot_dt) == 0) {
+    cat("  -> Skipped: no unchanged baseline available\n")
+    next
+  }
+
+  plot_dt[, expression := log2((raw_expression + pseudocount) / (unchanged_median + pseudocount))]
+
+  stats_gene <- rbindlist(lapply(sort(unique(plot_dt$cancer)), function(cc) {
+    subdt <- copy(plot_dt[cancer == cc])
+
+    expr_hypo  <- subdt[motif_status == -1L]$expression
+    expr_unch  <- subdt[motif_status == 0L]$expression
+    expr_hyper <- subdt[motif_status == 1L]$expression
+
+    p_hypo_vs_unch  <- safe_wilcox(expr_hypo, expr_unch)
+    p_hyper_vs_unch <- safe_wilcox(expr_hyper, expr_unch)
+
+    data.table(
+      gene = g,
+      motifs = motifs_full,
+      motifs_short = motifs_short,
+      n_motif_instances = n_motifs,
+      probes = probes_full,
+      probes_short = probes_short,
+      cancer = cc,
+      n_hypo = length(expr_hypo),
+      n_unchanged = length(expr_unch),
+      n_hyper = length(expr_hyper),
+      n_altered = length(expr_hypo) + length(expr_hyper),
+      frac_altered = (length(expr_hypo) + length(expr_hyper)) / nrow(subdt),
+      unchanged_median_raw = unique(subdt$unchanged_median)[1],
+      median_log2fc_hypo = if (length(expr_hypo) > 0) median(expr_hypo, na.rm = TRUE) else NA_real_,
+      median_log2fc_unchanged = if (length(expr_unch) > 0) median(expr_unch, na.rm = TRUE) else NA_real_,
+      median_log2fc_hyper = if (length(expr_hyper) > 0) median(expr_hyper, na.rm = TRUE) else NA_real_,
+      mean_log2fc_hypo = if (length(expr_hypo) > 0) mean(expr_hypo, na.rm = TRUE) else NA_real_,
+      mean_log2fc_unchanged = if (length(expr_unch) > 0) mean(expr_unch, na.rm = TRUE) else NA_real_,
+      mean_log2fc_hyper = if (length(expr_hyper) > 0) mean(expr_hyper, na.rm = TRUE) else NA_real_,
+      p_hypo_vs_unch = p_hypo_vs_unch,
+      p_hyper_vs_unch = p_hyper_vs_unch
+    )
+  }), fill = TRUE)
+
+  stats_gene[, p_adj_hypo_vs_unch := p.adjust(p_hypo_vs_unch, method = "BH")]
+  stats_gene[, p_adj_hyper_vs_unch := p.adjust(p_hyper_vs_unch, method = "BH")]
+
+  stats_gene[, signif_hypo_vs_unch := vapply(p_adj_hypo_vs_unch, p_to_star, character(1))]
+  stats_gene[, signif_hyper_vs_unch := vapply(p_adj_hyper_vs_unch, p_to_star, character(1))]
+
+  stats_gene[, sig_hypo_vs_unch := !is.na(p_adj_hypo_vs_unch) & p_adj_hypo_vs_unch < 0.05]
+  stats_gene[, sig_hyper_vs_unch := !is.na(p_adj_hyper_vs_unch) & p_adj_hyper_vs_unch < 0.05]
+  stats_gene[, is_significant := sig_hypo_vs_unch | sig_hyper_vs_unch]
+
+  all_stats[[length(all_stats) + 1L]] <- stats_gene
+
+  n_sig_this_gene <- sum(stats_gene$is_significant, na.rm = TRUE)
+  cat("  Significant cancers (BH<0.05 in at least one pairwise test):", n_sig_this_gene, "\n")
+
+  if (n_sig_this_gene == 0L) {
+    cat("  -> Not added to PDF\n")
+    next
+  }
+
+  n_sig_genes <- n_sig_genes + 1L
+
+  stats_gene[, facet_label := paste0(
+    cancer,
+    "\nAlt=", n_altered, " (", sprintf("%.1f", 100 * frac_altered), "%)",
+    " | Hypo=", n_hypo, " | Unch=", n_unchanged, " | Hyper=", n_hyper,
+    "\nHypo vs Unch BH=", fmt_p(p_adj_hypo_vs_unch),
+    " | Hyper vs Unch BH=", fmt_p(p_adj_hyper_vs_unch)
+  )]
+
+  plot_dt <- merge(
+    plot_dt,
+    stats_gene[, .(
+      cancer, facet_label,
+      signif_hypo_vs_unch, signif_hyper_vs_unch
+    )],
+    by = "cancer",
+    all.x = TRUE
+  )
+
+  plot_dt[, altered_label := factor(
+    altered_label,
+    levels = c("Hypo altered motif", "Unchanged motif", "Hyper altered motif")
+  )]
+
+  facet_levels <- stats_gene[order(cancer)]$facet_label
+  plot_dt[, facet_label := factor(facet_label, levels = facet_levels)]
+
+  star_dt <- plot_dt[, .(
+    y_min = min(expression, na.rm = TRUE),
+    y_max = max(expression, na.rm = TRUE)
+  ), by = .(cancer, facet_label)]
+
+  star_dt[, spread := y_max - y_min]
+  star_dt[is.na(spread) | spread == 0, spread := 1]
+  star_dt[, y1 := y_max - 0.08 * spread]
+  star_dt[, y2 := y_max - 0.18 * spread]
+
+  star_dt <- merge(
+    star_dt,
+    unique(stats_gene[, .(
+      cancer, signif_hypo_vs_unch, signif_hyper_vs_unch
+    )]),
+    by = "cancer",
+    all.x = TRUE
+  )
+
+  if (!pdf_open) {
+    pdf(out_pdf, width = 16, height = 12)
+    pdf_open <- TRUE
+  }
+
+  title_txt <- paste0(g, " | proximal motifs: ", motifs_short)
+  if (!is.na(probes_short)) {
+    title_txt <- paste0(title_txt, " | probes: ", probes_short)
+  }
+
+  p <- ggplot(plot_dt, aes(x = altered_label, y = expression)) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_violin(aes(fill = altered_label), trim = FALSE, scale = "width", alpha = 0.5) +
+    geom_boxplot(aes(fill = altered_label), width = 0.18, outlier.shape = NA, alpha = 0.9) +
+    geom_jitter(aes(color = altered_label), width = 0.12, size = 0.7, alpha = 0.7) +
+    geom_text(
+      data = star_dt,
+      aes(x = 1.5, y = y1, label = paste0("Hypo vs Unch: ", signif_hypo_vs_unch)),
+      inherit.aes = FALSE,
+      size = 4,
+      fontface = "bold"
+    ) +
+    geom_text(
+      data = star_dt,
+      aes(x = 2.5, y = y2, label = paste0("Hyper vs Unch: ", signif_hyper_vs_unch)),
+      inherit.aes = FALSE,
+      size = 4,
+      fontface = "bold"
+    ) +
+    facet_wrap(~ facet_label, scales = "free_y") +
+    scale_fill_manual(values = c(
+      "Hypo altered motif" = "blue",
+      "Unchanged motif" = "black",
+      "Hyper altered motif" = "red"
+    )) +
+    scale_color_manual(values = c(
+      "Hypo altered motif" = "blue",
+      "Unchanged motif" = "black",
+      "Hyper altered motif" = "red"
+    )) +
+    labs(
+      title = title_txt,
+      subtitle = paste0(
+        "Tumor samples only | proximal motifs only | y = log2((sample expression + ", pseudocount,
+        ") / (median unchanged expression in same cancer + ", pseudocount, ")) | ",
+        "Gene kept if any cancer has >= ", 100 * min_frac_gene, "% altered | ",
+        "All cancers with valid comparison groups are shown | Mixed cases excluded"
+      ),
+      x = "",
+      y = "log2 fold change vs unchanged median"
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(size = 8),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.minor = element_blank()
+    )
+
+  print(p)
+  n_pages <- n_pages + 1L
+  cat("  -> Added to PDF\n")
+}
+
+# =========================
+# SAVE OUTPUTS
+# =========================
+stats_dt <- if (length(all_stats)) rbindlist(all_stats, fill = TRUE) else data.table()
+
+if (nrow(stats_dt) > 0) {
+  fwrite(stats_dt, out_tsv, sep = "\t")
+  fwrite(stats_dt[is_significant == TRUE], out_sig_tsv, sep = "\t")
+  cat("\n[STATS] Wrote:", out_tsv, "\n")
+  cat("[SIG STATS] Wrote:", out_sig_tsv, "\n")
+  cat("[STATS] Rows:", nrow(stats_dt), "\n")
+  cat("[SIG STATS] Rows:", nrow(stats_dt[is_significant == TRUE]), "\n")
+} else {
+  cat("\n[STATS] No statistics to write.\n")
+}
+
+if (pdf_open) {
+  dev.off()
+  cat("[PDF] Wrote:", out_pdf, "\n")
+} else {
+  cat("[PDF] No gene significant in any cancer. No PDF created.\n")
+}
+
+cat("\nSummary:\n")
+cat("  Tested genes:", length(genes_all), "\n")
+cat("  Genes added to PDF:", n_sig_genes, "\n")
+cat("  PDF pages:", n_pages, "\n")
+cat("  Mixed cases file:", out_mixed_tsv, "\n")
+EOF
+
+#LAUNCHED IM HERE 
+#################################################################################################################################################
+# plot the correlation across all samples across all cancer between expression of gene and methylation of linked probes
+#################################################################################################################################################
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+})
+
+# =========================
+# INPUTS
+# =========================
+gene_name   <- "FAM24B"   # <<< change this
+alt_file    <- "./results/methylation/Cpg_altered_direction/BANP_motif_sample_gene_pairs_sameCancer_signed_noOV.tsv.gz"
+expr_file   <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
+meth_dir    <- "./methylation/filtered_methylation"
+color_file  <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+
+out_pdf     <- paste0("./results/methylation/Cpg_altered_direction/", gene_name, "_expr_vs_methylation_FAST_rawExpr_colorCancer_shapeAlteration.pdf")
+out_tsv     <- paste0("./results/methylation/Cpg_altered_direction/", gene_name, "_expr_vs_methylation_FAST_rawExpr_colorCancer_shapeAlteration.tsv.gz")
+
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+use_proximal_only <- TRUE
+progress_every    <- 200L
+
+# =========================
+# HELPERS
+# =========================
+extract_patient_id_expr <- function(x) {
+  sub("^TCGA-[^-]+-(TCGA-[^-]+-[^-]+)-.*$", "\\1", x)
+}
+
+is_tumor_expr <- function(x) {
+  grepl("-01A([_.-]|$)", x)
+}
+
+collapse_status <- function(x) {
+  x <- unique(na.omit(as.integer(x)))
+  x <- x[x != 0]
+  if (length(x) == 0) return(0L)
+  if (all(x == 1L)) return(1L)
+  if (all(x == -1L)) return(-1L)
+  return(2L)
+}
+
+status_to_label <- function(x) {
+  fifelse(
+    x == -1L, "Hypo altered",
+    fifelse(
+      x == 0L, "Unchanged",
+      fifelse(
+        x == 1L, "Hyper altered",
+        "Mixed"
+      )
+    )
+  )
+}
+
+safe_cor <- function(x, y, method = "pearson") {
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) < 3) return(list(r = NA_real_, p = NA_real_))
+  z <- tryCatch(cor.test(x[ok], y[ok], method = method), error = function(e) NULL)
+  if (is.null(z)) return(list(r = NA_real_, p = NA_real_))
+  list(r = unname(z$estimate), p = z$p.value)
+}
+
+extract_patient_id_file <- function(x) {
+  sub("^HM450_TCGA-[^-]+-(TCGA-[^-]+-[^-]+)-.*$", "\\1", basename(x))
+}
+
+fmt_sec <- function(x) {
+  if (!is.finite(x)) return("NA")
+  if (x < 60) return(paste0(round(x, 1), " sec"))
+  paste0(round(x / 60, 1), " min")
+}
+
+# file structure confirmed:
+# V1 chr | V2 start | V3 end | V4 probe | V5 methylation percent (0-100)
+read_sample_meth_fast <- function(f, probes_keep) {
+  if (!file.exists(f) || length(probes_keep) == 0) return(NULL)
+
+  patt <- paste(probes_keep, collapse = "\\|")
+  cmd  <- paste0("zgrep -E '", patt, "' ", shQuote(f))
+
+  dt <- tryCatch(
+    fread(cmd = cmd, sep = "\t", header = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(dt) || nrow(dt) == 0) return(NULL)
+  if (ncol(dt) < 5) return(NULL)
+
+  out <- data.table(
+    probe = as.character(dt[[4]]),   # V4
+    beta  = suppressWarnings(as.numeric(dt[[5]]))   # V5 already in percent
+  )
+
+  out <- out[probe %in% probes_keep & !is.na(beta)]
+  if (nrow(out) == 0) return(NULL)
+  out
+}
+
+# =========================
+# LOAD COLORS
+# =========================
+cat("[1/7] Loading cancer colors...\n")
+cols_dt <- fread(color_file, header = FALSE)
+if (ncol(cols_dt) < 2) stop("Color file must have at least 2 columns.")
+cols_dt <- cols_dt[, 1:2]
+setnames(cols_dt, c("cancer_full", "color"))
+cols_dt[, `:=`(
+  cancer_full = as.character(cancer_full),
+  color = as.character(color)
+)]
+
+# convert TCGA-LUAD -> LUAD
+cols_dt[, cancer := sub("^TCGA-", "", cancer_full)]
+cols_dt <- unique(cols_dt[!is.na(cancer) & !is.na(color) & nzchar(cancer) & nzchar(color)])
+
+cancer_cols <- setNames(cols_dt$color, cols_dt$cancer)
+
+cat("  Loaded colors for:", length(cancer_cols), "cancer types\n")
+cat("  Example color mapping:\n")
+print(head(cols_dt, 10))
+
+# =========================
+# LOAD ALTERED TABLE
+# =========================
+cat("[2/7] Loading altered table...\n")
+alt <- fread(alt_file)
+
+if (!all(c("gene", "sample_id", "motif_altered", "probes") %in% names(alt))) {
+  stop("alt_file must contain: gene, sample_id, motif_altered, probes")
+}
+
+alt[, `:=`(
+  gene = as.character(gene),
+  sample_id = as.character(sample_id),
+  motif_altered = as.integer(motif_altered),
+  probes = as.character(probes)
+)]
+
+if (use_proximal_only) {
+  if (!("is_proximal" %in% names(alt))) stop("Column 'is_proximal' not found.")
+  alt[, is_proximal := as.logical(is_proximal)]
+  alt <- alt[!is.na(is_proximal) & is_proximal == TRUE]
+}
+
+alt_gene <- alt[gene == gene_name]
+if (nrow(alt_gene) == 0) stop("No rows found for gene: ", gene_name)
+
+gene_status <- alt_gene[, .(
+  motif_status = collapse_status(motif_altered)
+), by = sample_id]
+gene_status[, alteration := status_to_label(motif_status)]
+
+probes_keep <- unique(unlist(strsplit(paste(unique(alt_gene$probes), collapse = ","), ",\\s*")))
+probes_keep <- trimws(probes_keep)
+probes_keep <- probes_keep[nzchar(probes_keep)]
+if (length(probes_keep) == 0) stop("No probes found for gene: ", gene_name)
+
+cat("  Gene:", gene_name, "\n")
+cat("  Probes used:", length(probes_keep), "\n")
+cat("  Altered table samples:", nrow(gene_status), "\n")
+
+# =========================
+# LOAD EXPRESSION
+# =========================
+cat("[3/7] Loading expression...\n")
+expr <- fread(expr_file)
+if (!("sample" %in% names(expr))) stop("Expression file must contain 'sample'.")
+if (!(gene_name %in% names(expr))) stop("Gene not found in expression matrix: ", gene_name)
+
+expr_dt <- expr[, .(
+  expr_sample = sample,
+  expression = suppressWarnings(as.numeric(get(gene_name)))
+)]
+expr_dt <- expr_dt[is_tumor_expr(expr_sample) & !is.na(expression)]
+expr_dt[, sample_id := extract_patient_id_expr(expr_sample)]
+expr_dt[, cancer := sub("^TCGA-([^-]+)-.*$", "\\1", expr_sample)]
+
+# keep only cancers where the gene is altered at least once
+alt_gene_cancers <- unique(expr_dt[sample_id %in% gene_status$sample_id, cancer])
+expr_dt <- expr_dt[cancer %in% alt_gene_cancers]
+
+cat("  Tumor expression samples kept:", nrow(expr_dt), "\n")
+cat("  Cancers kept:", length(unique(expr_dt$cancer)), "\n")
+
+# =========================
+# INDEX FILES ONCE
+# =========================
+cat("[4/7] Indexing methylation filenames...\n")
+meth_files <- list.files(meth_dir, pattern = "\\.bed\\.gz$", full.names = TRUE)
+if (length(meth_files) == 0) stop("No methylation .bed.gz files found in: ", meth_dir)
+
+meth_index <- data.table(file = meth_files, fname = basename(meth_files))
+meth_index[, sample_id := extract_patient_id_file(fname)]
+meth_index <- meth_index[!is.na(sample_id) & grepl("^TCGA-[^-]+-[^-]+$", sample_id)]
+setorder(meth_index, fname)
+meth_index <- meth_index[, .SD[1], by = sample_id]
+
+cat("  Indexed methylation files:", nrow(meth_index), "\n")
+cat("  Example methylation sample IDs:\n")
+print(head(meth_index$sample_id, 10))
+
+samples_needed <- unique(expr_dt$sample_id)
+match_dt <- merge(
+  data.table(sample_id = samples_needed),
+  meth_index[, .(sample_id, file)],
+  by = "sample_id",
+  all.x = TRUE
+)
+match_dt <- match_dt[!is.na(file)]
+
+cat("  Tumor samples needing methylation:", length(samples_needed), "\n")
+cat("  Matched methylation files to read:", nrow(match_dt), "\n")
+if (nrow(match_dt) == 0) stop("No matched methylation files for kept samples.")
+
+# =========================
+# READ ONLY NEEDED FILES
+# =========================
+cat("[5/7] Reading only needed methylation files...\n")
+t0 <- proc.time()[3]
+
+meth_list <- vector("list", nrow(match_dt))
+
+for (i in seq_len(nrow(match_dt))) {
+  sid <- match_dt$sample_id[i]
+  f   <- match_dt$file[i]
+
+  dtm <- read_sample_meth_fast(f, probes_keep)
+
+  if (!is.null(dtm) && nrow(dtm) > 0) {
+    meth_list[[i]] <- data.table(
+      sample_id = sid,
+      meth_beta = median(dtm$beta, na.rm = TRUE),
+      n_probes_found = nrow(dtm)
+    )
+  } else {
+    meth_list[[i]] <- NULL
+  }
+
+  if (i %% progress_every == 0L || i == nrow(match_dt)) {
+    elapsed   <- proc.time()[3] - t0
+    avg_per   <- elapsed / i
+    remaining <- (nrow(match_dt) - i) * avg_per
+    recovered <- sum(!vapply(meth_list[seq_len(i)], is.null, logical(1)))
+
+    cat(
+      "  processed", i, "/", nrow(match_dt),
+      "| recovered:", recovered,
+      "| elapsed:", fmt_sec(elapsed),
+      "| avg/file:", round(avg_per, 3), "sec",
+      "| ETA:", fmt_sec(remaining), "\n"
+    )
+  }
+}
+
+meth_dt <- rbindlist(meth_list, fill = TRUE)
+elapsed_step5 <- proc.time()[3] - t0
+
+cat("  Samples with methylation recovered:", nrow(meth_dt), "\n")
+cat("  Step 5 total elapsed:", fmt_sec(elapsed_step5), "\n")
+
+if (nrow(meth_dt) == 0) stop("No methylation values recovered.")
+
+# =========================
+# MERGE
+# =========================
+cat("[6/7] Merging...\n")
+plot_dt <- merge(expr_dt, meth_dt, by = "sample_id", all = FALSE)
+plot_dt <- merge(plot_dt, gene_status, by = "sample_id", all.x = TRUE)
+
+plot_dt[is.na(motif_status), motif_status := 0L]
+plot_dt[is.na(alteration), alteration := "Unchanged"]
+
+# methylation already in percent in V5
+plot_dt[, methylation_pct := meth_beta]
+plot_dt[, alteration := factor(alteration, levels = c("Unchanged", "Hypo altered", "Hyper altered", "Mixed"))]
+
+missing_cols <- setdiff(unique(plot_dt$cancer), names(cancer_cols))
+if (length(missing_cols)) {
+  cat("  Available color cancers:\n")
+  print(sort(names(cancer_cols)))
+  cat("  Missing cancers in plot:\n")
+  print(sort(unique(missing_cols)))
+  stop("Missing colors for: ", paste(missing_cols, collapse = ", "))
+}
+
+plot_dt[, cancer := factor(cancer, levels = unique(cols_dt$cancer))]
+
+cat("  Final merged samples:", nrow(plot_dt), "\n")
+
+# =========================
+# CORRELATION + SAVE + PLOT
+# =========================
+cat("[7/7] Correlation and plot...\n")
+cor_res <- safe_cor(plot_dt$methylation_pct, plot_dt$expression, method = "pearson")
+
+fwrite(plot_dt, out_tsv, sep = "\t")
+
+p <- ggplot(
+  plot_dt,
+  aes(x = methylation_pct, y = expression, color = cancer, shape = alteration)
+) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  geom_smooth(
+    aes(group = 1),
+    method = "lm", se = FALSE,
+    inherit.aes = FALSE,
+    data = plot_dt,
+    mapping = aes(x = methylation_pct, y = expression)
+  ) +
+  scale_color_manual(values = cancer_cols, drop = FALSE) +
+  labs(
+    title = paste0(gene_name, ": expression vs methylation across tumor samples"),
+    subtitle = paste0(
+      "All cancers pooled | color = cancer type | shape = alteration status | ",
+      "Pearson r = ", round(cor_res$r, 3),
+      " ; p = ", formatC(cor_res$p, format = "e", digits = 2)
+    ),
+    x = "Median methylation across proximal gene-linked probes (%)",
+    y = "Raw expression"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(out_pdf, p, width = 12, height = 8)
+
+cat("  Wrote table:", out_tsv, "\n")
+cat("  Wrote plot :", out_pdf, "\n")
+cat("\nDone.\n")
+EOF
 
 
 
