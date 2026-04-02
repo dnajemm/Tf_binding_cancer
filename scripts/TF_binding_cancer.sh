@@ -7350,30 +7350,31 @@ EOF
 
 #LAUNCHED IM HERE 
 #################################################################################################################################################
-# plot the correlation across all samples across all cancer between expression of gene and methylation of linked probes
+# plot the correlation across all samples across all cancer between expression of gene and methylation of linked probes --> this code is for one gene at a time, and will output a pdf with 3 pages: 1) all samples, 2) tumor samples only, 3) normal samples only. Each page will have a scatter plot of expression vs methylation, colored by cancer type, and will show the correlation coefficient and p-value in the title. This is to check if the correlation is consistent across all samples, or if it is driven by tumor or normal samples only.
 #################################################################################################################################################
 Rscript - <<'EOF'
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
+  library(parallel)
 })
 
 # =========================
 # INPUTS
 # =========================
-gene_name   <- "FAM24B"   # <<< change this
+gene_name   <- "SFRP1"   # <<< change this
 alt_file    <- "./results/methylation/Cpg_altered_direction/BANP_motif_sample_gene_pairs_sameCancer_signed_noOV.tsv.gz"
 expr_file   <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
 meth_dir    <- "./methylation/filtered_methylation"
 color_file  <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
 
-out_pdf     <- paste0("./results/methylation/Cpg_altered_direction/", gene_name, "_expr_vs_methylation_FAST_rawExpr_colorCancer_shapeAlteration.pdf")
-out_tsv     <- paste0("./results/methylation/Cpg_altered_direction/", gene_name, "_expr_vs_methylation_FAST_rawExpr_colorCancer_shapeAlteration.tsv.gz")
+out_pdf     <- paste0("./results/methylation/Cpg_altered_direction/correlation_gene_expression_methylation/", gene_name, "_expr_vs_methylation_3pages.pdf")
+out_tsv     <- paste0("./results/methylation/Cpg_altered_direction/correlation_gene_expression_methylation/", gene_name, "_expr_vs_methylation_3pages.tsv.gz")
 
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
 use_proximal_only <- TRUE
-progress_every    <- 200L
+batch_size <- 15L
 
 # =========================
 # HELPERS
@@ -7421,13 +7422,12 @@ extract_patient_id_file <- function(x) {
 }
 
 fmt_sec <- function(x) {
+  x <- as.numeric(x)
   if (!is.finite(x)) return("NA")
   if (x < 60) return(paste0(round(x, 1), " sec"))
   paste0(round(x / 60, 1), " min")
 }
 
-# file structure confirmed:
-# V1 chr | V2 start | V3 end | V4 probe | V5 methylation percent (0-100)
 read_sample_meth_fast <- function(f, probes_keep) {
   if (!file.exists(f) || length(probes_keep) == 0) return(NULL)
 
@@ -7442,8 +7442,8 @@ read_sample_meth_fast <- function(f, probes_keep) {
   if (ncol(dt) < 5) return(NULL)
 
   out <- data.table(
-    probe = as.character(dt[[4]]),   # V4
-    beta  = suppressWarnings(as.numeric(dt[[5]]))   # V5 already in percent
+    probe = as.character(dt[[4]]),
+    beta  = suppressWarnings(as.numeric(dt[[5]]))
   )
 
   out <- out[probe %in% probes_keep & !is.na(beta)]
@@ -7463,16 +7463,11 @@ cols_dt[, `:=`(
   cancer_full = as.character(cancer_full),
   color = as.character(color)
 )]
-
-# convert TCGA-LUAD -> LUAD
 cols_dt[, cancer := sub("^TCGA-", "", cancer_full)]
 cols_dt <- unique(cols_dt[!is.na(cancer) & !is.na(color) & nzchar(cancer) & nzchar(color)])
-
 cancer_cols <- setNames(cols_dt$color, cols_dt$cancer)
 
 cat("  Loaded colors for:", length(cancer_cols), "cancer types\n")
-cat("  Example color mapping:\n")
-print(head(cols_dt, 10))
 
 # =========================
 # LOAD ALTERED TABLE
@@ -7505,6 +7500,9 @@ gene_status <- alt_gene[, .(
 ), by = sample_id]
 gene_status[, alteration := status_to_label(motif_status)]
 
+# keep only 3 classes
+gene_status <- gene_status[alteration %in% c("Unchanged", "Hypo altered", "Hyper altered")]
+
 probes_keep <- unique(unlist(strsplit(paste(unique(alt_gene$probes), collapse = ","), ",\\s*")))
 probes_keep <- trimws(probes_keep)
 probes_keep <- probes_keep[nzchar(probes_keep)]
@@ -7530,12 +7528,17 @@ expr_dt <- expr_dt[is_tumor_expr(expr_sample) & !is.na(expression)]
 expr_dt[, sample_id := extract_patient_id_expr(expr_sample)]
 expr_dt[, cancer := sub("^TCGA-([^-]+)-.*$", "\\1", expr_sample)]
 
-# keep only cancers where the gene is altered at least once
 alt_gene_cancers <- unique(expr_dt[sample_id %in% gene_status$sample_id, cancer])
 expr_dt <- expr_dt[cancer %in% alt_gene_cancers]
 
 cat("  Tumor expression samples kept:", nrow(expr_dt), "\n")
 cat("  Cancers kept:", length(unique(expr_dt$cancer)), "\n")
+
+expr_dt <- expr_dt[, .(
+  expr_sample = expr_sample[1],
+  expression = expression[1],
+  cancer = cancer[1]
+), by = sample_id]
 
 # =========================
 # INDEX FILES ONCE
@@ -7551,8 +7554,6 @@ setorder(meth_index, fname)
 meth_index <- meth_index[, .SD[1], by = sample_id]
 
 cat("  Indexed methylation files:", nrow(meth_index), "\n")
-cat("  Example methylation sample IDs:\n")
-print(head(meth_index$sample_id, 10))
 
 samples_needed <- unique(expr_dt$sample_id)
 match_dt <- merge(
@@ -7568,66 +7569,92 @@ cat("  Matched methylation files to read:", nrow(match_dt), "\n")
 if (nrow(match_dt) == 0) stop("No matched methylation files for kept samples.")
 
 # =========================
-# READ ONLY NEEDED FILES
+# READ ONLY NEEDED FILES - PARALLEL BY BATCHES OF 15
 # =========================
-cat("[5/7] Reading only needed methylation files...\n")
+cat("[5/7] Reading only needed methylation files in parallel...\n")
+cat("  Batch size:", batch_size, "\n")
 t0 <- proc.time()[3]
 
-meth_list <- vector("list", nrow(match_dt))
+sid_vec  <- match_dt$sample_id
+file_vec <- match_dt$file
+n_files  <- length(file_vec)
 
-for (i in seq_len(nrow(match_dt))) {
-  sid <- match_dt$sample_id[i]
-  f   <- match_dt$file[i]
+batch_id <- ceiling(seq_len(n_files) / batch_size)
+batch_split <- split(seq_len(n_files), batch_id)
+n_batches <- length(batch_split)
 
-  dtm <- read_sample_meth_fast(f, probes_keep)
+meth_chunks <- vector("list", n_batches)
 
-  if (!is.null(dtm) && nrow(dtm) > 0) {
-    meth_list[[i]] <- data.table(
-      sample_id = sid,
-      meth_beta = median(dtm$beta, na.rm = TRUE),
-      n_probes_found = nrow(dtm)
-    )
-  } else {
-    meth_list[[i]] <- NULL
-  }
+for (b in seq_along(batch_split)) {
+  idx <- batch_split[[b]]
+  batch_start <- proc.time()[3]
 
-  if (i %% progress_every == 0L || i == nrow(match_dt)) {
-    elapsed   <- proc.time()[3] - t0
-    avg_per   <- elapsed / i
-    remaining <- (nrow(match_dt) - i) * avg_per
-    recovered <- sum(!vapply(meth_list[seq_len(i)], is.null, logical(1)))
+  batch_res <- mclapply(
+    idx,
+    function(i) {
+      dtm <- read_sample_meth_fast(file_vec[i], probes_keep)
 
-    cat(
-      "  processed", i, "/", nrow(match_dt),
-      "| recovered:", recovered,
-      "| elapsed:", fmt_sec(elapsed),
-      "| avg/file:", round(avg_per, 3), "sec",
-      "| ETA:", fmt_sec(remaining), "\n"
-    )
-  }
+      if (!is.null(dtm) && nrow(dtm) > 0) {
+        data.table(
+          sample_id = sid_vec[i],
+          meth_beta = median(dtm$beta, na.rm = TRUE),
+          n_probes_found = nrow(dtm)
+        )
+      } else {
+        NULL
+      }
+    },
+    mc.cores = min(batch_size, length(idx))
+  )
+
+  meth_chunks[[b]] <- rbindlist(batch_res, fill = TRUE)
+
+  elapsed_total <- as.numeric(proc.time()[3] - t0)
+  elapsed_batch <- as.numeric(proc.time()[3] - batch_start)
+  done_files    <- max(idx)
+  avg_per_file  <- elapsed_total / done_files
+  remaining     <- (n_files - done_files) * avg_per_file
+  recovered_so_far <- sum(vapply(meth_chunks[seq_len(b)], nrow, integer(1)))
+
+  cat(
+    "  batch", b, "/", n_batches,
+    "| files:", length(idx),
+    "| done:", done_files, "/", n_files,
+    "| recovered:", recovered_so_far,
+    "| batch time:", fmt_sec(elapsed_batch),
+    "| elapsed:", fmt_sec(elapsed_total),
+    "| ETA:", fmt_sec(remaining), "\n"
+  )
 }
 
-meth_dt <- rbindlist(meth_list, fill = TRUE)
-elapsed_step5 <- proc.time()[3] - t0
+meth_dt <- rbindlist(meth_chunks, fill = TRUE)
+elapsed_step5 <- as.numeric(proc.time()[3] - t0)
 
 cat("  Samples with methylation recovered:", nrow(meth_dt), "\n")
 cat("  Step 5 total elapsed:", fmt_sec(elapsed_step5), "\n")
 
 if (nrow(meth_dt) == 0) stop("No methylation values recovered.")
 
+meth_dt <- meth_dt[, .(
+  meth_beta = median(meth_beta, na.rm = TRUE),
+  n_probes_found = max(n_probes_found, na.rm = TRUE)
+), by = sample_id]
+
 # =========================
 # MERGE
 # =========================
 cat("[6/7] Merging...\n")
 plot_dt <- merge(expr_dt, meth_dt, by = "sample_id", all = FALSE)
-plot_dt <- merge(plot_dt, gene_status, by = "sample_id", all.x = TRUE)
+plot_dt <- merge(plot_dt, gene_status, by = "sample_id", all = FALSE)
 
-plot_dt[is.na(motif_status), motif_status := 0L]
-plot_dt[is.na(alteration), alteration := "Unchanged"]
+plot_dt <- plot_dt[alteration %in% c("Unchanged", "Hypo altered", "Hyper altered")]
 
-# methylation already in percent in V5
 plot_dt[, methylation_pct := meth_beta]
-plot_dt[, alteration := factor(alteration, levels = c("Unchanged", "Hypo altered", "Hyper altered", "Mixed"))]
+plot_dt[, log_expr := log2(expression + 1)]
+plot_dt[, alteration := factor(alteration, levels = c("Unchanged", "Hypo altered", "Hyper altered"))]
+
+plot_dt[, meth_bin := fifelse(methylation_pct < 50, "Unmethylated", "Methylated")]
+plot_dt[, meth_bin := factor(meth_bin, levels = c("Unmethylated", "Methylated"))]
 
 missing_cols <- setdiff(unique(plot_dt$cancer), names(cancer_cols))
 if (length(missing_cols)) {
@@ -7638,40 +7665,49 @@ if (length(missing_cols)) {
   stop("Missing colors for: ", paste(missing_cols, collapse = ", "))
 }
 
-plot_dt[, cancer := factor(cancer, levels = unique(cols_dt$cancer))]
+plot_dt[, cancer := factor(cancer, levels = intersect(unique(cols_dt$cancer), unique(plot_dt$cancer)))]
 
 cat("  Final merged samples:", nrow(plot_dt), "\n")
 
 # =========================
-# CORRELATION + SAVE + PLOT
+# STATS
 # =========================
-cat("[7/7] Correlation and plot...\n")
-cor_res <- safe_cor(plot_dt$methylation_pct, plot_dt$expression, method = "pearson")
-
+cat("[7/7] Plotting...\n")
+cor_res <- safe_cor(plot_dt$methylation_pct, plot_dt$log_expr, method = "pearson")
 fwrite(plot_dt, out_tsv, sep = "\t")
 
-p <- ggplot(
+p_bin <- tryCatch(
+  wilcox.test(log_expr ~ meth_bin, data = plot_dt)$p.value,
+  error = function(e) NA_real_
+)
+
+# =========================
+# PAGE 1
+# =========================
+p1 <- ggplot(
   plot_dt,
-  aes(x = methylation_pct, y = expression, color = cancer, shape = alteration)
+  aes(x = methylation_pct, y = log_expr, shape = alteration, color = cancer)
 ) +
-  geom_point(size = 2.2, alpha = 0.85) +
+  geom_point(size = 1.8, alpha = 0.65) +
   geom_smooth(
-    aes(group = 1),
-    method = "lm", se = FALSE,
-    inherit.aes = FALSE,
     data = plot_dt,
-    mapping = aes(x = methylation_pct, y = expression)
+    mapping = aes(x = methylation_pct, y = log_expr),
+    method = "lm",
+    se = FALSE,
+    inherit.aes = FALSE,
+    color = "black",
+    linewidth = 0.8
   ) +
   scale_color_manual(values = cancer_cols, drop = FALSE) +
   labs(
-    title = paste0(gene_name, ": expression vs methylation across tumor samples"),
+    title = paste0(gene_name, ": pooled across all cancer types"),
     subtitle = paste0(
-      "All cancers pooled | color = cancer type | shape = alteration status | ",
-      "Pearson r = ", round(cor_res$r, 3),
+      "log2(expression + 1) | shape = alteration | Pearson r = ",
+      round(cor_res$r, 3),
       " ; p = ", formatC(cor_res$p, format = "e", digits = 2)
     ),
     x = "Median methylation across proximal gene-linked probes (%)",
-    y = "Raw expression"
+    y = "log2(expression + 1)"
   ) +
   theme_bw() +
   theme(
@@ -7679,14 +7715,80 @@ p <- ggplot(
     panel.grid.minor = element_blank()
   )
 
-ggsave(out_pdf, p, width = 12, height = 8)
+# =========================
+# PAGE 2
+# =========================
+p2 <- ggplot(
+  plot_dt,
+  aes(x = methylation_pct, y = log_expr, shape = alteration, color = cancer)
+) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  geom_smooth(
+    mapping = aes(group = 1),
+    method = "lm",
+    se = FALSE,
+    color = "black",
+    linewidth = 0.5,
+    inherit.aes = TRUE
+  ) +
+  scale_color_manual(values = cancer_cols, drop = FALSE) +
+  facet_wrap(~ cancer, scales = "free_y") +
+  labs(
+    title = paste0(gene_name, ": faceted by cancer type"),
+    subtitle = "log2(expression + 1) | shape = alteration",
+    x = "Median methylation across proximal gene-linked probes (%)",
+    y = "log2(expression + 1)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom"
+  )
+
+# =========================
+# PAGE 3
+# =========================
+p3 <- ggplot(
+  plot_dt,
+  aes(x = meth_bin, y = log_expr, fill = meth_bin)
+) +
+  geom_violin(trim = TRUE, scale = "width", alpha = 0.8) +
+  geom_boxplot(width = 0.14, outlier.shape = NA, fill = "white") +
+  geom_jitter(aes(shape = alteration), width = 0.15, alpha = 0.25, size = 1.0, color = "black") +
+  labs(
+    title = paste0(gene_name, ": expression by binary methylation bin"),
+    subtitle = paste0(
+      "< 50% = Unmethylated ; >= 50% = Methylated",
+      if (is.finite(p_bin)) paste0(" | Wilcoxon p = ", formatC(p_bin, format = "e", digits = 2)) else ""
+    ),
+    x = "Methylation bin",
+    y = "log2(expression + 1)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  ) +
+  guides(fill = "none")
+
+# =========================
+# SAVE 3-PAGE PDF
+# =========================
+pdf(out_pdf, width = 12, height = 8)
+print(p1)
+print(p2)
+print(p3)
+dev.off()
 
 cat("  Wrote table:", out_tsv, "\n")
-cat("  Wrote plot :", out_pdf, "\n")
+cat("  Wrote 3-page PDF:", out_pdf, "\n")
 cat("\nDone.\n")
 EOF
 
-
+###################################################################
+# Plot for multiple genes
+###################################################################
 
 
 
