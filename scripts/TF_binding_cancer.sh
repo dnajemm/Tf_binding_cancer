@@ -10252,74 +10252,25 @@ for files in ./expression/RNA_TCGA-*-*.augmented_star_gene_counts.tsv; do
   grep -w 'BANP' "$files"  >> "$out"
 done
 
+# build a table with the expression of NRF1 and BANP in all samples
+out=./expression/expression_of_NRF1_BANP/all_samples_NRF1_BANP_expression.tsv
 
-#############################################################################################################################################################################################################################################################
-# NRF1 and BANP are ubiquitously expressed across TCGA cancer types (definition: median TPM > 1, all sample types included) --> create a badge for each gene with the percentage of cancer types in which it is expressed, and a subtitle with the number of cancer types in which it is expressed out of the total number of cancer types. 
-#############################################################################################################################################################################################################################################################
-# This is for the presentation to show that these factors are ubiquitously expressed across all samples.
-Rscript -e '
-library(data.table)
-library(ggplot2)
+echo -e "sample\tcancer\tNRF1_tpm\tBANP_tpm" > "$out"
 
-expr <- fread("./expression/gene_expression_matrix_protein_coding.tsv.gz")
-setnames(expr, 1, "sample")
+for file in ./expression/expression_of_NRF1_BANP/RNA*_NRF1_BANP_expression.tsv; do
+  
+  base=$(basename "$file" _NRF1_BANP_expression.tsv)
 
-genes <- c("NRF1","BANP")
-THR_TPM <- 1
+  sample=$(echo "$base" | cut -d'-' -f3,4,5,6)
+  cancer=$(echo "$base" | cut -d'-' -f2)
 
-dt <- expr[, c("sample", genes), with=FALSE]
-long <- melt(dt, id.vars="sample", variable.name="gene", value.name="TPM")
-long[, TPM := as.numeric(TPM)]
+  nrf1_tpm=$(awk '$2=="NRF1" {print $7}' "$file")
+  banp_tpm=$(awk '$2=="BANP" {print $7}' "$file")
 
-# cancer type (ACC, BLCA, ...)
-long[, cancer := tstrsplit(sample, "-", fixed=TRUE)[[2]]]
+  echo -e "${sample}\t${cancer}\t${nrf1_tpm}\t${banp_tpm}"
+done >> "$out"
 
-# expressed per cancer if median TPM > threshold
-med <- long[, .(median_TPM = median(TPM, na.rm=TRUE)), by=.(cancer, gene)]
-med[, expressed := median_TPM > THR_TPM]
 
-# summarize per gene
-sumdt <- med[, .(
-  n_cancers = .N,
-  n_expr    = sum(expressed, na.rm=TRUE),
-  pct       = round(100 * mean(expressed, na.rm=TRUE))
-), by=gene]
-
-sumdt[, subtitle := sprintf("Expressed in %d / %d cancer types", n_expr, n_cancers)]
-sumdt[, big := paste0(pct, "%")]
-sumdt[, gene := factor(gene, levels=genes)]
-
-# small helper to place two tiles nicely
-sumdt[, x := as.integer(gene)]
-sumdt[, y := 1]
-
-p <- ggplot(sumdt, aes(x=x, y=y)) +
-  # colorful cards
-  geom_tile(aes(fill=gene), width=0.9, height=0.55, color="white", linewidth=1.2) +
-  # big TF name
-  geom_text(aes(label=as.character(gene)), y=1.12, fontface="bold", size=10, color="white") +
-  # huge percent
-  geom_text(aes(label=big), y=1.00, fontface="bold", size=14, color="white") +
-  # subtitle
-  geom_text(aes(label=subtitle), y=0.86, size=4.2, color="white") +
-  # global headline
-  annotate("text", x=1.5, y=1.55,
-           label="Ubiquitously expressed across TCGA cancer types",
-           fontface="bold", size=6) +
-  annotate("text", x=1.5, y=1.40,
-           label=paste0("Definition: median TPM > ", THR_TPM, " (all sample types included)"),
-           size=4) +
-  scale_fill_manual(values=c("NRF1"="#7B2FF7", "BANP"="#FFB000")) +
-  coord_cartesian(xlim=c(0.5, 2.5), ylim=c(0.6, 1.7), expand=FALSE) +
-  theme_void() +
-  theme(legend.position="none")
-
-dir.create("./results/expression", recursive=TRUE, showWarnings=FALSE)
-ggsave("./results/expression/NRF1_BANP_ubiquity_badges_slide.pdf",
-       p, width=9, height=3.2, device=cairo_pdf)
-
-cat("WROTE -> ./results/expression/NRF1_BANP_ubiquity_badges_slide.pdf\n")
-'
 ##################################################################################################################################################
 # plot  the expression of NRF1 and BANP in the different samples, grouped by cancer type one page for healthy and one for tumor samples (boxplot)
 ##################################################################################################################################################
@@ -10417,6 +10368,163 @@ if (nrow(filter(df, gene_name=="BANP")) > 0) print(p_banp) else {plot.new(); tit
 dev.off()
 
 cat("[DONE] Wrote ", out, "\n", sep="")
+'
+
+##################################################################################################################################################
+# plot the expression of NRF1 and BANP only in 3d+4d_noOV samples, grouped by cancer type
+# one page for Normal and one for Tumor samples (boxplot)
+##################################################################################################################################################
+Rscript -e '
+library(readr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+
+cat("[INFO] Reading mapping file...\n")
+map <- read_tsv(
+  "./all_tcga_samples_with_cancer.tsv",
+  col_names = c("sample_id","cancer"),
+  show_col_types = FALSE
+)
+
+cat("[INFO] Reading 3d+4d_noOV cohort file (headerless)...\n")
+cohort <- read_tsv(
+  "./results/multi_omics/samples_3d+4d_noOV.tsv",
+  col_names = c("case_id","cancer_cohort","v3","v4","v5","v6"),
+  show_col_types = FALSE
+)
+
+cohort_case_ids <- unique(cohort$case_id)
+cat("[INFO] 3d+4d_noOV unique case IDs: ", length(cohort_case_ids), "\n", sep="")
+
+cat("[INFO] Listing NRF1/BANP per-sample files...\n")
+files <- list.files(
+  "./expression/expression_of_NRF1_BANP",
+  pattern = "_NRF1_BANP_expression.tsv$",
+  full.names = TRUE
+)
+
+cat("[INFO] Found ", length(files), " files\n", sep="")
+
+cat("[INFO] Reading expression files...\n")
+df <- bind_rows(lapply(files, function(f) {
+  cat("[READ] ", basename(f), "\n", sep="")
+  read_tsv(f, show_col_types = FALSE) %>%
+    mutate(sample_id = str_extract(basename(f), "TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-[0-9]{2}[A-Za-z]"))
+}))
+
+cat("[INFO] Preparing table + joining cancer...\n")
+map <- map %>%
+  mutate(case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""))
+
+df <- df %>%
+  select(sample_id, gene_name, tpm_unstranded) %>%
+  filter(gene_name %in% c("NRF1", "BANP")) %>%
+  mutate(
+    tpm_unstranded = as.numeric(tpm_unstranded),
+    case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""),
+    code = str_match(sample_id, "-([0-9]{2})[A-Za-z]$")[,2],
+    sample_type = case_when(
+      code %in% c("01","02","03","05","06","07","08","09") ~ "Tumor",
+      code %in% c("10","11","12","13","14") ~ "Normal",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  left_join(map %>% select(case_id, cancer), by = "case_id") %>%
+  filter(!is.na(cancer), !is.na(tpm_unstranded)) %>%
+  filter(sample_type %in% c("Normal", "Tumor"))
+
+cat("[INFO] Rows before 3d+4d_noOV filtering: ", nrow(df), "\n", sep="")
+df <- df %>%
+  filter(case_id %in% cohort_case_ids)
+cat("[INFO] Rows after 3d+4d_noOV filtering: ", nrow(df), "\n", sep="")
+
+cat("[INFO] Sample code breakdown after 3d+4d_noOV filtering:\n")
+print(table(df$code, df$sample_type, useNA = "ifany"))
+
+# ===== gene-specific cutoffs + removed counts + filter =====
+df <- df %>%
+  mutate(cutoff = case_when(
+    gene_name == "NRF1" ~ 50,
+    gene_name == "BANP" ~ 30,
+    TRUE ~ Inf
+  ))
+
+removed <- df %>%
+  group_by(gene_name) %>%
+  summarise(
+    n_removed = sum(tpm_unstranded > cutoff, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+get_removed <- function(g) {
+  x <- removed$n_removed[removed$gene_name == g]
+  ifelse(length(x) == 0, 0, x)
+}
+
+df <- df %>%
+  filter(tpm_unstranded <= cutoff)
+# ==========================================================
+
+cat("[INFO] 3d+4d_noOV Tumor samples:  ", length(unique(df$sample_id[df$sample_type == "Tumor"])), "\n", sep="")
+cat("[INFO] 3d+4d_noOV Normal samples: ", length(unique(df$sample_id[df$sample_type == "Normal"])), "\n", sep="")
+cat("[INFO] 3d+4d_noOV cancers: ", length(unique(df$cancer)), "\n", sep="")
+
+if (nrow(df) == 0) stop("No samples left after 3d+4d_noOV filtering")
+
+ymax <- max(df$tpm_unstranded, na.rm = TRUE)
+
+make_plot <- function(d, title_txt, removed_n) {
+  ggplot(d, aes(cancer, tpm_unstranded)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(aes(color = sample_type), width = 0.2, alpha = 0.6, size = 0.7) +
+    geom_hline(yintercept = 1, color = "blue", linewidth = 0.8) +
+    scale_color_manual(values = c(Normal = "black", Tumor = "red")) +
+    coord_cartesian(ylim = c(0, ymax)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+    labs(
+      title = title_txt,
+      x = "Cancer type",
+      y = "TPM",
+      color = paste0("Sample type (removed above cutoff: ", removed_n, ")")
+    )
+}
+
+cat("[INFO] Building plots...\n")
+p_nrf1 <- make_plot(
+  filter(df, gene_name == "NRF1"),
+  "NRF1 TPM in 3d+4d_noOV — Normal (black) vs Tumor (red) | cutoff=50 removed",
+  get_removed("NRF1")
+)
+
+p_banp <- make_plot(
+  filter(df, gene_name == "BANP"),
+  "BANP TPM in 3d+4d_noOV — Normal (black) vs Tumor (red) | cutoff=30 removed",
+  get_removed("BANP")
+)
+
+out <- "./results/expression/boxplot_TPM_NRF1_BANP_by_cancer_Normal_vs_Tumor_3d4d_noOV.pdf"
+dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
+
+cat("[INFO] Writing 2-page PDF...\n")
+pdf(out, width = 14, height = 6)
+if (nrow(filter(df, gene_name == "NRF1")) > 0) {
+  print(p_nrf1)
+} else {
+  plot.new()
+  title("No NRF1 samples found in 3d+4d_noOV")
+}
+
+if (nrow(filter(df, gene_name == "BANP")) > 0) {
+  print(p_banp)
+} else {
+  plot.new()
+  title("No BANP samples found in 3d+4d_noOV")
+}
+dev.off()
+
+cat("[DONE] Wrote ", out, "\n", sep = "")
 '
 
 ####################################################################################################################################################################################################

@@ -1,11 +1,25 @@
 
-'''This script does the following steps:
-Step 1: Built the proximal BANP motif–probe map from probe_gene_pairs_in_motifs_with_tss.tsv.gz by keeping only is_proximal == TRUE, restricting to TF == "BANP_mm0to2_noCGmm", and retaining unique gene, motif_id, and probe combinations.
-Step 2: Built the HM450 methylation sample annotation for the 3d+4d_noOV cohort by listing methylation files, extracting sample_barcode, patient_id, sample_type (01 = Tumor, 11 = Healthy), and cancer, then keeping only samples whose patients are present in the cohort file.
-Step 3: Computed sample-level motif methylation for each BANP proximal gene–motif pair by reading each sample’s HM450 beta values, restricting to mapped probes, and defining motif methylation as the MAX(beta) across linked probes; also saved the selected max probe(s), compact probe summaries, and per-sample processing status.
-Step 4: Merged the motif methylation table with the gene expression matrix by reshaping expression to long format, extracting sample barcodes from expression sample names, and joining on gene + sample_barcode to create a combined methylation–expression table.
+'''This workflow analyzes the relationship between motif methylation and target-gene expression across the 3d+4d_noOV TCGA cohort, with separate branches for all available samples and for matched Healthy–Tumor patients only. It also identifies significantly anti-correlated gene–motif pairs, generates PDF reports, builds interactive visualizations, and checks whether a specific motif overlaps open chromatin in ATAC-seq samples.
+
+A) All 3d+4d_noOV samples
+Step 1: Built the proximal BANP motif–probe map from `probe_gene_pairs_in_motifs_with_tss.tsv.gz` by keeping only `is_proximal == TRUE`, restricting to `TF == "BANP_mm0to2_noCGmm"`, and retaining unique `gene`, `motif_id`, and `probe` combinations.
+Step 2: Built the HM450 methylation sample annotation for the 3d+4d_noOV cohort by listing methylation files, extracting `sample_barcode`, `patient_id`, `sample_type` (`01 = Tumor`, `11 = Healthy`), and `cancer`, then keeping only samples whose patients are present in the cohort file.
+Step 3: Computed sample-level motif methylation for each proximal gene–motif pair by reading each sample’s HM450 beta values, restricting to mapped probes, and defining motif methylation as the MAX(beta) across linked probes. It also saved the selected max probe(s), compact probe summaries, and per-sample processing status.
+Step 4: Merged the motif methylation table with the gene expression matrix by reshaping expression to long format, extracting sample barcodes from expression sample names, and joining on `gene + sample_barcode` to create a combined methylation–expression table.
 Step 5: Computed Pearson correlations between motif methylation and gene expression both across all cancers pooled and within each cancer type, then applied BH/FDR correction to identify significant associations.
-Step 8: Selected the top 50 unique BANP gene–motif pairs from the cancer-specific correlation results and generated multi-page PDF reports for each pair, including pooled scatterplots, per-cancer scatterplots, and Healthy-vs-Tumor dual-panel summaries for both expression and methylation.
+Step 6: Selected the top 50 unique gene–motif pairs from the cancer-specific correlation results and generated multi-page PDF reports for each pair, including pooled scatterplots, cancer-specific scatterplots, and Healthy-vs-Tumor dual-panel summaries for both expression and methylation.
+Step 8: Extracted significantly anti-correlated pooled gene–motif pairs using the thresholds `pearson_r_all < -0.4` and `FDR < 0.05`.
+Step 9: Extracted significantly anti-correlated cancer-specific gene–motif pairs using the thresholds `pearson_r < -0.4` and `FDR < 0.05`.
+Step 10: Generated PDF panels for all gene–motif pairs that passed the anti-correlation thresholds, including pooled plots and cancer-specific plots, with the option to restrict cancer-specific pages to only the cancers where the pair was significantly anti-correlated.
+Step 11: Built interactive HTML scatterplots for anti-correlated pairs, with hover information including sample identity, target-gene expression, motif methylation, and BANP/NRF1 expression values.
+
+B) Matched-patient analysis only
+Step 4b: Built a matched-patient subset by keeping only gene–motif–patient combinations for which both a Healthy and a Tumor sample were available.
+Step 5b: Recomputed pooled and cancer-specific Pearson correlations on the matched-patient subset only, again using BH/FDR correction.
+Step 7b: Generated top-50 PDF reports on the matched-patient subset, using the same plotting framework as in the all-sample analysis.
+
+ATAC overlap check
+The script also includes a shell loop to test whether the motif `chr10:114179257:114179267:+` falls inside an ATAC peak in PRAD samples. 
 '''
 
 ##############################################################
@@ -57,6 +71,7 @@ cat("Unique gene-motif pairs:", uniqueN(out[, paste(gene, motif_id, sep='||')]),
 EOF
 
 ######################################################################################
+# A - on all 3D+4D_noOV samples, regardless of matching status
 # Step 2 : Build methylation sample annotation for the 3d+4d_noOV cohort
 # input : directory with methylation files, cohort file with patient IDs
 # output : file with sample annotation for methylation files in the cohort
@@ -552,11 +567,11 @@ cat("Done.\n")
 cat("Saved:", out_file, "\n")
 EOF
 
-# =========================
-# STEP 5: CORRELATION
+# =====================================================
+# STEP 5: pearson CORRELATION
 #   - r_all: across all cancer types pooled
 #   - r_by_cancer: within each cancer type
-# =========================
+# =====================================================
 Rscript - <<'EOF'
 suppressPackageStartupMessages(library(data.table))
 
@@ -594,8 +609,7 @@ dt[, `:=`(
   expression = suppressWarnings(as.numeric(expression))
 )]
 
-dt <- dt[!is.na(gene) & !is.na(motif_id) & !is.na(sample_barcode) &
-         !is.na(cancer) & !is.na(meth_beta) & !is.na(expression)]
+dt <- dt[!is.na(gene) & !is.na(motif_id) & !is.na(sample_barcode) & !is.na(cancer) & !is.na(meth_beta) & !is.na(expression)]
 
 if (tumor_only) {
   dt <- dt[sample_type == "Tumor"]
@@ -697,7 +711,9 @@ cat("Significant pooled (FDR<0.05):", res_all[!is.na(pearson_fdr_all) & pearson_
 cat("Significant by cancer (FDR<0.05):", res_by_cancer[!is.na(pearson_fdr) & pearson_fdr < 0.05, .N], "\n")
 EOF
 
-# Step 7 : plot the top 50 unique NRF1 gene–motif pairs from the cancer-specific correlation results, generating multi-page PDF reports for each pair with pooled scatterplots, per-cancer scatterplots, and Healthy-vs-Tumor dual-panel summaries for both expression and methylation.
+#========================================================================================================================================================================================================================================================================================
+# Step 6 : plot the top 50 unique NRF1 gene–motif pairs from the cancer-specific correlation results, generating multi-page PDF reports for each pair with pooled scatterplots, per-cancer scatterplots, and Healthy-vs-Tumor dual-panel summaries for both expression and methylation.
+#========================================================================================================================================================================================================================================================================================
 Rscript - <<'EOF'
 suppressPackageStartupMessages({
   library(data.table)
@@ -1481,7 +1497,7 @@ EOF
 
 
 ###################################################################################
-# Do the correlation on the cohort samples but only on the matched patients 
+# B- Do the correlation on the cohort samples but only on the matched patients 
 ###################################################################################
 ##############################################################
 # Step 4b : Keep only matched patients (Healthy + Tumor)
@@ -1572,7 +1588,7 @@ cat("Saved:", out_file, "\n")
 EOF
 
 ##############################################################
-# Step 5 : Correlation on matched patients only
+# Step 5b : Pearson Correlation on matched patients only min 3 samples required
 # input : matched-patient merged methylation-expression table
 # output : pooled and cancer-specific Pearson correlations
 ##############################################################
@@ -1693,7 +1709,7 @@ cat("Significant by cancer (FDR<0.05):", res_by_cancer[!is.na(pearson_fdr) & pea
 EOF
 
 ##############################################################
-# Step 7 : Plot top 50 unique BANP gene-motif pairs
+# Step 7b : Plot top 50 unique TF gene-motif pairs
 # using matched patients only
 ##############################################################
 Rscript - <<'EOF'
@@ -2478,7 +2494,7 @@ cat("Elapsed:", fmt_sec(elapsed), "\n")
 EOF
 
 ######################################################################################
-# Step 6a : Extract significantly anti-correlated gene-motif pairs
+# Step 8 : Extract significantly anti-correlated gene-motif pairs
 # across all cancers pooled
 # input : pooled Pearson correlation results from Step 5
 # output : significant anti-correlated pooled pairs (pearson_r_all < -0.4 and FDR < 0.05)
@@ -2527,7 +2543,7 @@ cat("Saved:", out_file, "\n")
 EOF
 
 ##############################################################
-# Step 6b : Extract significantly anti-correlated gene-motif pairs
+# Step 9 : Extract significantly anti-correlated gene-motif pairs
 # by cancer type
 # input : cancer-specific Pearson correlation results from Step 5
 # output : significant anti-correlated cancer-specific pairs
@@ -2583,9 +2599,9 @@ EOF
 
 
 ############################################################################################
-# Step 7 : Generate panels for ALL gene-motif pairs that passed the previous threshold
+# Step 10 : Generate panels for ALL gene-motif pairs that passed the previous threshold
 ############################################################################################
-# Step 7 : Generate panels for ALL gene-motif pairs that passed the previous threshold
+# Step 10 : Generate panels for ALL gene-motif pairs that passed the previous threshold
 Rscript - <<'EOF'
 suppressPackageStartupMessages({
   library(data.table)
@@ -3564,40 +3580,24 @@ if (any(res$status == "error")) {
 }
 EOF
 
-
-
-
-
-
-
-
-
-
-
-
-
-# NOT CORRECT YET IM HERE THE NRF1 and BANP expression is wrong
-
-# step 7 the same but to have it interactive 
-# Step 7 : Generate interactive panels for ALL gene-motif pairs that passed the previous threshold
+################################################################################################
+# step 11 : build one interactive that also has NRF1 and BANP expression in the sample information
+################################################################################################
 Rscript - <<'EOF'
 suppressPackageStartupMessages({
   library(data.table)
-  library(ggplot2)
-  library(grid)
-  library(parallel)
   library(plotly)
   library(htmlwidgets)
 })
 
-# =========================
+# ============================================================
 # USER PARAMETER
-# =========================
-tf_name <- "NRF1"   # <- change only this
+# ============================================================
+tf_name <- "BANP"   # "NRF1" or "BANP"
 
-# =========================
-# INPUTS / OUTPUTS BUILT FROM TF
-# =========================
+# ============================================================
+# PATHS
+# ============================================================
 base_dir <- file.path(
   ".", "results", "methylation", "correlation_expression_methylation",
   "tumor_vs_healthy", tf_name, "all_samples"
@@ -3619,47 +3619,29 @@ anti_by_cancer_file <- file.path(
 )
 
 color_file <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+expr_file  <- "./expression/expression_of_NRF1_BANP/all_samples_NRF1_BANP_expression.tsv"
 
-out_dir <- file.path(
-  base_dir,
-  "anti_correlated_pair_interactive_plot"
-)
-
+out_dir <- file.path(base_dir, "interactive_target_vs_methylation_only")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-mc_cores     <- 5L
-batch_size   <- 5L
-min_n_cor    <- 3L
-min_n_wilcox <- 2L
-
-# TRUE = only make cancer-specific pages for cancers where the pair
-# was significantly anti-correlated
-# FALSE = make cancer-specific pages for all cancers present for that pair
+batch_size <- 1L
+min_n_cor  <- 3L
 only_significant_cancers <- TRUE
 
-top_index_file <- file.path(out_dir, paste0("selected_anti_correlated_pairs_all_", tf_name, ".tsv"))
-out_index      <- file.path(out_dir, paste0("generated_reports_", tf_name, ".tsv"))
-
-# =========================
+# ============================================================
 # HELPERS
-# =========================
+# ============================================================
 fmt_p <- function(x) {
-  out <- rep(NA_character_, length(x))
-  out[is.na(x)] <- "NA"
-  out[!is.na(x) & x < 2.2e-16] <- "<2.2e-16"
-  idx <- !is.na(x) & x >= 2.2e-16
-  out[idx] <- formatC(x[idx], format = "e", digits = 2)
-  out
+  if (is.na(x)) return("NA")
+  if (x < 2.2e-16) return("<2.2e-16")
+  formatC(x, format = "e", digits = 2)
 }
 
-p_to_stars <- function(p) {
-  out <- rep(NA_character_, length(p))
-  out[is.na(p)] <- "NA"
-  out[!is.na(p) & p < 0.001] <- "***"
-  out[!is.na(p) & p >= 0.001 & p < 0.01] <- "**"
-  out[!is.na(p) & p >= 0.01 & p < 0.05] <- "*"
-  out[!is.na(p) & p >= 0.05] <- "ns"
-  out
+fmt_sec <- function(x) {
+  x <- as.numeric(x)
+  if (!is.finite(x)) return("NA")
+  if (x < 60) return(paste0(round(x, 1), " sec"))
+  paste0(round(x / 60, 1), " min")
 }
 
 safe_name <- function(x) {
@@ -3670,12 +3652,32 @@ safe_name <- function(x) {
   x
 }
 
+clean_sample_type <- function(x) {
+  x <- trimws(as.character(x))
+  x[tolower(x) %in% c("healthy", "normal", "solid tissue normal", "adjacent normal")] <- "Healthy"
+  x[tolower(x) %in% c("tumor", "primary tumor", "primary tumour", "cancer")] <- "Tumor"
+  x
+}
+
+first_existing_col <- function(nms, candidates) {
+  hit <- candidates[candidates %in% nms]
+  if (length(hit) == 0) return(NA_character_)
+  hit[1]
+}
+
+extract_tcga_sample <- function(x) {
+  x <- as.character(x)
+  out <- sub(".*(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]).*", "\\1", x)
+  out[!grepl("^TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]$", out)] <- NA_character_
+  out
+}
+
 safe_cor_test <- function(x, y, min_n = 3L) {
   keep <- is.finite(x) & is.finite(y)
   x <- x[keep]
   y <- y[keep]
-
   n <- length(x)
+
   if (n < min_n) return(list(r = NA_real_, p = NA_real_, n = n))
   if (length(unique(x)) < 2 || length(unique(y)) < 2) {
     return(list(r = NA_real_, p = NA_real_, n = n))
@@ -3687,129 +3689,20 @@ safe_cor_test <- function(x, y, min_n = 3L) {
   list(r = unname(ct$estimate), p = ct$p.value, n = n)
 }
 
-safe_wilcox_hc <- function(values, groups, min_n = 2L) {
-  keep <- is.finite(values) & !is.na(groups)
-  values <- values[keep]
-  groups <- trimws(as.character(groups[keep]))
-
-  groups[tolower(groups) %in% c("healthy", "normal", "solid tissue normal", "adjacent normal")] <- "Healthy"
-  groups[tolower(groups) %in% c("tumor", "primary tumor", "primary tumour", "cancer")] <- "Tumor"
-
-  keep2 <- groups %in% c("Healthy", "Tumor")
-  values <- values[keep2]
-  groups <- groups[keep2]
-
-  n_h <- sum(groups == "Healthy")
-  n_c <- sum(groups == "Tumor")
-
-  if (n_h < min_n || n_c < min_n) {
-    return(list(p = NA_real_, n_h = n_h, n_c = n_c, status = "insufficient_n"))
-  }
-
-  wt <- tryCatch(
-    suppressWarnings(wilcox.test(values ~ groups, exact = FALSE)),
-    error = function(e) NULL
-  )
-
-  if (is.null(wt)) {
-    return(list(p = NA_real_, n_h = n_h, n_c = n_c, status = "wilcox_error"))
-  }
-
-  list(p = wt$p.value, n_h = n_h, n_c = n_c, status = "ok")
+# ============================================================
+# CHECK FILES
+# ============================================================
+for (f in c(data_file, anti_all_file, anti_by_cancer_file, color_file, expr_file)) {
+  if (!file.exists(f)) stop("Missing file: ", f)
 }
 
-fmt_sec <- function(x) {
-  x <- as.numeric(x)
-  if (!is.finite(x)) return("NA")
-  if (x < 60) return(paste0(round(x, 1), " sec"))
-  paste0(round(x / 60, 1), " min")
-}
-
-clean_sample_type <- function(x) {
-  x2 <- trimws(as.character(x))
-  x2[tolower(x2) %in% c("healthy", "normal", "solid tissue normal", "adjacent normal")] <- "Healthy"
-  x2[tolower(x2) %in% c("tumor", "primary tumor", "primary tumour", "cancer")] <- "Tumor"
-  x2
-}
-
-first_existing_col <- function(nms, candidates) {
-  hit <- candidates[candidates %in% nms]
-  if (length(hit) == 0) return(NA_character_)
-  hit[1]
-}
-
-make_dual_panel_dt <- function(d) {
-  d <- copy(d)
-
-  y1_min <- suppressWarnings(min(d$log2_expr, na.rm = TRUE))
-  y1_max <- suppressWarnings(max(d$log2_expr, na.rm = TRUE))
-
-  if (!is.finite(y1_min) || !is.finite(y1_max) || y1_min == y1_max) {
-    y1_min <- 0
-    y1_max <- 1
-  }
-
-  y2_min <- 0
-  y2_max <- 100
-
-  scale_factor <- (y1_max - y1_min) / (y2_max - y2_min)
-  if (!is.finite(scale_factor) || scale_factor == 0) scale_factor <- 1
-
-  expr_dt <- d[, .(
-    sample_type,
-    cancer,
-    measure = "Expression",
-    value_raw = log2_expr,
-    value_plot = log2_expr
-  )]
-
-  meth_dt <- d[, .(
-    sample_type,
-    cancer,
-    measure = "Methylation",
-    value_raw = meth_percent,
-    value_plot = (meth_percent - y2_min) * scale_factor + y1_min
-  )]
-
-  out <- rbindlist(list(expr_dt, meth_dt), fill = TRUE)
-
-  out[, x_num := fifelse(
-    measure == "Expression" & sample_type == "Healthy", 1,
-    fifelse(
-      measure == "Expression" & sample_type == "Tumor", 2,
-      fifelse(
-        measure == "Methylation" & sample_type == "Healthy", 4,
-        5
-      )
-    )
-  )]
-
-  out[, x_lab := fifelse(x_num %in% c(1, 4), "H", "C")]
-
-  list(
-    dt = out,
-    y1_min = y1_min,
-    y1_max = y1_max,
-    y2_min = y2_min,
-    y2_max = y2_max,
-    scale_factor = scale_factor
-  )
-}
-
-# =========================
-# LOAD SAMPLE-LEVEL DATA
-# =========================
+# ============================================================
+# LOAD MAIN DATA
+# ============================================================
 cat("============================================================\n")
-cat("[1/8] Loading merged sample-level methylation-expression table\n")
+cat("[1/7] Loading sample-level methylation/expression table\n")
 cat("============================================================\n")
-cat("TF:", tf_name, "\n")
-cat("data_file:", data_file, "\n")
 t0 <- proc.time()[3]
-
-if (!file.exists(data_file)) stop("Missing data_file: ", data_file)
-if (!file.exists(anti_all_file)) stop("Missing anti_all_file: ", anti_all_file)
-if (!file.exists(anti_by_cancer_file)) stop("Missing anti_by_cancer_file: ", anti_by_cancer_file)
-if (!file.exists(color_file)) stop("Missing color_file: ", color_file)
 
 dt <- fread(data_file)
 
@@ -3817,19 +3710,15 @@ need_dt <- c("cancer", "gene", "motif_id", "sample_type", "meth_beta", "expressi
 miss_dt <- setdiff(need_dt, names(dt))
 if (length(miss_dt)) stop("Missing columns in data_file: ", paste(miss_dt, collapse = ", "))
 
-# detect optional ID columns
 sample_col  <- first_existing_col(names(dt), c("sample", "sample_id", "sample_barcode", "tumor_sample", "barcode"))
 patient_col <- first_existing_col(names(dt), c("patient", "patient_id", "case_id", "submitter_id"))
-tf_expr_col <- first_existing_col(names(dt), c("tf_expression", paste0(tf_name, "_expression"), paste0(tolower(tf_name), "_expression")))
 
-dt[, `:=`(
-  cancer      = as.character(cancer),
-  gene        = as.character(gene),
-  motif_id    = as.character(motif_id),
-  sample_type = clean_sample_type(sample_type),
-  meth_beta   = suppressWarnings(as.numeric(meth_beta)),
-  expression  = suppressWarnings(as.numeric(expression))
-)]
+dt[, cancer      := as.character(cancer)]
+dt[, gene        := as.character(gene)]
+dt[, motif_id    := as.character(motif_id)]
+dt[, sample_type := clean_sample_type(sample_type)]
+dt[, meth_beta   := suppressWarnings(as.numeric(meth_beta))]
+dt[, expression  := suppressWarnings(as.numeric(expression))]
 
 if (!is.na(sample_col)) {
   dt[, sample := as.character(get(sample_col))]
@@ -3843,179 +3732,150 @@ if (!is.na(patient_col)) {
   dt[, patient := NA_character_]
 }
 
-if (!is.na(tf_expr_col)) {
-  dt[, tf_expression := suppressWarnings(as.numeric(get(tf_expr_col)))]
-} else {
-  dt[, tf_expression := NA_real_]
-}
-
 dt <- dt[
   !is.na(cancer) & nzchar(cancer) &
   !is.na(gene) & nzchar(gene) &
   !is.na(motif_id) & nzchar(motif_id) &
-  !is.na(sample_type) & nzchar(sample_type) &
+  sample_type %in% c("Healthy", "Tumor") &
   is.finite(meth_beta) &
   is.finite(expression)
 ]
 
 dt[, cancer := sub("^TCGA-", "", cancer)]
-dt <- dt[sample_type %in% c("Healthy", "Tumor")]
 dt[, log2_expr := log2(expression + 1)]
 
-if (is.finite(max(dt$meth_beta, na.rm = TRUE)) && max(dt$meth_beta, na.rm = TRUE) <= 1.5) {
+if (max(dt$meth_beta, na.rm = TRUE) <= 1.5) {
   dt[, meth_percent := meth_beta * 100]
-  cat("    methylation detected on 0-1 scale -> converted to 0-100\n")
 } else {
   dt[, meth_percent := meth_beta]
-  cat("    methylation detected on 0-100 scale\n")
 }
 
-if (all(is.na(dt$sample)) && "patient" %in% names(dt)) {
-  dt[, sample := patient]
-}
-if (all(is.na(dt$patient)) && "sample" %in% names(dt)) {
-  dt[, patient := sample]
-}
+if (all(is.na(dt$sample)) && !all(is.na(dt$patient))) dt[, sample := patient]
+if (all(is.na(dt$patient)) && !all(is.na(dt$sample))) dt[, patient := sample]
 
-cat("    sample_type counts:\n")
-print(dt[, .N, by = sample_type][order(-N)])
-cat("    rows kept:", nrow(dt), "\n")
-cat("    unique genes:", uniqueN(dt$gene), "\n")
-cat("    unique motifs:", uniqueN(dt$motif_id), "\n")
-cat("    unique cancers:", uniqueN(dt$cancer), "\n")
-cat("    TF expression column detected:", ifelse(is.na(tf_expr_col), "NO", tf_expr_col), "\n")
+dt[, sample_join := extract_tcga_sample(sample)]
+dt[, patient_join := extract_tcga_sample(patient)]
 
-# =========================
-# LOAD ANTI-CORRELATED RESULTS
-# =========================
+cat("Rows kept:", nrow(dt), "\n")
+cat("Unique genes:", uniqueN(dt$gene), "\n")
+cat("Unique motifs:", uniqueN(dt$motif_id), "\n")
+cat("Unique cancers:", uniqueN(dt$cancer), "\n")
+
+# ============================================================
+# LOAD TF TPM TABLE AND MERGE
+# ============================================================
 cat("============================================================\n")
-cat("[2/8] Loading pooled anti-correlated pairs\n")
+cat("[2/7] Loading TF TPM table and merging\n")
 cat("============================================================\n")
+
+expr_dt <- fread(expr_file)
+
+need_expr <- c("sample", "cancer", "NRF1_tpm", "BANP_tpm")
+miss_expr <- setdiff(need_expr, names(expr_dt))
+if (length(miss_expr)) stop("Missing columns in expr_file: ", paste(miss_expr, collapse = ", "))
+
+expr_dt[, sample   := as.character(sample)]
+expr_dt[, cancer   := sub("^TCGA-", "", as.character(cancer))]
+expr_dt[, NRF1_tpm := suppressWarnings(as.numeric(NRF1_tpm))]
+expr_dt[, BANP_tpm := suppressWarnings(as.numeric(BANP_tpm))]
+expr_dt[, sample_join := extract_tcga_sample(sample)]
+
+expr_dt <- expr_dt[!is.na(sample_join)]
+expr_dt <- unique(expr_dt, by = "sample_join")
+
+tf_col <- paste0(tf_name, "_tpm")
+if (!tf_col %in% names(expr_dt)) stop("Missing TF TPM column: ", tf_col)
+
+expr_sub <- expr_dt[, .(
+  sample_join,
+  tf_expression = get(tf_col),
+  NRF1_tpm,
+  BANP_tpm
+)]
+
+dt <- merge(dt, expr_sub, by = "sample_join", all.x = TRUE, sort = FALSE)
+dt[, tf_expr_log2 := fifelse(is.finite(tf_expression), log2(tf_expression + 1), NA_real_)]
+
+cat("Rows with TF TPM:", sum(is.finite(dt$tf_expression)), " / ", nrow(dt), "\n", sep = "")
+
+# ============================================================
+# LOAD ANTI-CORRELATED TABLES
+# ============================================================
+cat("============================================================\n")
+cat("[3/7] Loading anti-correlated tables\n")
+cat("============================================================\n")
+
 anti_all <- fread(anti_all_file)
+anti_bc  <- fread(anti_by_cancer_file)
 
-need_all <- c("gene", "motif_id", "n_all", "pearson_r_all", "pearson_p_all", "pearson_fdr_all")
-miss_all <- setdiff(need_all, names(anti_all))
-if (length(miss_all)) stop("Missing columns in anti_all_file: ", paste(miss_all, collapse = ", "))
+anti_all[, gene := as.character(gene)]
+anti_all[, motif_id := as.character(motif_id)]
+anti_all[, n_all := as.integer(n_all)]
+anti_all[, pearson_r_all := suppressWarnings(as.numeric(pearson_r_all))]
+anti_all[, pearson_p_all := suppressWarnings(as.numeric(pearson_p_all))]
+anti_all[, pearson_fdr_all := suppressWarnings(as.numeric(pearson_fdr_all))]
 
-anti_all[, `:=`(
-  gene            = as.character(gene),
-  motif_id        = as.character(motif_id),
-  n_all           = as.integer(n_all),
-  pearson_r_all   = suppressWarnings(as.numeric(pearson_r_all)),
-  pearson_p_all   = suppressWarnings(as.numeric(pearson_p_all)),
-  pearson_fdr_all = suppressWarnings(as.numeric(pearson_fdr_all))
-)]
+anti_bc[, gene := as.character(gene)]
+anti_bc[, motif_id := as.character(motif_id)]
+anti_bc[, cancer := sub("^TCGA-", "", as.character(cancer))]
+anti_bc[, n := as.integer(n)]
+anti_bc[, pearson_r := suppressWarnings(as.numeric(pearson_r))]
+anti_bc[, pearson_p := suppressWarnings(as.numeric(pearson_p))]
+anti_bc[, pearson_fdr := suppressWarnings(as.numeric(pearson_fdr))]
 
-cat("    pooled anti-correlated rows:", nrow(anti_all), "\n")
-cat("    pooled unique pairs:", uniqueN(anti_all[, paste(gene, motif_id, sep = '||')]), "\n")
-
-cat("============================================================\n")
-cat("[3/8] Loading by-cancer anti-correlated pairs\n")
-cat("============================================================\n")
-anti_bc <- fread(anti_by_cancer_file)
-
-need_bc <- c("gene", "motif_id", "cancer", "n", "pearson_r", "pearson_p", "pearson_fdr")
-miss_bc <- setdiff(need_bc, names(anti_bc))
-if (length(miss_bc)) stop("Missing columns in anti_by_cancer_file: ", paste(miss_bc, collapse = ", "))
-
-anti_bc[, `:=`(
-  gene        = as.character(gene),
-  motif_id    = as.character(motif_id),
-  cancer      = sub("^TCGA-", "", as.character(cancer)),
-  n           = as.integer(n),
-  pearson_r   = suppressWarnings(as.numeric(pearson_r)),
-  pearson_p   = suppressWarnings(as.numeric(pearson_p)),
-  pearson_fdr = suppressWarnings(as.numeric(pearson_fdr))
-)]
-
-cat("    by-cancer anti-correlated rows:", nrow(anti_bc), "\n")
-cat("    by-cancer unique pairs:", uniqueN(anti_bc[, paste(gene, motif_id, sep = '||')]), "\n")
-cat("    cancers with hits:", uniqueN(anti_bc$cancer), "\n")
-
-# =========================
+# ============================================================
 # LOAD COLORS
-# =========================
+# ============================================================
 cat("============================================================\n")
-cat("[4/8] Loading cancer colors\n")
+cat("[4/7] Loading cancer colors\n")
 cat("============================================================\n")
+
 col_dt <- fread(color_file, header = FALSE)
-if (ncol(col_dt) < 2) stop("color_file must have at least 2 columns: cancer and color")
+if (ncol(col_dt) < 2) stop("color_file must have at least 2 columns")
 setnames(col_dt, c("cancer", "color"))
-
-col_dt <- unique(col_dt[, .(
-  cancer = sub("^TCGA-", "", as.character(cancer)),
-  color  = as.character(color)
-)])
-col_dt <- col_dt[!is.na(cancer) & nzchar(cancer) & !is.na(color) & nzchar(color)]
-
+col_dt[, cancer := sub("^TCGA-", "", as.character(cancer))]
+col_dt[, color := as.character(color)]
+col_dt <- unique(col_dt[, .(cancer, color)])
 color_map_global <- setNames(col_dt$color, col_dt$cancer)
-cat("    loaded colors for cancers:", length(color_map_global), "\n")
 
-# =========================
-# BUILD UNIQUE PAIR SELECTION TABLE
-# =========================
+# ============================================================
+# BUILD PAIR LIST
+# ============================================================
 cat("============================================================\n")
-cat("[5/8] Building unique anti-correlated gene-motif pair list\n")
+cat("[5/7] Building selected pair list\n")
 cat("============================================================\n")
 
 pairs_from_all <- unique(anti_all[, .(gene, motif_id)])
 pairs_from_bc  <- unique(anti_bc[, .(gene, motif_id)])
 pair_union     <- unique(rbindlist(list(pairs_from_all, pairs_from_bc), fill = TRUE))
 
-cat("    pairs from pooled file:", nrow(pairs_from_all), "\n")
-cat("    pairs from by-cancer file:", nrow(pairs_from_bc), "\n")
-cat("    union unique pairs:", nrow(pair_union), "\n")
-
-all_sum <- copy(anti_all)[, .(
+all_sum <- anti_all[, .(
   pooled_n   = n_all[1],
   pooled_r   = pearson_r_all[1],
   pooled_p   = pearson_p_all[1],
-  pooled_fdr = pearson_fdr_all[1],
-  in_pooled  = TRUE
+  pooled_fdr = pearson_fdr_all[1]
 ), by = .(gene, motif_id)]
 
 bc_sum <- anti_bc[, .(
   n_sig_cancers = uniqueN(cancer),
-  sig_cancers   = paste(sort(unique(cancer)), collapse = ","),
-  best_cancer   = cancer[order(pearson_fdr, pearson_r, -n)][1],
-  best_n        = n[order(pearson_fdr, pearson_r, -n)][1],
-  best_r        = pearson_r[order(pearson_fdr, pearson_r, -n)][1],
-  best_p        = pearson_p[order(pearson_fdr, pearson_r, -n)][1],
-  best_fdr      = pearson_fdr[order(pearson_fdr, pearson_r, -n)][1],
-  in_by_cancer  = TRUE
+  sig_cancers   = paste(sort(unique(cancer)), collapse = ",")
 ), by = .(gene, motif_id)]
 
 top_pairs <- merge(pair_union, all_sum, by = c("gene", "motif_id"), all.x = TRUE)
 top_pairs <- merge(top_pairs, bc_sum, by = c("gene", "motif_id"), all.x = TRUE)
 
-top_pairs[is.na(in_pooled), in_pooled := FALSE]
-top_pairs[is.na(in_by_cancer), in_by_cancer := FALSE]
 top_pairs[is.na(n_sig_cancers), n_sig_cancers := 0L]
 top_pairs[is.na(sig_cancers), sig_cancers := ""]
-
-top_pairs[, rank_fdr := fifelse(!is.na(pooled_fdr), pooled_fdr, best_fdr)]
-top_pairs[, rank_r   := fifelse(!is.na(pooled_r), pooled_r, best_r)]
+top_pairs[, rank_fdr := pooled_fdr]
+top_pairs[, rank_r   := pooled_r]
 top_pairs <- top_pairs[order(rank_fdr, rank_r, -n_sig_cancers, gene, motif_id)]
-
-if (nrow(top_pairs) == 0) stop("No anti-correlated pairs found for plotting.")
-
 top_pairs[, rank_idx := seq_len(.N)]
 
-setcolorder(top_pairs, c(
-  "rank_idx", "gene", "motif_id",
-  "in_pooled", "pooled_n", "pooled_r", "pooled_p", "pooled_fdr",
-  "in_by_cancer", "n_sig_cancers", "sig_cancers",
-  "best_cancer", "best_n", "best_r", "best_p", "best_fdr"
-))
+cat("Selected pairs:", nrow(top_pairs), "\n")
 
-fwrite(top_pairs, top_index_file, sep = "\t")
-
-cat("    selected pairs for plotting:", nrow(top_pairs), "\n")
-cat("    saved selected pair table:", top_index_file, "\n")
-
-# =========================
-# PLOT ONE PAIR
-# =========================
+# ============================================================
+# PLOT FUNCTION
+# ============================================================
 process_one_pair <- function(sel_row) {
   tryCatch({
     target_gene  <- as.character(sel_row$gene[1])
@@ -4030,7 +3890,6 @@ process_one_pair <- function(sel_row) {
     cat("  rows in plot_dt:", nrow(plot_dt), "\n")
 
     if (nrow(plot_dt) == 0) {
-      cat("  no_rows for this pair\n")
       return(data.table(
         tf = tf_name,
         rank_idx = rank_idx,
@@ -4038,10 +3897,7 @@ process_one_pair <- function(sel_row) {
         motif_id = target_motif,
         status = "no_rows",
         error_message = NA_character_,
-        pooled_html = NA_character_,
-        tf_vs_target_html = NA_character_,
-        tf_vs_meth_html = NA_character_,
-        summary_file = NA_character_
+        html_file = NA_character_
       ))
     }
 
@@ -4058,102 +3914,60 @@ process_one_pair <- function(sel_row) {
       cat("  using all cancers present:", paste(cancers_to_plot, collapse = ","), "\n")
     }
 
+    plot_dt <- plot_dt[as.character(cancer) %in% cancers_to_plot]
+    cat("  rows after cancer filter:", nrow(plot_dt), "\n")
+
+    if (nrow(plot_dt) == 0) {
+      return(data.table(
+        tf = tf_name,
+        rank_idx = rank_idx,
+        gene = target_gene,
+        motif_id = target_motif,
+        status = "no_rows_after_cancer_filter",
+        error_message = NA_character_,
+        html_file = NA_character_
+      ))
+    }
+
     cancers_present <- sort(unique(as.character(plot_dt$cancer)))
     col_sub <- data.table(cancer = cancers_present)
     col_sub[, color := color_map_global[cancer]]
-    if (anyNA(col_sub$color)) col_sub[is.na(color), color := "grey50"]
+    col_sub[is.na(color), color := "grey50"]
     color_map <- setNames(col_sub$color, col_sub$cancer)
 
     plot_dt[, cancer := factor(as.character(cancer), levels = names(color_map))]
     plot_dt[, sample_type := factor(as.character(sample_type), levels = c("Healthy", "Tumor"))]
 
-    pair_stats <- anti_bc[gene == target_gene & motif_id == target_motif]
-    if (nrow(pair_stats) > 0) {
-      pair_stats <- unique(pair_stats[, .(cancer, gene, motif_id, n, pearson_r, pearson_p, pearson_fdr)])
-    }
-
-    missing_stat_cancers <- setdiff(cancers_to_plot, as.character(pair_stats$cancer))
-
-    if (length(missing_stat_cancers)) {
-      cat("  computing extra stats for cancers missing from anti_bc:", paste(missing_stat_cancers, collapse = ","), "\n")
-      extra <- plot_dt[as.character(cancer) %in% missing_stat_cancers, {
-        z <- safe_cor_test(meth_percent, log2_expr, min_n = min_n_cor)
-        .(
-          n = z$n,
-          pearson_r = z$r,
-          pearson_p = z$p,
-          pearson_fdr = NA_real_
-        )
-      }, by = .(cancer, gene, motif_id)]
-      pair_stats <- rbindlist(list(pair_stats, extra), fill = TRUE)
-    }
-
     global_cor <- safe_cor_test(plot_dt$meth_percent, plot_dt$log2_expr, min_n = min_n_cor)
 
     base_name <- paste0(
-      tf_name, "__",
-      sprintf("%04d", rank_idx), "__",
-      safe_name(target_gene), "__",
-      safe_name(target_motif)
+      tf_name, "__", sprintf("%04d", rank_idx), "__",
+      safe_name(target_gene), "__", safe_name(target_motif)
     )
 
-    out_html_pooled <- file.path(out_dir, paste0(base_name, "_interactive_target_vs_methylation.html"))
-    out_html_tf_tgt <- file.path(out_dir, paste0(base_name, "_interactive_tf_vs_target.html"))
-    out_html_tf_met <- file.path(out_dir, paste0(base_name, "_interactive_tf_vs_methylation.html"))
-    out_info        <- file.path(out_dir, paste0(base_name, "_summary.tsv"))
+    out_html <- file.path(out_dir, paste0(base_name, "_interactive_target_vs_methylation.html"))
 
-    per_cancer_dbg <- plot_dt[, .(
-      n_total = .N,
-      n_healthy = sum(sample_type == "Healthy", na.rm = TRUE),
-      n_tumor = sum(sample_type == "Tumor", na.rm = TRUE),
-      meth_unique_healthy = uniqueN(meth_percent[sample_type == "Healthy"]),
-      meth_unique_tumor = uniqueN(meth_percent[sample_type == "Tumor"]),
-      expr_unique_healthy = uniqueN(log2_expr[sample_type == "Healthy"]),
-      expr_unique_tumor = uniqueN(log2_expr[sample_type == "Tumor"])
-    ), by = cancer]
-
-    summary_main <- data.table(
-      tf = tf_name,
-      rank_idx = rank_idx,
-      gene = target_gene,
-      motif_id = target_motif,
-      pooled_n = sel_row$pooled_n[1],
-      pooled_r = sel_row$pooled_r[1],
-      pooled_p = sel_row$pooled_p[1],
-      pooled_fdr = sel_row$pooled_fdr[1],
-      n_sig_cancers = sel_row$n_sig_cancers[1],
-      sig_cancers = sel_row$sig_cancers[1],
-      all_sample_n = global_cor$n,
-      all_sample_r = global_cor$r,
-      all_sample_p = global_cor$p
-    )
-
-    fwrite(summary_main, out_info, sep = "\t")
-    fwrite(per_cancer_dbg, sub("_summary.tsv$", "_per_cancer_counts.tsv", out_info), sep = "\t")
-
-    # -------- hover text --------
-    plot_dt_html <- copy(plot_dt)
-    plot_dt_html[, tf_expr_log2 := fifelse(is.finite(tf_expression), log2(tf_expression + 1), NA_real_)]
-
-    plot_dt_html[, hover_text := paste0(
+    plot_dt[, hover_text := paste0(
       "TF: ", tf_name,
       "<br>Target gene: ", gene,
       "<br>Motif: ", motif_id,
-      "<br>Sample: ", fifelse(is.na(sample), "NA", sample),
+      "<br>Sample: ", fifelse(is.na(sample_join), "NA", sample_join),
       "<br>Patient: ", fifelse(is.na(patient), "NA", patient),
       "<br>Cancer: ", as.character(cancer),
       "<br>Sample type: ", as.character(sample_type),
       "<br>Methylation (%): ", ifelse(is.finite(meth_percent), sprintf('%.2f', meth_percent), "NA"),
       "<br>Target expression: ", ifelse(is.finite(expression), sprintf('%.3f', expression), "NA"),
       "<br>Target expression log2(x+1): ", ifelse(is.finite(log2_expr), sprintf('%.3f', log2_expr), "NA"),
-      "<br>", tf_name, " expression: ", ifelse(is.finite(tf_expression), sprintf('%.3f', tf_expression), "NA"),
-      "<br>", tf_name, " expression log2(x+1): ", ifelse(is.finite(tf_expr_log2), sprintf('%.3f', tf_expr_log2), "NA")
+      "<br>", tf_name, " TPM: ", ifelse(is.finite(tf_expression), sprintf('%.3f', tf_expression), "NA"),
+      "<br>", tf_name, " log2(TPM+1): ", ifelse(is.finite(tf_expr_log2), sprintf('%.3f', tf_expr_log2), "NA"),
+      "<br>NRF1 TPM: ", ifelse(is.finite(NRF1_tpm), sprintf('%.3f', NRF1_tpm), "NA"),
+      "<br>BANP TPM: ", ifelse(is.finite(BANP_tpm), sprintf('%.3f', BANP_tpm), "NA")
     )]
 
-    # -------- interactive 1: target vs methylation --------
-    cat("  writing interactive target-vs-methylation html\n")
-    p_html_1 <- plot_ly(
-      data = plot_dt_html,
+    plot_df <- as.data.frame(plot_dt)
+
+    p1 <- plotly::plot_ly(
+      data = plot_df,
       x = ~meth_percent,
       y = ~log2_expr,
       type = "scatter",
@@ -4165,76 +3979,25 @@ process_one_pair <- function(sel_row) {
       text = ~hover_text,
       hoverinfo = "text",
       marker = list(size = 7, opacity = 0.70)
-    ) %>%
-      layout(
-        title = list(text = paste0(
-          "Interactive anti-correlated scatter: ", tf_name, " | ", target_gene, " | ", target_motif,
-          "<br><sup>n=", global_cor$n,
-          " | Pearson r=", ifelse(is.na(global_cor$r), "NA", sprintf("%.3f", global_cor$r)),
-          " | p=", fmt_p(global_cor$p), "</sup>"
-        )),
-        xaxis = list(title = "Motif methylation (%) [MAX probe beta]", range = c(0, 100)),
-        yaxis = list(title = "log2(target expression + 1)")
-      )
-    saveWidget(p_html_1, out_html_pooled, selfcontained = TRUE)
+    )
 
-    # -------- interactive 2: TF vs target --------
-    if (all(is.na(plot_dt_html$tf_expression))) {
-      cat("  TF expression not found -> skipping tf-vs-target html\n")
-      out_html_tf_tgt <- NA_character_
-      out_html_tf_met <- NA_character_
-    } else {
-      cat("  writing interactive tf-vs-target html\n")
-      p_html_2 <- plot_ly(
-        data = plot_dt_html[is.finite(tf_expr_log2)],
-        x = ~tf_expr_log2,
-        y = ~log2_expr,
-        type = "scatter",
-        mode = "markers",
-        color = ~cancer,
-        colors = unname(color_map),
-        symbol = ~sample_type,
-        symbols = c("circle", "triangle-up"),
-        text = ~hover_text,
-        hoverinfo = "text",
-        marker = list(size = 7, opacity = 0.70)
-      ) %>%
-        layout(
-          title = list(text = paste0(
-            "Interactive TF-vs-target scatter: ", tf_name, " | ", target_gene, " | ", target_motif
-          )),
-          xaxis = list(title = paste0("log2(", tf_name, " expression + 1)")),
-          yaxis = list(title = "log2(target expression + 1)")
-        )
-      saveWidget(p_html_2, out_html_tf_tgt, selfcontained = TRUE)
+    p1 <- plotly::layout(
+      p1,
+      title = list(text = paste0(
+        "Interactive anti-correlated scatter: ", tf_name, " | ", target_gene, " | ", target_motif,
+        "<br><sup>n=", global_cor$n,
+        " | Pearson r=", ifelse(is.na(global_cor$r), "NA", sprintf("%.3f", global_cor$r)),
+        " | p=", fmt_p(global_cor$p), "</sup>"
+      )),
+      xaxis = list(title = "Motif methylation (%)"),
+      yaxis = list(title = "log2(target expression + 1)")
+    )
 
-      # -------- interactive 3: TF vs methylation --------
-      cat("  writing interactive tf-vs-methylation html\n")
-      p_html_3 <- plot_ly(
-        data = plot_dt_html[is.finite(tf_expr_log2)],
-        x = ~meth_percent,
-        y = ~tf_expr_log2,
-        type = "scatter",
-        mode = "markers",
-        color = ~cancer,
-        colors = unname(color_map),
-        symbol = ~sample_type,
-        symbols = c("circle", "triangle-up"),
-        text = ~hover_text,
-        hoverinfo = "text",
-        marker = list(size = 7, opacity = 0.70)
-      ) %>%
-        layout(
-          title = list(text = paste0(
-            "Interactive TF-vs-methylation scatter: ", tf_name, " | ", target_gene, " | ", target_motif
-          )),
-          xaxis = list(title = "Motif methylation (%) [MAX probe beta]", range = c(0, 100)),
-          yaxis = list(title = paste0("log2(", tf_name, " expression + 1)"))
-        )
-      saveWidget(p_html_3, out_html_tf_met, selfcontained = TRUE)
+    htmlwidgets::saveWidget(p1, out_html, selfcontained = TRUE)
+
+    if (!file.exists(out_html)) {
+      stop("Failed to create html file: ", out_html)
     }
-
-    cat("  finished html successfully\n")
 
     data.table(
       tf = tf_name,
@@ -4243,15 +4006,10 @@ process_one_pair <- function(sel_row) {
       motif_id = target_motif,
       status = "ok",
       error_message = NA_character_,
-      pooled_html = out_html_pooled,
-      tf_vs_target_html = out_html_tf_tgt,
-      tf_vs_meth_html = out_html_tf_met,
-      summary_file = out_info
+      html_file = out_html
     )
 
   }, error = function(e) {
-    cat("  ERROR in pair:", as.character(sel_row$gene[1]), "|", as.character(sel_row$motif_id[1]), "\n")
-    cat("  ERROR message:", conditionMessage(e), "\n")
     data.table(
       tf = tf_name,
       rank_idx = as.integer(sel_row$rank_idx[1]),
@@ -4259,19 +4017,16 @@ process_one_pair <- function(sel_row) {
       motif_id = as.character(sel_row$motif_id[1]),
       status = "error",
       error_message = conditionMessage(e),
-      pooled_html = NA_character_,
-      tf_vs_target_html = NA_character_,
-      tf_vs_meth_html = NA_character_,
-      summary_file = NA_character_
+      html_file = NA_character_
     )
   })
 }
 
-# =========================
-# RUN IN BATCHES
-# =========================
+# ============================================================
+# RUN SEQUENTIALLY
+# ============================================================
 cat("============================================================\n")
-cat("[6/8] Running pair plotting in parallel batches\n")
+cat("[6/7] Running pair plotting sequentially\n")
 cat("============================================================\n")
 
 idx_all <- seq_len(nrow(top_pairs))
@@ -4279,10 +4034,9 @@ batch_id <- ceiling(idx_all / batch_size)
 batch_split <- split(idx_all, batch_id)
 n_batches <- length(batch_split)
 
-cat("    total selected pairs:", length(idx_all), "\n")
-cat("    n_batches:", n_batches, "\n")
-cat("    batch_size:", batch_size, "\n")
-cat("    mc_cores:", mc_cores, "\n")
+cat("total selected pairs:", length(idx_all), "\n")
+cat("n_batches:", n_batches, "\n")
+cat("batch_size:", batch_size, "\n")
 
 res_list <- vector("list", n_batches)
 
@@ -4295,18 +4049,8 @@ for (b in seq_along(batch_split)) {
   cat("BATCH", b, "/", n_batches, "| pairs:", nrow(batch_dt), "\n")
   cat("------------------------------------------------------------\n")
 
-  cols_to_show <- c("rank_idx", "gene", "motif_id", "n_sig_cancers", "sig_cancers")
-  cols_to_show <- intersect(cols_to_show, names(batch_dt))
-  print(batch_dt[, ..cols_to_show])
-
   batch_rows <- lapply(seq_len(nrow(batch_dt)), function(i) batch_dt[i])
-
-  batch_res <- mclapply(
-    batch_rows,
-    process_one_pair,
-    mc.cores = min(mc_cores, length(batch_rows))
-  )
-
+  batch_res <- lapply(batch_rows, process_one_pair)
   res_list[[b]] <- rbindlist(batch_res, fill = TRUE)
 
   elapsed_batch <- proc.time()[3] - tb
@@ -4320,34 +4064,22 @@ for (b in seq_along(batch_split)) {
       "| ETA:", fmt_sec(eta), "\n")
 
   if (any(res_list[[b]]$status == "error")) {
-    cat("Errors in batch", b, ":\n")
     print(res_list[[b]][status == "error", .(rank_idx, gene, motif_id, error_message)])
   }
 }
 
 res <- rbindlist(res_list, fill = TRUE)
 
-# =========================
-# WRITE INDEX
-# =========================
-cat("============================================================\n")
-cat("[7/8] Writing output index\n")
-cat("============================================================\n")
-fwrite(res, out_index, sep = "\t")
-
-# =========================
-# FINAL SUMMARY
-# =========================
+# ============================================================
+# DONE
+# ============================================================
 elapsed <- proc.time()[3] - t0
 
 cat("============================================================\n")
-cat("[8/8] Done\n")
+cat("[7/7] Done\n")
 cat("============================================================\n")
-cat("TF:", tf_name, "\n")
-cat("Selected pair table :", top_index_file, "\n")
-cat("Generated report index:", out_index, "\n")
+cat("Output directory:", out_dir, "\n")
 cat("Elapsed:", fmt_sec(elapsed), "\n")
-cat("Status summary:\n")
 print(res[, .N, by = status][order(-N)])
 
 if (any(res$status == "error")) {
@@ -4355,3 +4087,24 @@ if (any(res$status == "error")) {
   print(res[status == "error", .(rank_idx, gene, motif_id, error_message)])
 }
 EOF
+
+
+
+# To see if a motif is in an atac if files are present :
+# draft:
+for files in ./peaks/filtered_peaks/*PRAD*; do
+  echo "processing $files"
+  awk '$1=="chr10" && $2<114179257 && $3>114179267 {print $0}' "$files"
+done
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-EJ-7218_1_peaks_macs.bed
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-EJ-A7NM_1_peaks_macs.bed
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-EJ-A8FP_1_peaks_macs.bed
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-VN-A88K_1_peaks_macs.bed
+# chr10   114179180       114182217       3038    27.4436 3.22876
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-YL-A8SB_1_peaks_macs.bed
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-YL-A8SL_1_peaks_macs.bed
+# chr10   114178995       114180811       1817    22.9038 2.96536
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-YL-A8SP_1_peaks_macs.bed
+# chr10   114179136       114181434       2299    56.8436 3.42666
+# processing ./peaks/filtered_peaks/ATAC_TCGA-PRAD_TCGA-ZG-A9L2_1_peaks_macs.bed
+# chr10   114179180       114181119       1940    33.3007 3.65227
