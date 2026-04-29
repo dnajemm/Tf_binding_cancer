@@ -1,7 +1,15 @@
 #!/usr/bin/env Rscript
 
-# This pipeline performs a TF-centered pan-cancer analysis linking DNA methylation at proximal motif-associated CpG sites to target-gene expression across the TCGA 3d+4d_noOV cohort on 11X and 01X. Given a transcription factor such as BANP or NRF1, it builds a proximal motif–probe map, annotates HM450 methylation samples, computes sample-level motif methylation using the maximum beta value across motif-linked probes, merges these methylation values with RNA-seq expression, and calculates pooled as well as cancer-specific Pearson correlations with FDR correction. It then generates matched-patient analyses restricted to paired healthy and tumor samples, identifies significantly anti-correlated gene–motif pairs, and produces static PDF reports and interactive HTML visualizations summarizing methylation–expression relationships across cancers and within individual cancer types.
-
+# This pipeline performs a TF-centered pan-cancer analysis linking DNA methylation
+# at proximal motif-associated CpG sites to target-gene expression across the TCGA
+# 3d+4d_noOV cohort on 11X and 01X. Given a transcription factor such as BANP or NRF1,
+# it builds a proximal motif–probe map, annotates HM450 methylation samples,
+# computes sample-level motif methylation using the maximum beta value across
+# motif-linked probes, merges these methylation values with RNA-seq expression,
+# and calculates pooled as well as cancer-specific Pearson correlations with
+# FDR correction. It then generates matched-patient analyses restricted to paired
+# healthy and tumor samples, identifies significantly anti-correlated gene–motif
+# pairs, and produces static PDF reports. Interactive HTML reports are optional.
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -31,15 +39,15 @@ tf_motif_label <- tf_map[[tf_name]]
 # ============================================================
 # GLOBAL PARAMETERS
 # ============================================================
-cohort_file   <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
-probe_gene_file <- "./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz"
-meth_dir      <- "./methylation/filtered_methylation"
-expr_file     <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
-color_file    <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
-tf_expr_file  <- "./expression/expression_of_NRF1_BANP/all_samples_NRF1_BANP_expression.tsv"
+cohort_file      <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+probe_gene_file  <- "./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz"
+meth_dir         <- "./methylation/filtered_methylation"
+expr_file        <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
+color_file       <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+tf_expr_file     <- "./expression/expression_of_NRF1_BANP/all_samples_NRF1_BANP_expression.tsv"
 
 base_dir <- file.path(
-  ".", "results", "methylation", "correlation_expression_methylation_test",
+  ".", "results", "methylation", "correlation_expression_methylation",
   "tumor_vs_healthy", tf_name
 )
 
@@ -56,9 +64,28 @@ plot_cores      <- 5L
 min_n_cor       <- 3L
 min_n_wilcox    <- 2L
 n_top           <- 50L
-anti_r_cutoff   <- -0.4
+anti_r_cutoff   <- -0.3
 anti_fdr_cutoff <- 0.05
-only_significant_cancers <- TRUE
+only_significant_cancers <- FALSE
+
+# Build interactive plotly HTML outputs?
+# FALSE = skip interactive HTML generation.
+# TRUE  = generate interactive HTML reports.
+make_interactive_html <- FALSE
+
+# Reuse already generated intermediate files if they exist.
+# Useful when rerunning only for plots/filtering.
+reuse_existing_intermediate_files <- TRUE
+
+# Extra Wilcoxon filtering for by-cancer anti-correlated pairs
+wilcox_filter_enabled <- TRUE
+wilcox_fdr_cutoff     <- 0.05
+
+# "both"        = require both expression and methylation significant
+# "either"      = require either expression or methylation significant
+# "expression"  = require only expression significant
+# "methylation" = require only methylation significant
+wilcox_filter_mode <- "both"
 
 # ============================================================
 # HELPERS
@@ -181,8 +208,10 @@ safe_wilcox_hc <- function(values, groups, min_n = 2L) {
     return(list(p = NA_real_, n_h = n_h, n_t = n_t, status = "insufficient_n"))
   }
 
-  wt <- tryCatch(suppressWarnings(wilcox.test(values ~ groups, exact = FALSE)),
-                 error = function(e) NULL)
+  wt <- tryCatch(
+    suppressWarnings(wilcox.test(values ~ groups, exact = FALSE)),
+    error = function(e) NULL
+  )
   if (is.null(wt)) return(list(p = NA_real_, n_h = n_h, n_t = n_t, status = "wilcox_error"))
 
   list(p = wt$p.value, n_h = n_h, n_t = n_t, status = "ok")
@@ -258,6 +287,12 @@ build_motif_probe_map <- function() {
   sep_line(); msg("[Step 1] Build proximal motif-probe map")
 
   out_file <- file.path(all_dir, paste0(tf_name, "_proximal_motif_probe_map_long.tsv.gz"))
+
+  if (reuse_existing_intermediate_files && file.exists(out_file)) {
+    msg("Reusing existing motif-probe map:", out_file)
+    return(out_file)
+  }
+
   dt <- fread(probe_gene_file)
 
   dt <- dt[is_proximal == TRUE]
@@ -293,6 +328,12 @@ build_methylation_sample_annotation <- function() {
   sep_line(); msg("[Step 2] Build methylation sample annotation")
 
   out_file <- file.path(all_dir, "methylation_sample_annotation_3d4d_noOV.tsv.gz")
+
+  if (reuse_existing_intermediate_files && file.exists(out_file)) {
+    msg("Reusing existing methylation sample annotation:", out_file)
+    return(out_file)
+  }
+
   cohort <- fread(cohort_file, header = FALSE)
   patients_keep <- unique(as.character(cohort[[1]]))
   patients_keep <- patients_keep[grepl("^TCGA-[^-]+-[^-]+$", patients_keep)]
@@ -334,6 +375,11 @@ compute_motif_methylation <- function(motif_probe_file, meth_annot_file) {
   out_file_probes  <- file.path(all_dir, "motif_sample_methylation_MAX_selected_probes_3d4d_noOV.tsv.gz")
   out_file_compact <- file.path(all_dir, "motif_sample_methylation_MAX_selected_probes_compact_3d4d_noOV.tsv.gz")
   out_file_status  <- file.path(all_dir, "motif_sample_methylation_MAX_status_3d4d_noOV.tsv.gz")
+
+  if (reuse_existing_intermediate_files && file.exists(out_file_main)) {
+    msg("Reusing existing motif methylation file:", out_file_main)
+    return(out_file_main)
+  }
 
   mp <- fread(motif_probe_file)
   sa <- fread(meth_annot_file)
@@ -477,6 +523,11 @@ merge_with_expression <- function(meth_file) {
 
   out_file <- file.path(all_dir, "motif_sample_expression_methylation_all.tsv.gz")
 
+  if (reuse_existing_intermediate_files && file.exists(out_file)) {
+    msg("Reusing existing merged methylation-expression file:", out_file)
+    return(out_file)
+  }
+
   meth <- fread(meth_file)
   expr <- fread(expr_file)
 
@@ -568,14 +619,21 @@ run_correlations <- function(in_file, out_dir_corr, tumor_only = FALSE) {
     .(n_all = z$n, pearson_r_all = z$r, pearson_p_all = z$p)
   }, by = .(gene, motif_id)]
 
+  res_all[, tested := !is.na(pearson_p_all) & !is.na(n_all) & n_all >= min_n_cor]
   res_all[, pearson_fdr_all := p.adjust(pearson_p_all, method = "BH")]
+  setcolorder(res_all, c("gene", "motif_id", "n_all", "pearson_r_all", "pearson_p_all", "pearson_fdr_all", "tested"))
 
   res_by_cancer <- dt[, {
     z <- safe_pearson(meth_beta, expression, min_n = min_n_cor)
     .(n = z$n, pearson_r = z$r, pearson_p = z$p)
   }, by = .(gene, motif_id, cancer)]
 
-  res_by_cancer[, pearson_fdr := p.adjust(pearson_p, method = "BH")]
+  res_by_cancer[, tested := !is.na(pearson_p) & !is.na(n) & n >= min_n_cor]
+
+  # FDR corrected within each cancer type only.
+  res_by_cancer[, pearson_fdr := p.adjust(pearson_p, method = "BH"), by = cancer]
+  setcolorder(res_by_cancer, c("gene", "motif_id", "cancer", "n", "pearson_r", "pearson_p", "pearson_fdr", "tested"))
+  setorder(res_by_cancer, cancer, pearson_fdr, pearson_p, gene, motif_id)
 
   fwrite(res_all, out_file_all, sep = "\t")
   fwrite(res_by_cancer, out_file_by_cancer, sep = "\t")
@@ -593,6 +651,12 @@ build_matched_subset <- function(in_file) {
   sep_line(); msg("[Step 4b] Build matched-patient subset")
 
   out_file <- file.path(matched_dir, "motif_sample_expression_methylation_matched_patients.tsv.gz")
+
+  if (reuse_existing_intermediate_files && file.exists(out_file)) {
+    msg("Reusing existing matched-patient file:", out_file)
+    return(out_file)
+  }
+
   dt <- fread(in_file)
 
   dt[, `:=`(
@@ -641,46 +705,6 @@ build_matched_subset <- function(in_file) {
 }
 
 # ============================================================
-# STEP 8 / 9
-# ============================================================
-extract_anti_correlated <- function(corr_files, out_dir_corr) {
-  sep_line(); msg("[Step 8/9] Extract anti-correlated pairs")
-
-  out_dir_anti <- file.path(out_dir_corr, "anti_correlated")
-  dir.create(out_dir_anti, recursive = TRUE, showWarnings = FALSE)
-
-  pooled_file <- file.path(out_dir_anti, "significant_anti_correlated_pairs_all_cancers.tsv.gz")
-  cancer_file <- file.path(out_dir_anti, "significant_anti_correlated_pairs_by_cancer.tsv.gz")
-
-  dt_all <- fread(corr_files$all)
-  anti_all <- dt_all[
-    !is.na(pearson_r_all) &
-      !is.na(pearson_fdr_all) &
-      pearson_r_all < anti_r_cutoff &
-      pearson_fdr_all < anti_fdr_cutoff
-  ][order(pearson_fdr_all, pearson_r_all)]
-
-  fwrite(anti_all, pooled_file, sep = "\t")
-
-  dt_bc <- fread(corr_files$by_cancer)
-  anti_bc <- dt_bc[
-    !is.na(pearson_r) &
-      !is.na(pearson_fdr) &
-      pearson_r < anti_r_cutoff &
-      pearson_fdr < anti_fdr_cutoff
-  ][order(cancer, pearson_fdr, pearson_r)]
-
-  fwrite(anti_bc, cancer_file, sep = "\t")
-
-  msg("Saved:", pooled_file)
-  msg("Saved:", cancer_file)
-  msg("Anti-correlated pooled pairs:", nrow(anti_all))
-  msg("Anti-correlated by-cancer pairs:", nrow(anti_bc))
-
-  list(all = pooled_file, by_cancer = cancer_file)
-}
-
-# ============================================================
 # GENERIC PLOTTING CORE
 # ============================================================
 prepare_plot_data <- function(data_file) {
@@ -716,6 +740,178 @@ prepare_plot_data <- function(data_file) {
   dt
 }
 
+# ============================================================
+# WILCOXON FILTER STATS
+# ============================================================
+compute_wilcox_filter_stats <- function(data_file) {
+  msg("Computing Wilcoxon Healthy-vs-Tumor filter statistics")
+
+  dt <- prepare_plot_data(data_file)
+
+  wilcox_stats <- dt[, {
+    expr_test <- safe_wilcox_hc(log2_expr, sample_type, min_n = min_n_wilcox)
+    meth_test <- safe_wilcox_hc(meth_percent, sample_type, min_n = min_n_wilcox)
+
+    .(
+      n_healthy = sum(sample_type == "Healthy", na.rm = TRUE),
+      n_tumor   = sum(sample_type == "Tumor", na.rm = TRUE),
+
+      expr_wilcox_p = expr_test$p,
+      expr_wilcox_status = expr_test$status,
+
+      meth_wilcox_p = meth_test$p,
+      meth_wilcox_status = meth_test$status
+    )
+  }, by = .(gene, motif_id, cancer)]
+
+  wilcox_stats[, has_both_groups := n_healthy >= min_n_wilcox & n_tumor >= min_n_wilcox]
+
+  # FDR within each cancer type.
+  wilcox_stats[, expr_wilcox_fdr := p.adjust(expr_wilcox_p, method = "BH"), by = cancer]
+  wilcox_stats[, meth_wilcox_fdr := p.adjust(meth_wilcox_p, method = "BH"), by = cancer]
+
+  if (wilcox_filter_mode == "both") {
+    wilcox_stats[, pass_wilcox_filter := fifelse(
+      has_both_groups == FALSE,
+      TRUE,
+      !is.na(expr_wilcox_fdr) & expr_wilcox_fdr < wilcox_fdr_cutoff &
+        !is.na(meth_wilcox_fdr) & meth_wilcox_fdr < wilcox_fdr_cutoff
+    )]
+  } else if (wilcox_filter_mode == "either") {
+    wilcox_stats[, pass_wilcox_filter := fifelse(
+      has_both_groups == FALSE,
+      TRUE,
+      (!is.na(expr_wilcox_fdr) & expr_wilcox_fdr < wilcox_fdr_cutoff) |
+        (!is.na(meth_wilcox_fdr) & meth_wilcox_fdr < wilcox_fdr_cutoff)
+    )]
+  } else if (wilcox_filter_mode == "expression") {
+    wilcox_stats[, pass_wilcox_filter := fifelse(
+      has_both_groups == FALSE,
+      TRUE,
+      !is.na(expr_wilcox_fdr) & expr_wilcox_fdr < wilcox_fdr_cutoff
+    )]
+  } else if (wilcox_filter_mode == "methylation") {
+    wilcox_stats[, pass_wilcox_filter := fifelse(
+      has_both_groups == FALSE,
+      TRUE,
+      !is.na(meth_wilcox_fdr) & meth_wilcox_fdr < wilcox_fdr_cutoff
+    )]
+  } else {
+    stop("Unsupported wilcox_filter_mode: ", wilcox_filter_mode)
+  }
+
+  wilcox_stats[, wilcox_filter_rule := fifelse(
+    has_both_groups == TRUE,
+    paste0("applied_", wilcox_filter_mode),
+    "not_applied_missing_healthy_or_tumor"
+  )]
+
+  setorder(wilcox_stats, cancer, gene, motif_id)
+  wilcox_stats[]
+}
+
+# ============================================================
+# STEP 8 / 9
+# ============================================================
+extract_anti_correlated <- function(corr_files, out_dir_corr, data_file) {
+  sep_line(); msg("[Step 8/9] Extract anti-correlated pairs")
+
+  out_dir_anti <- file.path(out_dir_corr, "anti_correlated")
+  dir.create(out_dir_anti, recursive = TRUE, showWarnings = FALSE)
+
+  pooled_file <- file.path(out_dir_anti, "significant_anti_correlated_pairs_all_cancers.tsv.gz")
+  cancer_file <- file.path(out_dir_anti, "significant_anti_correlated_pairs_by_cancer.tsv.gz")
+  wilcox_file <- file.path(out_dir_anti, "wilcox_healthy_vs_tumor_by_cancer.tsv.gz")
+
+  dt_all <- fread(corr_files$all)
+  anti_all <- dt_all[
+    !is.na(pearson_r_all) &
+      !is.na(pearson_fdr_all) &
+      pearson_r_all < anti_r_cutoff &
+      pearson_fdr_all < anti_fdr_cutoff
+  ][order(pearson_fdr_all, pearson_r_all)]
+
+  fwrite(anti_all, pooled_file, sep = "\t")
+
+  dt_bc <- fread(corr_files$by_cancer)
+  dt_bc[, cancer := sub("^TCGA-", "", as.character(cancer))]
+
+  anti_bc <- dt_bc[
+    !is.na(pearson_r) &
+      !is.na(pearson_fdr) &
+      pearson_r < anti_r_cutoff &
+      pearson_fdr < anti_fdr_cutoff
+  ][order(cancer, pearson_fdr, pearson_r)]
+
+  if (wilcox_filter_enabled && nrow(anti_bc) > 0) {
+    wilcox_stats <- compute_wilcox_filter_stats(data_file)
+    fwrite(wilcox_stats, wilcox_file, sep = "\t")
+
+    anti_bc <- merge(
+      anti_bc,
+      wilcox_stats[, .(
+        gene,
+        motif_id,
+        cancer,
+        n_healthy,
+        n_tumor,
+        has_both_groups,
+        expr_wilcox_p,
+        expr_wilcox_fdr,
+        expr_wilcox_status,
+        meth_wilcox_p,
+        meth_wilcox_fdr,
+        meth_wilcox_status,
+        wilcox_filter_rule,
+        pass_wilcox_filter
+      )],
+      by = c("gene", "motif_id", "cancer"),
+      all.x = TRUE
+    )
+
+    anti_bc[is.na(has_both_groups), has_both_groups := FALSE]
+    anti_bc[is.na(pass_wilcox_filter), pass_wilcox_filter := FALSE]
+    anti_bc[is.na(wilcox_filter_rule), wilcox_filter_rule := "missing_wilcox_statistics"]
+
+    anti_bc_before <- nrow(anti_bc)
+    anti_bc <- anti_bc[pass_wilcox_filter == TRUE]
+
+    msg("Wilcoxon filter mode:", wilcox_filter_mode)
+    msg("Wilcoxon FDR cutoff:", wilcox_fdr_cutoff)
+    msg("By-cancer anti-correlated rows before Wilcoxon filter:", anti_bc_before)
+    msg("By-cancer anti-correlated rows after Wilcoxon filter:", nrow(anti_bc))
+    msg("Saved Wilcoxon table:", wilcox_file)
+  } else {
+    anti_bc[, `:=`(
+      n_healthy = NA_integer_,
+      n_tumor = NA_integer_,
+      has_both_groups = NA,
+      expr_wilcox_p = NA_real_,
+      expr_wilcox_fdr = NA_real_,
+      expr_wilcox_status = NA_character_,
+      meth_wilcox_p = NA_real_,
+      meth_wilcox_fdr = NA_real_,
+      meth_wilcox_status = NA_character_,
+      wilcox_filter_rule = "not_applied",
+      pass_wilcox_filter = TRUE
+    )]
+  }
+
+  setorder(anti_bc, cancer, pearson_fdr, pearson_r)
+
+  fwrite(anti_bc, cancer_file, sep = "\t")
+
+  msg("Saved:", pooled_file)
+  msg("Saved:", cancer_file)
+  msg("Anti-correlated pooled pairs:", nrow(anti_all))
+  msg("Anti-correlated by-cancer pairs after Wilcoxon rule:", nrow(anti_bc))
+
+  list(all = pooled_file, by_cancer = cancer_file)
+}
+
+# ============================================================
+# PLOT ONE PAIR REPORT
+# ============================================================
 plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, color_map_global, matched = FALSE) {
   pdf_open <- FALSE
   tryCatch({
@@ -785,6 +981,8 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
 
     p1 <- ggplot(plot_dt_p1, aes(x = meth_percent, y = log2_expr, color = cancer, shape = sample_type)) +
       geom_point(size = 2.2, alpha = 0.65) +
+      geom_hline(yintercept = 1, color = "red", linewidth = 0.8, linetype = "dashed") +
+      annotate("text", x = 95, y = 1, label = "expression = 1", color = "red", vjust = -0.5, hjust = 1, size = 4) +
       geom_smooth(
         data = plot_dt_p1,
         mapping = aes(x = meth_percent, y = log2_expr, group = 1),
@@ -834,11 +1032,14 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
                " ; Healthy n=", sum(dca$sample_type == "Healthy"))
       }
 
+      # Red threshold line is intentionally added to every individual cancer scatter page.
       p_ca <- ggplot() +
         geom_point(data = dca_p[sample_type == "Tumor"], aes(x = meth_percent, y = log2_expr),
                    color = as.character(color_map[as.character(ca)]), shape = 16, size = 1.8, alpha = 0.40) +
         geom_point(data = dca_p[sample_type == "Healthy"], aes(x = meth_percent, y = log2_expr),
                    color = as.character(color_map[as.character(ca)]), shape = 17, size = 3.5, stroke = 1.0, alpha = 1) +
+        geom_hline(yintercept = 1, color = "red", linewidth = 0.8, linetype = "dashed") +
+        annotate("text", x = 95, y = 1, label = "expression = 1", color = "red", vjust = -0.5, hjust = 1, size = 4) +
         geom_smooth(data = dca, aes(x = meth_percent, y = log2_expr), method = "lm", se = FALSE,
                     color = "black", linewidth = 0.8) +
         annotate("text", x = min(dca$meth_percent, na.rm = TRUE), y = max(dca$log2_expr, na.rm = TRUE),
@@ -1411,7 +1612,8 @@ build_interactive_html <- function(data_file, anti_files, out_dir_html) {
                  status = "ok", error_message = NA_character_, html_file = out_html)
     }, error = function(e) {
       data.table(tf = tf_name, rank_idx = as.integer(sel_row$rank_idx[1]),
-                 gene = as.character(sel_row$gene[1]), motif_id = as.character(sel_row$motif_id[1]),
+                 gene = as.character(sel_row$gene[1]),
+                 motif_id = as.character(sel_row$motif_id[1]),
                  status = "error", error_message = conditionMessage(e), html_file = NA_character_)
     })
   }
@@ -1450,6 +1652,8 @@ run_pipeline <- function() {
   sep_line()
   msg("Running pipeline for TF:", tf_name)
   msg("Motif label:", tf_motif_label)
+  msg("Interactive HTML:", make_interactive_html)
+  msg("Reuse existing intermediate files:", reuse_existing_intermediate_files)
   sep_line()
 
   motif_probe_file <- build_motif_probe_map()
@@ -1457,6 +1661,9 @@ run_pipeline <- function() {
   meth_file        <- compute_motif_methylation(motif_probe_file, meth_annot_file)
   merged_file      <- merge_with_expression(meth_file)
 
+  # ==========================================================
+  # ALL SAMPLES
+  # ==========================================================
   corr_all <- run_correlations(
     in_file = merged_file,
     out_dir_corr = file.path(all_dir, "correlation_stats"),
@@ -1470,6 +1677,31 @@ run_pipeline <- function() {
     matched = FALSE
   )
 
+  anti_files_all <- extract_anti_correlated(
+    corr_files = corr_all,
+    out_dir_corr = file.path(all_dir, "correlation_stats"),
+    data_file = merged_file
+  )
+
+  plot_all_anti_correlated(
+    data_file = merged_file,
+    anti_files = anti_files_all,
+    out_dir_plot = file.path(all_dir, "anti_correlated_pair_plots")
+  )
+
+  if (make_interactive_html) {
+    build_interactive_html(
+      data_file = merged_file,
+      anti_files = anti_files_all,
+      out_dir_html = file.path(all_dir, "interactive_target_vs_methylation_only")
+    )
+  } else {
+    msg("Skipping interactive HTML plots for all samples. Set make_interactive_html <- TRUE to generate them.")
+  }
+
+  # ==========================================================
+  # MATCHED PATIENTS
+  # ==========================================================
   matched_file <- build_matched_subset(merged_file)
 
   corr_matched <- run_correlations(
@@ -1485,22 +1717,27 @@ run_pipeline <- function() {
     matched = TRUE
   )
 
-  anti_files <- extract_anti_correlated(
-    corr_files = corr_all,
-    out_dir_corr = file.path(all_dir, "correlation_stats")
+  anti_files_matched <- extract_anti_correlated(
+    corr_files = corr_matched,
+    out_dir_corr = file.path(matched_dir, "correlation_stats"),
+    data_file = matched_file
   )
 
   plot_all_anti_correlated(
-    data_file = merged_file,
-    anti_files = anti_files,
-    out_dir_plot = file.path(all_dir, "anti_correlated_pair_plots")
+    data_file = matched_file,
+    anti_files = anti_files_matched,
+    out_dir_plot = file.path(matched_dir, "anti_correlated_pair_plots")
   )
 
-  build_interactive_html(
-    data_file = merged_file,
-    anti_files = anti_files,
-    out_dir_html = file.path(all_dir, "interactive_target_vs_methylation_only")
-  )
+  if (make_interactive_html) {
+    build_interactive_html(
+      data_file = matched_file,
+      anti_files = anti_files_matched,
+      out_dir_html = file.path(matched_dir, "interactive_target_vs_methylation_only")
+    )
+  } else {
+    msg("Skipping interactive HTML plots for matched patients. Set make_interactive_html <- TRUE to generate them.")
+  }
 
   sep_line()
   msg("Pipeline finished for TF:", tf_name)

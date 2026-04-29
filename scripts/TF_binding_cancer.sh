@@ -21,7 +21,7 @@ conda activate ./conda_envs/TF_binding_cancer_env
 # BANP 
 ###############################################################################
 
-# Install MEM BANP of JASPAR 2026 and put it in the folder of MEME:
+# Install MEME BANP of JASPAR 2026 and put it in the folder of MEME:
 
 #wget "https://jaspar.elixir.no/api/v1/matrix/MA2503.1.meme" -O /data/genome/motifs/jaspar_2024/meme/vertebrata/MA2503.1.meme.  <--DIDNT DO IT BECAUSE NO PERMISSION
 
@@ -513,6 +513,77 @@ ggsave(
 )
 '
 
+###############################################################################
+# ONE BARPLOT: all motifs vs mm0to2_noCGmm vs after chrX/Y filtering
+###############################################################################
+Rscript -e '
+library(ggplot2)
+library(scales)
+
+count_gz_lines <- function(f) {
+  as.numeric(system(paste("zcat", shQuote(f), "| wc -l"), intern = TRUE))
+}
+
+motifs <- c("BANP", "NRF1")
+
+files_map <- list(
+  BANP = c(
+    "./motifs/BANP.bed.gz",
+    "./motifs/BANP_mm0to2_noCGmm.bed.gz",
+    "./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz"
+  ),
+  NRF1 = c(
+    "./motifs/NRF1.bed.gz",
+    "./motifs/NRF1_mm0to2_noCGmm.bed.gz",
+    "./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz"
+  )
+)
+
+statuses <- c(
+  "All motifs",
+  "mm0to2_noCGmm",
+  "After chrX/Y filtering"
+)
+
+banp_counts <- sapply(files_map[["BANP"]], count_gz_lines)
+nrf1_counts <- sapply(files_map[["NRF1"]], count_gz_lines)
+
+df <- data.frame(
+  Motif  = rep(motifs, each = length(statuses)),
+  Status = rep(statuses, times = length(motifs)),
+  Count  = c(banp_counts, nrf1_counts)
+)
+
+df$Motif <- factor(df$Motif, levels = c("BANP", "NRF1"))
+df$Status <- factor(df$Status, levels = statuses)
+
+out_pdf <- "./results/motifs/motif_counts_combined_BANP_NRF1.pdf"
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+p <- ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  geom_text(
+    aes(label = comma(Count)),
+    position = position_dodge(width = 0.9),
+    vjust = -0.3,
+    size = 3
+  ) +
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.08))) +
+  theme_minimal() +
+  labs(
+    title = "Number of motifs before and after filtering",
+    subtitle = "All motifs vs mm0to2_noCGmm vs after chrX/Y filtering",
+    y = "Count",
+    x = "Motif"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12),
+    plot.subtitle = element_text(hjust = 0.5, size = 9)
+  )
+
+ggsave(out_pdf, plot = p, width = 7, height = 4.5, dpi = 300, bg = "white")
+cat("[DONE] Wrote:", out_pdf, "\n")
+'
 
 ###############################################################################
 # 2) MOTIF DISTANCE TO TSS
@@ -1012,23 +1083,26 @@ dev.off()
 
 cat("DONE ->", out_pdf, "\n")
 '
-
+#im here 
 ###############################################################################
-# PROPORTIONAL EULER DIAGRAM PER TF : 2mm MOTIFS, ATAC, HM450, SNVs 
+# PROPORTIONAL EULER DIAGRAM PER TF : 2mm MOTIFS, HM450, SNVs
+# ONLY PAIRWISE:
+#   1) motifs vs HM450
+#   2) motifs vs SNVs
 ###############################################################################
 Rscript -e '
 library(eulerr)
 
-out_pdf <- "./results/motifs/Euler_VENN_NRF1_BANP_mm0to2_Motifs_ATAC_HM450_SNV.pdf"
+out_pdf <- "./results/motifs/Euler_VENN_NRF1_BANP_mm0to2_Motifs_HM450_SNV_pairwise.pdf"
 dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
 
-pdf(out_pdf, width = 14, height = 14)
-par(mar = c(4, 4, 6, 2))
+pdf(out_pdf, width = 14, height = 16)
+par(mar = c(4, 4, 8, 2))
 
-motifs   <- c("NRF1","BANP")
-variants <- c("mm0to2","mm0to2_noCGmm")
+motifs   <- c("NRF1", "BANP")
+variants <- c("mm0to2", "mm0to2_noCGmm")
 
-read_ids <- function(path, gz=FALSE){
+read_ids <- function(path, gz = FALSE){
   if(!file.exists(path)){
     warning("Missing file: ", path)
     return(character(0))
@@ -1040,10 +1114,9 @@ read_ids <- function(path, gz=FALSE){
 for(motif in motifs){
   for(variant in variants){
 
-    # ---------- inputs for this motif/variant ----------
-    motif_all_file  <- paste0("./motifs/", motif, "_", variant, "noCGmm_noXY.bed.gz")
-    motif_peak_file <- paste0("./motifs/overlaps/motif2mm_peak_overlaps/", motif, "_", variant, "_peak_overlaps.bed")
-    motif_snv_file  <- paste0("./motifs/overlaps/motif2mm_snv_overlaps/", motif, "_", variant, "_motifs_with_SNVs.bed")
+    # ---------- input files ----------
+    motif_all_file <- paste0("./motifs/", motif, "_", variant, "_noXY.bed.gz")
+    motif_snv_file <- paste0("./motifs/overlaps/motif2mm_snv_overlaps/", motif, "_", variant, "_motifs_with_SNVs.bed")
 
     motif_hm450_file <- if(variant == "mm0to2"){
       paste0("./motifs/overlaps/intersected_motifs2mm_HM450/", motif, "_intersected_methylation.bed")
@@ -1051,61 +1124,62 @@ for(motif in motifs){
       paste0("./motifs/overlaps/intersected_motifs2mm_HM450/", motif, "_noCGmm_intersected_methylation.bed")
     }
 
-    motif_all      <- read_ids(motif_all_file, gz=TRUE)
-    motif_peak     <- read_ids(motif_peak_file)
+    # ---------- read sets ----------
+    motif_all      <- read_ids(motif_all_file, gz = TRUE)
     motif_variants <- read_ids(motif_snv_file)
     motif_hm450    <- read_ids(motif_hm450_file)
 
     all_name <- paste0("All ", motif, " motifs (", variant, ")")
 
-    ############################################
-    ## PAGE A — (same as PAGE 1/3): ATAC + SNVs ##
-    ############################################
-    plot.new()
-
-    fit <- euler(c(
-      setNames(list(motif_all), all_name),
-      list(
-        "Motifs in ATAC"         = motif_peak,
-        "Motifs with variants"   = motif_variants
-      )
-    ))
-
-    p <- plot(fit,
-              fills = c("steelblue","lightgreen","red"),
-              edges = "black",
-              quantities = list(type="counts", cex=0.9),
-              labels = list(cex=1.1),
-              main = NULL)
-    print(p)
-
-    mtext(paste0(motif, " motifs (", variant, "): genome-wide, accessible,\nand overlapping SNVs"),
-          side = 3, line = 2, cex = 1.2)
-
     #############################################
-    ## PAGE B — (same as PAGE 2/4): ATAC + HM450 ##
+    # PAGE 1 — motifs vs HM450 probes
     #############################################
     plot.new()
 
-    fit <- euler(c(
+    fit1 <- euler(c(
       setNames(list(motif_all), all_name),
-      list(
-        "Motifs in ATAC"            = motif_peak,
-        "Motifs with HM450 probes"  = motif_hm450
-      )
+      list("Motifs with HM450 probes" = motif_hm450)
     ))
 
-    p <- plot(fit,
-              fills = c("steelblue","lightgreen","orange"),
-              edges = "black",
-              quantities = list(type="counts", cex=0.9),
-              labels = list(cex=1.1),
-              main = NULL)
-    print(p)
+    p1 <- plot(
+      fit1,
+      fills = c("steelblue", "orange"),
+      edges = "black",
+      quantities = list(type = "counts", cex = 1),
+      labels = list(cex = 1.1),
+      main = NULL
+    )
+    print(p1)
 
-    text(x = 0.8, y = 0.95,
-        labels = "NRF1 motifs: genome-wide, accessible,\nand overlapping SNVs",
-        cex = 1.2)
+    mtext(
+      paste0(motif, " motifs (", variant, "): genome-wide vs HM450-overlapping motifs"),
+      side = 3, line = 2, cex = 1.2
+    )
+
+    #############################################
+    # PAGE 2 — motifs vs SNVs
+    #############################################
+    plot.new()
+
+    fit2 <- euler(c(
+      setNames(list(motif_all), all_name),
+      list("Motifs with variants" = motif_variants)
+    ))
+
+    p2 <- plot(
+      fit2,
+      fills = c("steelblue", "red"),
+      edges = "black",
+      quantities = list(type = "counts", cex = 1),
+      labels = list(cex = 1.1),
+      main = NULL
+    )
+    print(p2)
+
+    mtext(
+      paste0(motif, " motifs (", variant, "): genome-wide vs SNV-overlapping motifs"),
+      side = 3, line = 2, cex = 1.2
+    )
   }
 }
 
@@ -11002,3 +11076,85 @@ NR==1 {next}
   prev_line=$0
 }' ./motifs/BANP_mm0to2_noCGmm_noXY_closest_genes.bed | awk '$1!="chrY" && $1!="chrM" && $1!="chrX" {print $0}' 
 
+
+
+
+#########################################################
+# Correlation methylation expression proximal filtering 
+#########################################################
+
+# filter out motif gene pairs that passed the correlation threshold to retain ones that are in the 100bp limit of the TSS and dont have two motifs next to each other that have the same correlation and significant in the same type of cancer types.
+# Just for BANP : went from 167 to 72
+mkdir -p ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/BANP/all_samples/filtered_anticorrelated_genes/
+awk 'BEGIN{FS=OFS="\t"}
+
+# -------- pass 1: selected_anti_correlated_pairs_all_BANP.tsv --------
+FNR==NR{
+  if (FNR==1) next
+
+  key = $1 OFS $9          # gene + sig_cancers
+  motif_key = key OFS $2   # gene + sig_cancers + motif_id
+
+  if (!(motif_key in seen_motif)) {
+    seen_motif[motif_key] = 1
+    motif_count[key]++
+  }
+
+  row_key[FNR] = key
+  row_motif[FNR] = $2
+  next
+}
+
+# -------- pass 2: closest_genes.bed --------
+FNR==1{
+  print $0, "motif_id_rebuilt"
+  next
+}
+
+{
+  motif_id = $1 ":" $2 ":" $3 ":" $6
+
+  # keep only motifs whose gene+sig_cancers group had exactly 1 distinct motif
+  keep_ok = 0
+  for (k in seen_motif) {
+    split(k, a, OFS)
+    # a[1]=gene, a[2]=sig_cancers, a[3]=motif_id
+    if (a[3] == motif_id && motif_count[a[1] OFS a[2]] == 1) {
+      keep_ok = 1
+      break
+    }
+  }
+
+  if (keep_ok && $14 <= 100) {
+    print $0, motif_id
+  }
+}' \
+./results/methylation/correlation_expression_methylation/tumor_vs_healthy/BANP/all_samples/anti_correlated_pair_plots/selected_anti_correlated_pairs_all_BANP.tsv \
+./motifs/BANP_mm0to2_noCGmm_noXY_closest_genes.bed \
+> ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/BANP/all_samples/filtered_anticorrelated_genes/matched_motifs_within_100bp_filtered.tsv
+
+# To filter for NRF1 the ones with multiple motifs correlated : went from 275 to 253
+mkdir -p ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/NRF1/all_samples/filtered_anticorrelated_genes/
+awk 'BEGIN{FS=OFS="\t"}
+NR==1{
+  header=$0
+  next
+}
+{
+  key=$1 OFS $9
+  motif_key=key OFS $2
+  rows[NR]=$0
+  rowkey[NR]=key
+  if (!(motif_key in seen_motif)) {
+    seen_motif[motif_key]=1
+    motif_count[key]++
+  }
+}
+END{
+  print header
+  for (i=2; i<=NR; i++) {
+    if (motif_count[rowkey[i]] == 1) {
+      print rows[i]
+    }
+  }
+}' ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/NRF1/all_samples/anti_correlated_pair_plots/selected_anti_correlated_pairs_all_NRF1.tsv > ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/NRF1/all_samples/filtered_anticorrelated_genes/NRF1_filtered.tsv
