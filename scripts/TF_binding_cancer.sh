@@ -1083,109 +1083,199 @@ dev.off()
 
 cat("DONE ->", out_pdf, "\n")
 '
-#im here 
+
 ###############################################################################
-# PROPORTIONAL EULER DIAGRAM PER TF : 2mm MOTIFS, HM450, SNVs
+# PROPORTIONAL EULER DIAGRAM PER TF : 2mm MOTIFS, HM450
 # ONLY PAIRWISE:
 #   1) motifs vs HM450
-#   2) motifs vs SNVs
 ###############################################################################
 Rscript -e '
-library(eulerr)
+suppressPackageStartupMessages(library(data.table))
 
-out_pdf <- "./results/motifs/Euler_VENN_NRF1_BANP_mm0to2_Motifs_HM450_SNV_pairwise.pdf"
-dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+out_dir <- "./results/motifs"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-pdf(out_pdf, width = 14, height = 16)
-par(mar = c(4, 4, 8, 2))
+motifs  <- c("BANP", "NRF1")
+variant <- "mm0to2_noCGmm"
 
-motifs   <- c("NRF1", "BANP")
-variants <- c("mm0to2", "mm0to2_noCGmm")
-
-read_ids <- function(path, gz = FALSE){
+# ------------------------------------------------------------
+# Helper: read motif IDs as chr:start:end
+# ------------------------------------------------------------
+read_motif_ids <- function(path, gz = FALSE){
   if(!file.exists(path)){
     warning("Missing file: ", path)
     return(character(0))
   }
-  x <- if(gz) read.table(gzfile(path)) else read.table(path)
-  unique(with(x, paste(V1, V2, V3, sep=":")))
-}
 
-for(motif in motifs){
-  for(variant in variants){
-
-    # ---------- input files ----------
-    motif_all_file <- paste0("./motifs/", motif, "_", variant, "_noXY.bed.gz")
-    motif_snv_file <- paste0("./motifs/overlaps/motif2mm_snv_overlaps/", motif, "_", variant, "_motifs_with_SNVs.bed")
-
-    motif_hm450_file <- if(variant == "mm0to2"){
-      paste0("./motifs/overlaps/intersected_motifs2mm_HM450/", motif, "_intersected_methylation.bed")
-    } else {
-      paste0("./motifs/overlaps/intersected_motifs2mm_HM450/", motif, "_noCGmm_intersected_methylation.bed")
-    }
-
-    # ---------- read sets ----------
-    motif_all      <- read_ids(motif_all_file, gz = TRUE)
-    motif_variants <- read_ids(motif_snv_file)
-    motif_hm450    <- read_ids(motif_hm450_file)
-
-    all_name <- paste0("All ", motif, " motifs (", variant, ")")
-
-    #############################################
-    # PAGE 1 — motifs vs HM450 probes
-    #############################################
-    plot.new()
-
-    fit1 <- euler(c(
-      setNames(list(motif_all), all_name),
-      list("Motifs with HM450 probes" = motif_hm450)
-    ))
-
-    p1 <- plot(
-      fit1,
-      fills = c("steelblue", "orange"),
-      edges = "black",
-      quantities = list(type = "counts", cex = 1),
-      labels = list(cex = 1.1),
-      main = NULL
-    )
-    print(p1)
-
-    mtext(
-      paste0(motif, " motifs (", variant, "): genome-wide vs HM450-overlapping motifs"),
-      side = 3, line = 2, cex = 1.2
-    )
-
-    #############################################
-    # PAGE 2 — motifs vs SNVs
-    #############################################
-    plot.new()
-
-    fit2 <- euler(c(
-      setNames(list(motif_all), all_name),
-      list("Motifs with variants" = motif_variants)
-    ))
-
-    p2 <- plot(
-      fit2,
-      fills = c("steelblue", "red"),
-      edges = "black",
-      quantities = list(type = "counts", cex = 1),
-      labels = list(cex = 1.1),
-      main = NULL
-    )
-    print(p2)
-
-    mtext(
-      paste0(motif, " motifs (", variant, "): genome-wide vs SNV-overlapping motifs"),
-      side = 3, line = 2, cex = 1.2
-    )
+  x <- if(gz){
+    fread(cmd = paste("zcat", shQuote(path)), header = FALSE)
+  } else {
+    fread(path, header = FALSE)
   }
+
+  if(ncol(x) < 3){
+    warning("File has fewer than 3 columns: ", path)
+    return(character(0))
+  }
+
+  unique(paste(x[[1]], x[[2]], x[[3]], sep = ":"))
 }
 
-dev.off()
-cat("DONE ->", out_pdf, "\n")
+# ------------------------------------------------------------
+# Loop over TFs
+# ------------------------------------------------------------
+for(motif in motifs){
+
+  motif_all_file <- paste0("./motifs/", motif, "_", variant, "_noXY.bed.gz")
+
+  motif_hm450_file <- paste0(
+    "./motifs/overlaps/intersected_motifs2mm_HM450/",
+    motif, "_noCGmm_intersected_methylation.bed"
+  )
+
+  all_ids   <- read_motif_ids(motif_all_file, gz = TRUE)
+  hm450_ids <- read_motif_ids(motif_hm450_file, gz = FALSE)
+
+  # make sure the HM450-overlapping motifs are a subset of all motifs
+  hm450_ids <- intersect(hm450_ids, all_ids)
+
+  n_all      <- length(all_ids)
+  n_hm450    <- length(hm450_ids)
+  n_no_hm450 <- n_all - n_hm450
+
+  if(n_all == 0){
+    warning("No motifs found for ", motif, ". Skipping.")
+    next
+  }
+
+  counts <- data.table(
+    category = c(
+      "All motifs",
+      "Motifs overlapping HM450 probes",
+      "Motifs not overlapping HM450 probes"
+    ),
+    n = c(n_all, n_hm450, n_no_hm450)
+  )
+
+  out_tsv <- file.path(
+    out_dir,
+    paste0("Euler_", motif, "_", variant, "_HM450_counts.tsv")
+  )
+  fwrite(counts, out_tsv, sep = "\t")
+
+  out_pdf <- file.path(
+    out_dir,
+    paste0("Euler_", motif, "_", variant, "_HM450.pdf")
+  )
+
+  # ----------------------------------------------------------
+  # Geometry
+  # ----------------------------------------------------------
+  r_all <- 1.00
+  r_hm  <- sqrt(n_hm450 / n_all) * 0.82
+  if(!is.finite(r_hm) || r_hm <= 0) r_hm <- 0.05
+
+  # ----------------------------------------------------------
+  # Colors: pink + yellow like your example
+  # ----------------------------------------------------------
+  col_outer_fill <- adjustcolor("#CC88A5", alpha.f = 0.95)
+  col_outer_edge <- "#4A2A39"
+
+  col_inner_fill <- adjustcolor("#E8CF78", alpha.f = 0.98)
+  col_inner_edge <- "#5C4A14"
+
+  # ----------------------------------------------------------
+  # Plot
+  # ----------------------------------------------------------
+  pdf(out_pdf, width = 8.5, height = 8)
+
+  par(
+    mar = c(1.2, 1.2, 4.0, 1.2),
+    xpd = NA,
+    bg = "white",
+    family = "Helvetica"
+  )
+
+  plot(
+    0, 0,
+    type = "n",
+    xlim = c(-1.15, 1.15),
+    ylim = c(-1.15, 1.15),
+    axes = FALSE,
+    xlab = "",
+    ylab = "",
+    asp = 1
+  )
+
+  # Outer circle = all motifs
+  symbols(
+    0, 0,
+    circles = r_all,
+    inches = FALSE,
+    add = TRUE,
+    bg = col_outer_fill,
+    fg = col_outer_edge,
+    lwd = 1.2
+  )
+
+  # Inner circle = motifs overlapping HM450 probes
+  # placed a bit to the right like in your example
+  symbols(
+    0.50, 0,
+    circles = r_hm,
+    inches = FALSE,
+    add = TRUE,
+    bg = col_inner_fill,
+    fg = col_inner_edge,
+    lwd = 1.2
+  )
+
+  # Title
+  title(
+    main = paste0(motif, " motifs (", variant, "): genome-wide vs HM450-overlapping motifs"),
+    font.main = 2,
+    cex.main = 1.15
+  )
+
+  # Outer circle label
+  text(
+    -0.42, 0.10,
+    labels = paste0(
+      "All ", motif, " motifs\n(",
+      variant,
+      ")\n",
+      format(n_all, big.mark = ",")
+    ),
+    font = 2,
+    cex = 1.15
+  )
+
+  # Inner circle label
+  text(
+    0.50, 0.02,
+    labels = paste0(
+      "Motifs with\nHM450 probes\n",
+      format(n_hm450, big.mark = ",")
+    ),
+    font = 2,
+    cex = 1.10
+  )
+
+  dev.off()
+
+  cat("DONE ->", out_pdf, "\n")
+  cat("COUNTS ->", out_tsv, "\n")
+  cat("  all motifs:", n_all, "\n")
+  cat("  motifs overlapping HM450:", n_hm450, "\n")
+  cat("  motifs not overlapping HM450:", n_no_hm450, "\n\n")
+}
 '
+# IM HERE NOT CORRECT YET 
+
+
+
+
+
 ###############################################################################
 # 7) Linking motifs with the closest gene using bedtools closest 
 ###############################################################################
@@ -1883,6 +1973,57 @@ echo "[PID $$] Filtered $(basename "$file") -> $(basename "$out")"
 # filter out probes that are in chrM and chrY and chrX and duplicated probes and keep only cg probes --> 470851 probes
 cat ./methylation/annotated_methylation_data_probes.bed | awk 'BEGIN{FS=OFS="\t"} $1!="chrX" && $1!="chrY" && $1!="chrM" && !seen[$4]++ && $4 ~ /^cg/ {print}' > ./methylation/annotated_methylation_data_probes_filtered.bed
 
+# build a barplot of probes before and after filtering :
+Rscript -e '
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(scales)
+})
+
+original_file <- "./methylation/annotated_methylation_data_probes.bed"
+filtered_file <- "./methylation/annotated_methylation_data_probes_filtered.bed"
+
+count_lines <- function(file) {
+  if (!file.exists(file)) stop("File not found: ", file)
+  as.integer(system(paste("wc -l <", shQuote(file)), intern = TRUE))
+}
+
+original <- count_lines(original_file)
+filtered <- count_lines(filtered_file)
+
+dt <- data.frame(
+  dataset = factor(c("Before filtering", "After filtering"),levels = c("Before filtering", "After filtering")),
+  n_probes = c(original, filtered)
+)
+
+p <- ggplot(dt, aes(x = dataset, y = n_probes)) +
+  geom_col(width = 0.6, fill = "#F4A300") +   # yellow-orange
+  geom_text(aes(label = comma(n_probes)),vjust = -0.4, size = 5) +
+  scale_y_continuous(
+    labels = label_number(scale = 1/1000, suffix = "K"),
+    expand = expansion(mult = c(0, 0.08))
+  ) +
+  labs(
+    title = "Number of methylation probes before and after filtering",
+    x = NULL,
+    y = "Number of probes (thousands)"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(face = "bold")
+  )
+
+out_pdf <- "./results/methylation/probes_before_after_filtering_barplot.pdf"
+ggsave(out_pdf, p, width = 7, height = 5)
+
+cat("Original probes:", original, "\n")
+cat("Filtered probes:", filtered, "\n")
+cat("Removed probes:", original - filtered, "\n")
+cat("Saved:", out_pdf, "\n")
+'
+
+
 # create a list of all methylation files for cancer samples includes all tumor types and samples while excluding healthy samples and including only primary vial of tumor samples (A)
 find ./methylation/filtered_methylation/* -type f -name "HM450*_annotated_methylation_filtered.bed.gz" | grep -E -- '-0[0-9]A_' > ./methylation/methylation_files_tumor0x.txt
 
@@ -2088,6 +2229,231 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     guide  = "none")
 
 dev.off()
+'
+
+
+###############################################################################
+# Methylation sample counts per cancer type restricted to 3d+4d_noOV cohort
+# Tumor = any 0X sample type
+# Healthy = any 1X sample type
+# Ordered from biggest cancer type to smallest
+###############################################################################
+
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+# ============================================================
+# INPUTS
+# ============================================================
+cohort_file <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+meth_dir    <- "./methylation/filtered_methylation"
+
+out_dir   <- "./results/methylation/methylation_counts"
+out_table <- file.path(out_dir, "methylation_counts_3d4d_noOV_0X_1X.tsv")
+out_pdf   <- file.path(out_dir, "methylation_counts_barplot_3d4d_noOV_0X_1X.pdf")
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ============================================================
+# HELPERS
+# ============================================================
+extract_sample_barcode <- function(x) {
+  x <- basename(as.character(x))
+
+  # Extract sample barcode such as TCGA-XX-XXXX-01A, TCGA-XX-XXXX-11B, etc.
+  out <- sub("^HM450_TCGA-[^-]+-(TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z]).*$", "\\\\1", x)
+
+  out[!grepl("^TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z]$", out)] <- NA_character_
+  out
+}
+
+extract_patient_id <- function(x) {
+  x <- as.character(x)
+
+  # Extract patient ID: TCGA-XX-XXXX
+  out <- sub("^(TCGA-[^-]+-[^-]+).*$", "\\\\1", x)
+
+  out[!grepl("^TCGA-[^-]+-[^-]+$", out)] <- NA_character_
+  out
+}
+
+extract_sample_type <- function(x) {
+  x <- as.character(x)
+
+  # Extract the 2-digit TCGA sample type code:
+  # 01A -> 01
+  # 01B -> 01
+  # 06D -> 06
+  # 10A -> 10
+  # 11B -> 11
+  code <- sub("^TCGA-[^-]+-[^-]+-([0-9]{2}).*$", "\\\\1", x)
+
+  code[!grepl("^[0-9]{2}$", code)] <- NA_character_
+
+  # Any 0X code = tumor
+  # Any 1X code = healthy/normal
+  ifelse(
+    grepl("^0[0-9]$", code), "tumor",
+    ifelse(grepl("^1[0-9]$", code), "healthy", NA_character_)
+  )
+}
+
+extract_cancer <- function(x) {
+  x <- basename(as.character(x))
+
+  # Extract cancer type from filename:
+  # HM450_TCGA-KIRC-TCGA-XX-XXXX-01A_...
+  out <- sub("^HM450_TCGA-([^-]+)-.*$", "\\\\1", x)
+
+  out[!grepl("^[A-Z0-9]+$", out)] <- NA_character_
+  out
+}
+
+# ============================================================
+# LOAD 3d+4d_noOV PATIENT LIST
+# ============================================================
+cohort <- fread(cohort_file, header = FALSE)
+
+patients_keep <- unique(as.character(cohort[[1]]))
+patients_keep <- patients_keep[grepl("^TCGA-[^-]+-[^-]+$", patients_keep)]
+
+cat("[INFO] Patients in 3d+4d_noOV cohort:", length(patients_keep), "\\n")
+
+# ============================================================
+# LIST AND ANNOTATE METHYLATION FILES
+# ============================================================
+files <- list.files(
+  meth_dir,
+  pattern = "[.]bed[.]gz$",
+  full.names = TRUE
+)
+
+dt <- data.table(file = files)
+dt[, fname := basename(file)]
+dt[, sample_barcode := extract_sample_barcode(fname)]
+dt[, patient_id := extract_patient_id(sample_barcode)]
+dt[, sample_type := extract_sample_type(sample_barcode)]
+dt[, cancer := extract_cancer(fname)]
+
+dt <- dt[
+  !is.na(sample_barcode) &
+    !is.na(patient_id) &
+    !is.na(sample_type) &
+    !is.na(cancer)
+]
+
+# Keep only patients from 3d+4d_noOV cohort
+dt <- dt[patient_id %in% patients_keep]
+
+# One row per methylation sample
+dt <- unique(dt[, .(cancer, patient_id, sample_barcode, sample_type)])
+
+cat("[INFO] Methylation samples kept:", nrow(dt), "\\n")
+cat("[INFO] Tumor 0X samples kept:", dt[sample_type == "tumor", .N], "\\n")
+cat("[INFO] Healthy 1X samples kept:", dt[sample_type == "healthy", .N], "\\n")
+
+# Optional diagnostic: how many sample type codes were kept
+dt[, sample_code := sub("^TCGA-[^-]+-[^-]+-([0-9]{2}).*$", "\\\\1", sample_barcode)]
+cat("[INFO] Sample type code distribution after filtering:\\n")
+print(dt[, .N, by = .(sample_code, sample_type)][order(sample_type, sample_code)])
+
+# ============================================================
+# COUNT TUMOR / HEALTHY PER CANCER
+# ============================================================
+count_dt <- dcast(
+  dt[, .N, by = .(cancer, sample_type)],
+  cancer ~ sample_type,
+  value.var = "N",
+  fill = 0
+)
+
+if (!"tumor" %in% names(count_dt)) count_dt[, tumor := 0L]
+if (!"healthy" %in% names(count_dt)) count_dt[, healthy := 0L]
+
+setcolorder(count_dt, c("cancer", "tumor", "healthy"))
+
+# ============================================================
+# ORDER FROM BIGGEST CANCER TYPE TO SMALLEST
+# ============================================================
+count_dt[, total := tumor + healthy]
+count_dt <- count_dt[order(-total, cancer)]
+
+# Freeze cancer order for ggplot
+count_dt[, cancer := factor(cancer, levels = as.character(cancer))]
+
+# Flag cancer types with no healthy samples
+count_dt[, no_healthy := healthy == 0]
+
+fwrite(count_dt, out_table, sep = "\\t")
+cat("[DONE] Wrote table:", out_table, "\\n")
+
+# ============================================================
+# PREPARE PLOT DATA
+# ============================================================
+label_df <- count_dt[, .(cancer, no_healthy)]
+
+df_long <- melt(
+  count_dt,
+  id.vars = c("cancer", "total", "no_healthy"),
+  measure.vars = c("tumor", "healthy"),
+  variable.name = "type",
+  value.name = "count"
+)
+
+# ============================================================
+# BARPLOT
+# ============================================================
+pdf(out_pdf, width = 12, height = 8)
+
+p <- ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(
+    values = c("tumor" = "salmon", "healthy" = "steelblue"),
+    labels = c("tumor" = "Tumor samples (0X)", "healthy" = "Healthy samples (1X)"),
+    name = ""
+  ) +
+  labs(
+    title = "Tumor (0X) vs Healthy (1X) Methylation Sample Counts per Cancer Type",
+    subtitle = "Restricted to 3d+4d_noOV cohort; cancer types ordered by total sample count",
+    x = "Cancer Type",
+    y = "Number of Samples",
+    caption = "Red cancer names = cancer types with no healthy 1X samples"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_text(margin = margin(t = 25)),
+    plot.caption = element_text(hjust = 0.5, color = "red", size = 12),
+    plot.margin = margin(t = 10, r = 20, b = 90, l = 20)
+  ) +
+  coord_cartesian(clip = "off") +
+  geom_text(
+    data = label_df,
+    aes(
+      x = cancer,
+      y = 0,
+      label = cancer,
+      color = no_healthy
+    ),
+    angle = 45,
+    hjust = 1,
+    vjust = 2.2,
+    inherit.aes = FALSE,
+    size = 4
+  ) +
+  scale_color_manual(
+    values = c(`TRUE` = "red", `FALSE` = "black"),
+    guide = "none"
+  )
+
+print(p)
+dev.off()
+
+cat("[DONE] Wrote plot:", out_pdf, "\\n")
 '
 
 # Statistics methylation probes per sample : 
@@ -10445,31 +10811,33 @@ cat("[DONE] Wrote ", out, "\n", sep="")
 '
 
 ##################################################################################################################################################
-# plot the expression of NRF1 and BANP only in 3d+4d_noOV samples, grouped by cancer type
+# plot the expression of NRF1 and BANP only in 2d_noOV samples, grouped by cancer type
 # one page for Normal and one for Tumor samples (boxplot)
 ##################################################################################################################################################
 Rscript -e '
-library(readr)
-library(dplyr)
-library(stringr)
-library(ggplot2)
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(stringr)
+  library(ggplot2)
+})
 
 cat("[INFO] Reading mapping file...\n")
 map <- read_tsv(
   "./all_tcga_samples_with_cancer.tsv",
-  col_names = c("sample_id","cancer"),
+  col_names = c("sample_id", "cancer"),
   show_col_types = FALSE
 )
 
-cat("[INFO] Reading 3d+4d_noOV cohort file (headerless)...\n")
+cat("[INFO] Reading 2d_noOV cohort file (headerless)...\n")
 cohort <- read_tsv(
-  "./results/multi_omics/samples_3d+4d_noOV.tsv",
-  col_names = c("case_id","cancer_cohort","v3","v4","v5","v6"),
+  "./results/multi_omics/samples_2d_noOV.tsv",
+  col_names = c("case_id", "cancer_cohort", "v3", "v4", "v5", "v6"),
   show_col_types = FALSE
 )
 
 cohort_case_ids <- unique(cohort$case_id)
-cat("[INFO] 3d+4d_noOV unique case IDs: ", length(cohort_case_ids), "\n", sep="")
+cat("[INFO] 2d_noOV unique case IDs: ", length(cohort_case_ids), "\n", sep = "")
 
 cat("[INFO] Listing NRF1/BANP per-sample files...\n")
 files <- list.files(
@@ -10478,18 +10846,31 @@ files <- list.files(
   full.names = TRUE
 )
 
-cat("[INFO] Found ", length(files), " files\n", sep="")
+cat("[INFO] Found ", length(files), " files\n", sep = "")
+
+if (length(files) == 0) {
+  stop("No NRF1/BANP expression files found.")
+}
 
 cat("[INFO] Reading expression files...\n")
 df <- bind_rows(lapply(files, function(f) {
-  cat("[READ] ", basename(f), "\n", sep="")
+  cat("[READ] ", basename(f), "\n", sep = "")
+
   read_tsv(f, show_col_types = FALSE) %>%
-    mutate(sample_id = str_extract(basename(f), "TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-[0-9]{2}[A-Za-z]"))
+    mutate(
+      sample_id = str_extract(
+        basename(f),
+        "TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-[0-9]{2}[A-Za-z]"
+      )
+    )
 }))
 
-cat("[INFO] Preparing table + joining cancer...\n")
+cat("[INFO] Preparing table and joining cancer annotation...\n")
+
 map <- map %>%
-  mutate(case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""))
+  mutate(
+    case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", "")
+  )
 
 df <- df %>%
   select(sample_id, gene_name, tpm_unstranded) %>%
@@ -10497,10 +10878,10 @@ df <- df %>%
   mutate(
     tpm_unstranded = as.numeric(tpm_unstranded),
     case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""),
-    code = str_match(sample_id, "-([0-9]{2})[A-Za-z]$")[,2],
+    code = str_match(sample_id, "-([0-9]{2})[A-Za-z]$")[, 2],
     sample_type = case_when(
-      code %in% c("01","02","03","05","06","07","08","09") ~ "Tumor",
-      code %in% c("10","11","12","13","14") ~ "Normal",
+      code %in% c("01", "02", "03", "05", "06", "07", "08", "09") ~ "Tumor",
+      code %in% c("10", "11", "12", "13", "14") ~ "Normal",
       TRUE ~ "Other"
     )
   ) %>%
@@ -10508,21 +10889,28 @@ df <- df %>%
   filter(!is.na(cancer), !is.na(tpm_unstranded)) %>%
   filter(sample_type %in% c("Normal", "Tumor"))
 
-cat("[INFO] Rows before 3d+4d_noOV filtering: ", nrow(df), "\n", sep="")
+cat("[INFO] Rows before 2d_noOV filtering: ", nrow(df), "\n", sep = "")
+
 df <- df %>%
   filter(case_id %in% cohort_case_ids)
-cat("[INFO] Rows after 3d+4d_noOV filtering: ", nrow(df), "\n", sep="")
 
-cat("[INFO] Sample code breakdown after 3d+4d_noOV filtering:\n")
+cat("[INFO] Rows after 2d_noOV filtering: ", nrow(df), "\n", sep = "")
+
+cat("[INFO] Sample code breakdown after 2d_noOV filtering:\n")
 print(table(df$code, df$sample_type, useNA = "ifany"))
 
-# ===== gene-specific cutoffs + removed counts + filter =====
+# ============================================================
+# Gene-specific cutoffs + removed counts + filtering
+# ============================================================
+
 df <- df %>%
-  mutate(cutoff = case_when(
-    gene_name == "NRF1" ~ 50,
-    gene_name == "BANP" ~ 30,
-    TRUE ~ Inf
-  ))
+  mutate(
+    cutoff = case_when(
+      gene_name == "NRF1" ~ 50,
+      gene_name == "BANP" ~ 30,
+      TRUE ~ Inf
+    )
+  )
 
 removed <- df %>%
   group_by(gene_name) %>%
@@ -10538,68 +10926,91 @@ get_removed <- function(g) {
 
 df <- df %>%
   filter(tpm_unstranded <= cutoff)
-# ==========================================================
 
-cat("[INFO] 3d+4d_noOV Tumor samples:  ", length(unique(df$sample_id[df$sample_type == "Tumor"])), "\n", sep="")
-cat("[INFO] 3d+4d_noOV Normal samples: ", length(unique(df$sample_id[df$sample_type == "Normal"])), "\n", sep="")
-cat("[INFO] 3d+4d_noOV cancers: ", length(unique(df$cancer)), "\n", sep="")
+# ============================================================
 
-if (nrow(df) == 0) stop("No samples left after 3d+4d_noOV filtering")
+cat("[INFO] 2d_noOV Tumor samples:  ",
+    length(unique(df$sample_id[df$sample_type == "Tumor"])),
+    "\n",
+    sep = "")
+
+cat("[INFO] 2d_noOV Normal samples: ",
+    length(unique(df$sample_id[df$sample_type == "Normal"])),
+    "\n",
+    sep = "")
+
+cat("[INFO] 2d_noOV cancers: ",
+    length(unique(df$cancer)),
+    "\n",
+    sep = "")
+
+if (nrow(df) == 0) {
+  stop("No samples left after 2d_noOV filtering.")
+}
 
 ymax <- max(df$tpm_unstranded, na.rm = TRUE)
 
 make_plot <- function(d, title_txt, removed_n) {
-  ggplot(d, aes(cancer, tpm_unstranded)) +
+  ggplot(d, aes(x = cancer, y = tpm_unstranded)) +
     geom_boxplot(outlier.shape = NA) +
-    geom_jitter(aes(color = sample_type), width = 0.2, alpha = 0.6, size = 0.7) +
-    geom_hline(yintercept = 1, color = "blue", linewidth = 0.8) +
-    scale_color_manual(values = c(Normal = "black", Tumor = "red")) +
+    geom_jitter(
+      aes(color = sample_type),
+      width = 0.2,
+      alpha = 0.6,
+      size = 0.7
+    ) +
+    geom_hline(
+      yintercept = 1,
+      color = "blue",
+      linewidth = 0.8
+    ) +
+    scale_color_manual(
+      values = c(
+        Normal = "black",
+        Tumor = "red"
+      )
+    ) +
     coord_cartesian(ylim = c(0, ymax)) +
     theme_bw() +
-    theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+    theme(
+      axis.text.x = element_text(angle = 60, hjust = 1),
+      plot.title = element_text(hjust = 0.5)
+    ) +
     labs(
       title = title_txt,
       x = "Cancer type",
       y = "TPM",
-      color = paste0("Sample type (removed above cutoff: ", removed_n, ")")
+      color = paste0("Sample type\nremoved above cutoff: ", removed_n)
     )
 }
 
 cat("[INFO] Building plots...\n")
+
 p_nrf1 <- make_plot(
   filter(df, gene_name == "NRF1"),
-  "NRF1 TPM in 3d+4d_noOV — Normal (black) vs Tumor (red) | cutoff=50 removed",
+  "NRF1 TPM in 2d_noOV — Normal vs Tumor | cutoff = 50",
   get_removed("NRF1")
 )
 
 p_banp <- make_plot(
   filter(df, gene_name == "BANP"),
-  "BANP TPM in 3d+4d_noOV — Normal (black) vs Tumor (red) | cutoff=30 removed",
+  "BANP TPM in 2d_noOV — Normal vs Tumor | cutoff = 30",
   get_removed("BANP")
 )
 
-out <- "./results/expression/boxplot_TPM_NRF1_BANP_by_cancer_Normal_vs_Tumor_3d4d_noOV.pdf"
+out <- "./results/expression/boxplot_TPM_NRF1_BANP_by_cancer_Normal_vs_Tumor_2d_noOV.pdf"
+
 dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
 
 cat("[INFO] Writing 2-page PDF...\n")
-pdf(out, width = 14, height = 6)
-if (nrow(filter(df, gene_name == "NRF1")) > 0) {
-  print(p_nrf1)
-} else {
-  plot.new()
-  title("No NRF1 samples found in 3d+4d_noOV")
-}
 
-if (nrow(filter(df, gene_name == "BANP")) > 0) {
-  print(p_banp)
-} else {
-  plot.new()
-  title("No BANP samples found in 3d+4d_noOV")
-}
+pdf(out, width = 14, height = 6, onefile = TRUE)
+print(p_nrf1)
+print(p_banp)
 dev.off()
 
 cat("[DONE] Wrote ", out, "\n", sep = "")
-'
+' # IM HERE
 
 ####################################################################################################################################################################################################
 # Build a list of the expression of NRF1 and BANP in all samples and then filter to keep only the samples for which we have both tumor and healthy samples
@@ -11033,8 +11444,59 @@ p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
 ggsave("./results/multi_omics/samples_3+4datasets_barplot.pdf",plot = p, width = 5, height = 5, dpi = 300, bg = "white")
 '
 
+###########################################
+# 2d samples cohort (methylation + rnaseq)
+###########################################
+# Create a table of the samples for which we have 2d data (METH, RNA) 
+# create a tsv of the samples with 2d:
+cat ./results/multi_omics/sample_data_summary.tsv | awk ' $4==1 && $5==1 {print $0}' > ./results/multi_omics/samples_2d.tsv
+cat ./results/multi_omics/sample_data_summary.tsv | awk ' $2!="OV" && $4==1 && $5==1 {print $0}' > ./results/multi_omics/samples_2d_noOV.tsv
+
+# barplot the number of samples witht 2d per cancer type:
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+dt <- fread("./results/multi_omics/samples_2d.tsv", header = FALSE)
+setnames(dt, c("sample","cancer","SNV","METH","RNA","ATAC"))
+
+counts <- dt[, .N, by = cancer]
+total_samples <- nrow(dt)
+
+# Read defined color file
+color_df <- fread(
+  "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
+  header = FALSE
+)
+setnames(color_df, c("Cancer_full", "Color"))
+color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
+color_df[, Color  := trimws(gsub("\r", "", Color))]
+palette <- setNames(color_df$Color, color_df$Cancer)
+
+# Match colors to cancers in the plot
+counts[, Color := palette[cancer]]
+counts[is.na(Color), Color := "grey70"]
+
+p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = N), hjust = -0.15, size = 3) +
+  coord_flip() +
+  scale_fill_manual(values = setNames(counts$Color, counts$cancer)) +
+  labs(
+    x = "Cancer type",
+    y = "Number of samples",
+    title = "Samples per Cancer Type",
+    subtitle = paste0("Multi-omics cohort (n = ", total_samples, ")")
+  ) +
+  expand_limits(y = max(counts$N) * 1.08) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggsave("./results/multi_omics/samples_2d_barplot.pdf",plot = p, width = 5, height = 5, dpi = 300, bg = "white")
+'
+
 #################################################################################################
-# create pearson correlation plot between delta_beta and delta_expr for the probe-gene pairs
+# Create a submatrix of gene expression 
 #################################################################################################
 # a) create a gene expressionmatrix of the 3d+4d samples with no OV cancer type:
 f="./results/multi_omics/samples_3d+4d.tsv"
@@ -11066,95 +11528,281 @@ awk '
 echo "Done! Saved: ./expression/gene_expression_matrix_3d4d_noOV.tsv"
 
 
-# to look at overlapping motifs 
-awk 'BEGIN{FS=OFS="\t"}
-NR==1 {next}
-{
-  if ($1==prev_chr && $2 < prev_end) print prev_line "\n" $0 "\n"
-  prev_chr=$1
-  prev_end=$3
-  prev_line=$0
-}' ./motifs/BANP_mm0to2_noCGmm_noXY_closest_genes.bed | awk '$1!="chrY" && $1!="chrM" && $1!="chrX" {print $0}' 
+# for the 2d:
+f="./results/multi_omics/samples_2d.tsv"
 
-
-
-
-#########################################################
-# Correlation methylation expression proximal filtering 
-#########################################################
-
-# filter out motif gene pairs that passed the correlation threshold to retain ones that are in the 100bp limit of the TSS and dont have two motifs next to each other that have the same correlation and significant in the same type of cancer types.
-# Just for BANP : went from 167 to 72
-mkdir -p ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/BANP/all_samples/filtered_anticorrelated_genes/
-awk 'BEGIN{FS=OFS="\t"}
-
-# -------- pass 1: selected_anti_correlated_pairs_all_BANP.tsv --------
-FNR==NR{
-  if (FNR==1) next
-
-  key = $1 OFS $9          # gene + sig_cancers
-  motif_key = key OFS $2   # gene + sig_cancers + motif_id
-
-  if (!(motif_key in seen_motif)) {
-    seen_motif[motif_key] = 1
-    motif_count[key]++
+zcat ./expression/gene_expression_matrix_protein_coding.tsv.gz | \
+awk '
+  NR==FNR {
+    # cohort file: keep patient IDs except OV
+    if ($2 != "OV") keep[$1]=1
+    next
   }
+  FNR==1 { print; next }  # keep header
 
-  row_key[FNR] = key
-  row_motif[FNR] = $2
-  next
-}
+  {
+    if (FNR % 500 == 0)
+      printf("[awk] processed %d expression rows | kept %d\n", FNR, kept) > "/dev/stderr"
 
-# -------- pass 2: closest_genes.bed --------
-FNR==1{
-  print $0, "motif_id_rebuilt"
-  next
-}
-
-{
-  motif_id = $1 ":" $2 ":" $3 ":" $6
-
-  # keep only motifs whose gene+sig_cancers group had exactly 1 distinct motif
-  keep_ok = 0
-  for (k in seen_motif) {
-    split(k, a, OFS)
-    # a[1]=gene, a[2]=sig_cancers, a[3]=motif_id
-    if (a[3] == motif_id && motif_count[a[1] OFS a[2]] == 1) {
-      keep_ok = 1
-      break
+    # extract patient barcode from expression sample id (no {n} intervals)
+    if (match($1, /TCGA-[A-Z0-9][A-Z0-9]-[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/)) {
+      pat = substr($1, RSTART, RLENGTH)
+      if (pat in keep) { print; kept++ }
     }
   }
+  END {
+    printf("[awk] DONE | kept %d rows (plus header)\n", kept) > "/dev/stderr"
+  }
+' "$f" - \
+> ./expression/gene_expression_matrix_2d_noOV.tsv
+echo "Done! Saved: ./expression/gene_expression_matrix_2d_noOV.tsv"
 
-  if (keep_ok && $14 <= 100) {
-    print $0, motif_id
-  }
-}' \
-./results/methylation/correlation_expression_methylation/tumor_vs_healthy/BANP/all_samples/anti_correlated_pair_plots/selected_anti_correlated_pairs_all_BANP.tsv \
-./motifs/BANP_mm0to2_noCGmm_noXY_closest_genes.bed \
-> ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/BANP/all_samples/filtered_anticorrelated_genes/matched_motifs_within_100bp_filtered.tsv
+#################################################################
+# Euler Ven diagram that shows the 2d samples chosen
+#################################################################
+Rscript -e '
+suppressPackageStartupMessages(library(data.table))
 
-# To filter for NRF1 the ones with multiple motifs correlated : went from 275 to 253
-mkdir -p ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/NRF1/all_samples/filtered_anticorrelated_genes/
-awk 'BEGIN{FS=OFS="\t"}
-NR==1{
-  header=$0
-  next
+in_file  <- "./results/multi_omics/sample_data_summary.tsv"
+out_pdf  <- "./results/multi_omics/sample_availability_2d.pdf"
+out_tsv  <- "./results/multi_omics/sample_availability_2d.tsv"
+
+# Set to TRUE if you want to exclude OV
+exclude_OV <- FALSE
+
+dt <- fread(in_file)
+
+if (exclude_OV) {
+  dt <- dt[cancer != "OV"]
 }
-{
-  key=$1 OFS $9
-  motif_key=key OFS $2
-  rows[NR]=$0
-  rowkey[NR]=key
-  if (!(motif_key in seen_motif)) {
-    seen_motif[motif_key]=1
-    motif_count[key]++
-  }
+
+# ============================================================
+# DEFINE SETS
+# ============================================================
+all_ids  <- unique(dt$sample)
+meth_ids <- unique(dt[methylation == 1, sample])
+rna_ids  <- unique(dt[rnaseq == 1, sample])
+
+# ============================================================
+# COUNTS
+# ============================================================
+n_all       <- length(all_ids)
+n_meth      <- length(meth_ids)
+n_rna       <- length(rna_ids)
+n_both      <- length(intersect(meth_ids, rna_ids))
+n_meth_only <- length(setdiff(meth_ids, rna_ids))
+n_rna_only  <- length(setdiff(rna_ids, meth_ids))
+n_neither   <- length(setdiff(all_ids, union(meth_ids, rna_ids)))
+
+counts <- data.table(
+  category = c(
+    "All samples",
+    "Methylation",
+    "RNA-seq",
+    "Both methylation and RNA-seq",
+    "Methylation only",
+    "RNA-seq only",
+    "Neither methylation nor RNA-seq"
+  ),
+  n = c(
+    n_all, n_meth, n_rna, n_both, n_meth_only, n_rna_only, n_neither
+  )
+)
+
+fwrite(counts, out_tsv, sep = "\t")
+
+# ============================================================
+# GEOMETRY: 3 TRUE CIRCLES
+# ============================================================
+# Outer circle
+r_all <- 1.00
+x_all <- 0
+y_all <- 0
+
+# Inner circles
+r_rna  <- 0.62
+r_meth <- 0.62
+
+x_rna  <- -0.27
+y_rna  <- 0
+
+x_meth <-  0.27
+y_meth <-  0
+
+# ============================================================
+# COLORS
+# ============================================================
+col_all_fill  <- "grey97"
+col_all_edge  <- "grey55"
+
+col_rna_fill  <- adjustcolor("#5DADE2", alpha.f = 0.42)
+col_rna_edge  <- "#2E86C1"
+
+col_meth_fill <- adjustcolor("#F4A300", alpha.f = 0.42)
+col_meth_edge <- "#C97C00"
+
+col_overlap_fill <- adjustcolor("red", alpha.f = 0.28)
+col_overlap_edge <- "#C00000"
+
+# ============================================================
+# HELPER FUNCTIONS TO DRAW THE RED OVERLAP LENS
+# ============================================================
+angle_seq_ccw <- function(a1, a2, n = 200) {
+  if (a2 < a1) a2 <- a2 + 2*pi
+  seq(a1, a2, length.out = n)
 }
-END{
-  print header
-  for (i=2; i<=NR; i++) {
-    if (motif_count[rowkey[i]] == 1) {
-      print rows[i]
-    }
+
+arc_points <- function(cx, cy, r, a1, a2, n = 200, ccw = TRUE) {
+  if (ccw) {
+    ang <- angle_seq_ccw(a1, a2, n)
+  } else {
+    ang <- rev(angle_seq_ccw(a2, a1, n))
   }
-}' ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/NRF1/all_samples/anti_correlated_pair_plots/selected_anti_correlated_pairs_all_NRF1.tsv > ./results/methylation/correlation_expression_methylation/tumor_vs_healthy/NRF1/all_samples/filtered_anticorrelated_genes/NRF1_filtered.tsv
+  cbind(cx + r*cos(ang), cy + r*sin(ang))
+}
+
+draw_circle_overlap <- function(x1, y1, r1, x2, y2, r2,
+                                col = adjustcolor("red", alpha.f = 0.25),
+                                border = "#C00000", lwd = 2, n = 300) {
+  d <- sqrt((x2 - x1)^2 + (y2 - y1)^2)
+
+  # No overlap / complete containment / identical circles
+  if (d >= r1 + r2 || d <= abs(r1 - r2) || d == 0) return(invisible(NULL))
+
+  # Geometry of the 2 intersection points
+  a <- (r1^2 - r2^2 + d^2) / (2*d)
+  h <- sqrt(max(r1^2 - a^2, 0))
+
+  xm <- x1 + a * (x2 - x1) / d
+  ym <- y1 + a * (y2 - y1) / d
+
+  rx <- -(y2 - y1) * (h / d)
+  ry <-  (x2 - x1) * (h / d)
+
+  p1 <- c(xm + rx, ym + ry)
+  p2 <- c(xm - rx, ym - ry)
+
+  # Angles on circle 1
+  a11 <- atan2(p1[2] - y1, p1[1] - x1)
+  a12 <- atan2(p2[2] - y1, p2[1] - x1)
+
+  # Angles on circle 2
+  a21 <- atan2(p1[2] - y2, p1[1] - x2)
+  a22 <- atan2(p2[2] - y2, p2[1] - x2)
+
+  # Candidate arcs for circle 1
+  arc1a <- arc_points(x1, y1, r1, a11, a12, n = n, ccw = TRUE)
+  arc1b <- arc_points(x1, y1, r1, a11, a12, n = n, ccw = FALSE)
+
+  mid1a <- arc1a[round(n/2), ]
+  mid1b <- arc1b[round(n/2), ]
+
+  inside2_a <- ((mid1a[1] - x2)^2 + (mid1a[2] - y2)^2) <= r2^2 + 1e-9
+  inside2_b <- ((mid1b[1] - x2)^2 + (mid1b[2] - y2)^2) <= r2^2 + 1e-9
+
+  arc1 <- if (inside2_a) arc1a else arc1b
+
+  # Candidate arcs for circle 2 (from p2 back to p1)
+  arc2a <- arc_points(x2, y2, r2, a22, a21, n = n, ccw = TRUE)
+  arc2b <- arc_points(x2, y2, r2, a22, a21, n = n, ccw = FALSE)
+
+  mid2a <- arc2a[round(n/2), ]
+  mid2b <- arc2b[round(n/2), ]
+
+  inside1_a <- ((mid2a[1] - x1)^2 + (mid2a[2] - y1)^2) <= r1^2 + 1e-9
+  inside1_b <- ((mid2b[1] - x1)^2 + (mid2b[2] - y1)^2) <= r1^2 + 1e-9
+
+  arc2 <- if (inside1_a) arc2a else arc2b
+
+  lens <- rbind(arc1, arc2)
+  polygon(lens[,1], lens[,2], col = col, border = border, lwd = lwd)
+}
+
+# ============================================================
+# PLOT
+# ============================================================
+pdf(out_pdf, width = 9, height = 8)
+par(mar = c(1.5, 1.5, 4.5, 1.5), xpd = NA, family = "sans")
+
+plot(0, 0,
+     type = "n",
+     xlim = c(-1.25, 1.25),
+     ylim = c(-1.20, 1.25),
+     axes = FALSE,
+     xlab = "",
+     ylab = "",
+     asp = 1)
+
+# Big outer circle
+symbols(x_all, y_all, circles = r_all, inches = FALSE, add = TRUE,
+        bg = col_all_fill, fg = col_all_edge, lwd = 2)
+
+# RNA-seq circle
+symbols(x_rna, y_rna, circles = r_rna, inches = FALSE, add = TRUE,
+        bg = col_rna_fill, fg = col_rna_edge, lwd = 2)
+
+# Methylation circle
+symbols(x_meth, y_meth, circles = r_meth, inches = FALSE, add = TRUE,
+        bg = col_meth_fill, fg = col_meth_edge, lwd = 2)
+
+# Red highlighted overlap
+draw_circle_overlap(
+  x_rna, y_rna, r_rna,
+  x_meth, y_meth, r_meth,
+  col = col_overlap_fill,
+  border = col_overlap_edge,
+  lwd = 2
+)
+
+# Redraw circle borders so they stay crisp
+symbols(x_rna, y_rna, circles = r_rna, inches = FALSE, add = TRUE,
+        bg = NA, fg = col_rna_edge, lwd = 2)
+
+symbols(x_meth, y_meth, circles = r_meth, inches = FALSE, add = TRUE,
+        bg = NA, fg = col_meth_edge, lwd = 2)
+
+# Title
+title(
+  main = "Overview of sample availability",
+  sub  = if (exclude_OV) "Non-OV patients only" else "All patients",
+  font.main = 2,
+  cex.main = 1.6,
+  cex.sub = 1.0
+)
+
+# Labels
+text(0, 1.10,
+     labels = paste0("All samples\nn = ", format(n_all, big.mark = ",")),
+     font = 2, cex = 1.15)
+
+text(x_rna, y_rna + r_rna + 0.10,
+     labels = paste0("RNA-seq\n(total = ", format(n_rna, big.mark = ","), ")"),
+     col = "#1F618D", font = 2, cex = 1.0)
+
+text(x_meth, y_meth + r_meth + 0.10,
+     labels = paste0("Methylation\n(total = ", format(n_meth, big.mark = ","), ")"),
+     col = "#AF601A", font = 2, cex = 1.0)
+
+text(-0.60, 0,
+     labels = paste0("RNA-seq only\n", format(n_rna_only, big.mark = ",")),
+     font = 2, cex = 1.08)
+
+text(0.60, 0,
+     labels = paste0("Methylation only\n", format(n_meth_only, big.mark = ",")),
+     font = 2, cex = 1.08)
+
+text(0, 0,
+     labels = paste0("Both\n", format(n_both, big.mark = ",")),
+     font = 2, cex = 1.35)
+
+text(0, -1.05,
+     labels = paste0("Neither methylation nor RNA-seq\n", format(n_neither, big.mark = ",")),
+     cex = 0.98, col = "grey20")
+
+dev.off()
+
+cat("Saved plot:", out_pdf, "\n")
+cat("Saved counts:", out_tsv, "\n")
+print(counts)
+'
+

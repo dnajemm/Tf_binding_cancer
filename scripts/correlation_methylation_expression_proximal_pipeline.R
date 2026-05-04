@@ -39,15 +39,15 @@ tf_motif_label <- tf_map[[tf_name]]
 # ============================================================
 # GLOBAL PARAMETERS
 # ============================================================
-cohort_file      <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
+cohort_file      <- "./results/multi_omics/samples_2d_noOV.tsv"
 probe_gene_file  <- "./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz"
 meth_dir         <- "./methylation/filtered_methylation"
-expr_file        <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
+expr_file        <- "./expression/gene_expression_matrix_2d_noOV.tsv"
 color_file       <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
 tf_expr_file     <- "./expression/expression_of_NRF1_BANP/all_samples_NRF1_BANP_expression.tsv"
 
 base_dir <- file.path(
-  ".", "results", "methylation", "correlation_expression_methylation",
+  ".", "results", "methylation", "correlation_expression_methylation_2d",
   "tumor_vs_healthy", tf_name
 )
 
