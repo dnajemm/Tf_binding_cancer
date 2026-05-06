@@ -1,126 +1,115 @@
-# TF-Centered Correlation Pipeline
+# TF-Centered Proximal Methylation-Expression Correlation Pipeline
 
-This R pipeline performs a TF-centered pan-cancer analysis that links DNA methylation at proximal motif-associated CpG sites to target-gene expression across the TCGA `3d+4d_noOV` cohort using `01X` tumor and `11X` healthy samples.
+## Overview
 
-Given a transcription factor such as `BANP` or `NRF1`, the script:
+`correlation_methylation_expression_proximal_pipeline.R` performs a transcription factor-centered pan-cancer analysis linking DNA methylation at proximal motif-associated CpG sites to target-gene expression across the TCGA `2d_noOV` cohort.
 
-- builds a proximal motif-to-probe map
-- annotates HM450 methylation samples
-- computes sample-level motif methylation as the maximum beta value across motif-linked probes
-- merges motif methylation with RNA-seq expression
-- computes pooled and cancer-specific Pearson correlations with BH/FDR correction
-- builds matched-patient subsets requiring both healthy and tumor samples for the same patient, gene, and motif
-- extracts significantly anti-correlated gene-motif pairs
-- generates static PDF reports
-- optionally generates interactive HTML scatter plots
+Given a supported transcription factor such as `BANP` or `NRF1`, the pipeline:
 
-## Supported TFs
+1. builds a **proximal** motif-probe map from motif-associated probe-gene pairs,
+2. annotates HM450 methylation samples from TCGA tumor (`01X`) and healthy (`11X`) groups,
+3. computes sample-level motif methylation using the **maximum beta value** across CpGs linked to each motif instance,
+4. merges motif methylation with RNA-seq expression for the same gene and sample,
+5. computes pooled and cancer-specific **Pearson correlations with BH/FDR correction**,
+6. extracts significantly anti-correlated gene-motif pairs,
+7. builds a matched-patient subset restricted to patients with both healthy and tumor samples,
+8. optionally applies by-cancer Healthy vs Tumor **Wilcoxon** filtering,
+9. generates PDF reports for anti-correlated pairs in both the full and matched-patient analyses.
+
+The pipeline writes static result tables and PDF reports under a TF-specific output directory.
+
+## Supported Transcription Factors
 
 - `BANP`
 - `NRF1`
 
-The script maps each TF argument to the internal motif label used in the probe-gene input table:
+These are mapped internally to the motif labels:
 
 - `BANP -> BANP_mm0to2_noCGmm`
 - `NRF1 -> NRF1_mm0to2_noCGmm`
 
-## Required R Packages
-
-The script loads these packages:
-
-- `data.table`
-- `ggplot2`
-- `plotly`
-- `htmlwidgets`
-- `parallel`
-
 ## Usage
 
-Save the script as an executable R script, for example `tf_correlation_pipeline.R`, then run:
-
 ```bash
-Rscript tf_correlation_pipeline.R NRF1
+Rscript ./scripts/correlation_methylation_expression_proximal_pipeline.R NRF1
 ```
 
-If no argument is provided, the default TF is `BANP`.
+If no transcription factor is provided, the pipeline defaults to:
+
+```text
+BANP
+```
 
 ## Input Files
 
-The pipeline expects these paths relative to the working directory:
+The script expects the following input files and directories:
 
-- `./results/multi_omics/samples_3d+4d_noOV.tsv`
-- `./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz`
-- `./methylation/filtered_methylation/`
-- `./expression/gene_expression_matrix_3d4d_noOV.tsv`
-- `./results/multi_omics/cancer_color_order_with_defined_colours.tsv`
-- `./expression/expression_of_NRF1_BANP/all_samples_NRF1_BANP_expression.tsv`
+- `./results/multi_omics/samples_2d_noOV.tsv` with this binary structure: sample  cancer  snv     methylation     rnaseq  atac
+head ./results/multi_omics/samples_2d_noOV.tsv
+TCGA-OR-A5J1    ACC     1       1       1       0
+TCGA-OR-A5J2    ACC     1       1       1       1
+TCGA-OR-A5J3    ACC     1       1       1       1
+TCGA-OR-A5J5    ACC     1       1       1       0
+TCGA-OR-A5J6    ACC     1       1       1       1
+TCGA-OR-A5J7    ACC     1       1       1       0
 
-## Output Layout
+- `./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz` with this structure:
+zcat ./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz | head
+TF      probe   gene    motif_instance_id       dist_to_tss     is_proximal     proximal_or_distal
+NRF1_mm0to2_noCGmm      cg00000321      SFRP1   chr8:41310275:41310285:+        786     TRUE    proximal
+NRF1_mm0to2_noCGmm      cg00000622      NIPA2   chr15:22838616:22838626:+       20      TRUE    proximal
+BANP_mm0to2_noCGmm      cg00003345      CASZ1   chr1:10756438:10756448:+        40205   FALSE   distal
+NRF1_mm0to2_noCGmm      cg00012362      S100A13 chr1:153627009:153627019:+      36      TRUE    proximal
+NRF1_mm0to2_noCGmm      cg00014996      USP14   chr18:158338:158348:+   34      TRUE    proximal
+NRF1_mm0to2_noCGmm      cg00015261      RP11-812E19.9   chr16:35795616:35795626:+       1950397 FALSE   distal
+NRF1_mm0to2_noCGmm      cg00020474      ERRFI1  chr1:8154893:8154903:+  128595  FALSE   distal
+BANP_mm0to2_noCGmm      cg00021152      DPYSL2  chr8:26509568:26509578:+        4449    FALSE   distal
+NRF1_mm0to2_noCGmm      cg00032419      TP53I13 chr17:29568544:29568554:+       42      TRUE    proximal
 
-All results are written under:
+- `./methylation/filtered_methylation/` with this structure:
+ls ./methylation/filtered_methylation/ | head
+HM450_TCGA-ACC-TCGA-OR-A5J1-01A_1_annotated_methylation_filtered.bed.gz
+HM450_TCGA-ACC-TCGA-OR-A5J2-01A_1_annotated_methylation_filtered.bed.gz
+HM450_TCGA-ACC-TCGA-OR-A5J3-01A_1_annotated_methylation_filtered.bed.gz
+HM450_TCGA-ACC-TCGA-OR-A5J4-01A_1_annotated_methylation_filtered.bed.gz
+
+- `./expression/gene_expression_matrix_2d_noOV.tsv` with this structure example for one first column (raw expression value tpm):
+sample  DPM1 ...
+TCGA-ACC-TCGA-OR-A5J1-01A_1     42.9586
+TCGA-ACC-TCGA-OR-A5J2-01A_1     118.2528
+TCGA-ACC-TCGA-OR-A5J3-01A_1     53.7845
+
+- `./results/multi_omics/cancer_color_order_with_defined_colours.tsv` with this structure:
+head ./results/multi_omics/cancer_color_order_with_defined_colours.tsv
+TCGA-ACC        #107ef3
+TCGA-BLCA       #25f209
+TCGA-BRCA       #a95807
+TCGA-CESC       #ab047c
+TCGA-CHOL       #06376b
+
+## Output Directory
+
+Results are written under:
 
 ```text
-./results/methylation/correlation_expression_methylation/tumor_vs_healthy/<TF>/
+./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/<TF>/
 ```
 
-with two main branches:
+with two major branches:
 
 - `all_samples/`
 - `matched_patients/`
 
-## Main Parameters
-
-These are the key user-facing options currently present in the script:
-
-### Parallelism and batching
-
-- `mc_cores <- 20L`
-- `batch_size_meth <- 20L`
-- `batch_size_plot <- 5L`
-- `plot_cores <- 5L`
-
-### Statistical thresholds
-
-- `min_n_cor <- 3L`
-- `min_n_wilcox <- 2L`
-- `n_top <- 50L`
-- `anti_r_cutoff <- -0.3`
-- `anti_fdr_cutoff <- 0.05`
-
-### Output behavior
-
-- `make_interactive_html <- FALSE`
-- `reuse_existing_intermediate_files <- TRUE`
-- `only_significant_cancers <- FALSE`
-
-### Wilcoxon filter for by-cancer anti-correlated pairs
-
-- `wilcox_filter_enabled <- TRUE`
-- `wilcox_fdr_cutoff <- 0.05`
-- `wilcox_filter_mode <- "both"`
-
-Allowed `wilcox_filter_mode` values:
-
-- `"both"`: require both expression and methylation to pass Wilcoxon FDR
-- `"either"`: require expression or methylation to pass
-- `"expression"`: require only expression to pass
-- `"methylation"`: require only methylation to pass
-
-Important behavior:
-
-- if a cancer lacks enough healthy or tumor samples for Wilcoxon testing, the filter is not enforced for that group and the pair is allowed through
-- Wilcoxon FDR is computed within each cancer type
-
-## Pipeline Steps
+## Analysis Workflow
 
 ### 1. Build proximal motif-probe map
 
 The pipeline filters the probe-gene motif table to:
 
-- `is_proximal == TRUE`
-- `TF == tf_motif_label`
+- proximal associations only (`is_proximal == TRUE`)
+- the selected TF motif label
 
-and writes a long table with:
+It then creates a unique long-format table with:
 
 - `gene`
 - `motif_id`
@@ -128,238 +117,230 @@ and writes a long table with:
 
 Output:
 
-- `all_samples/<TF>_proximal_motif_probe_map_long.tsv.gz`
+- `<TF>_proximal_motif_probe_map_long.tsv.gz`
 
 ### 2. Build methylation sample annotation
 
-The script scans methylation BED files, extracts:
+Methylation sample files are collected from `./methylation/filtered_methylation/` and annotated with:
 
-- sample barcode
-- patient ID
-- sample type
-- cancer code
+- `patient_id`
+- `sample_barcode`
+- `sample_type`
+- `cancer`
+- `file`
 
-and keeps only patients listed in `samples_3d+4d_noOV.tsv`.
+Only patients present in the `2d_noOV` cohort file are kept.
 
 Output:
 
-- `all_samples/methylation_sample_annotation_3d4d_noOV.tsv.gz`
+- `methylation_sample_annotation_3d4d_noOV.tsv.gz`
 
-### 3. Compute motif methylation
+Note:
+The filename still contains `3d4d_noOV`, but the cohort used by the script is `2d_noOV`.
+
+### 3. Compute motif-level methylation
 
 For each methylation sample:
 
-- only probes present in the motif-probe map are kept
-- methylation is summarized per `gene + motif_id` using `MAX(beta)`
-- the probe or probes achieving the maximum are also recorded
+- the script reads HM450 probe beta values,
+- keeps only probes linked to the selected TF proximal motifs,
+- merges probe values with the motif-probe map,
+- summarizes each `gene` / `motif_id` pair using the maximum beta value across its linked probes.
+
+This pipeline uses:
+
+```text
+motif methylation = MAX(beta)
+```
+
+It also records:
+
+- number of probes found per motif-sample pair,
+- number of probes tied at the maximum beta value,
+- the selected max-beta probes.
 
 Outputs:
 
-- `all_samples/motif_sample_methylation_MAX_3d4d_noOV.tsv.gz`
-- `all_samples/motif_sample_methylation_MAX_selected_probes_3d4d_noOV.tsv.gz`
-- `all_samples/motif_sample_methylation_MAX_selected_probes_compact_3d4d_noOV.tsv.gz`
-- `all_samples/motif_sample_methylation_MAX_status_3d4d_noOV.tsv.gz`
+- `motif_sample_methylation_MAX_3d4d_noOV.tsv.gz`
+- `motif_sample_methylation_MAX_selected_probes_3d4d_noOV.tsv.gz`
+- `motif_sample_methylation_MAX_selected_probes_compact_3d4d_noOV.tsv.gz`
+- `motif_sample_methylation_MAX_status_3d4d_noOV.tsv.gz`
 
 ### 4. Merge methylation with expression
 
-The expression matrix is reshaped to long format and matched to methylation by:
+The expression matrix is reshaped to long format, TCGA sample barcodes are extracted, and motif methylation is merged with expression by:
 
 - `gene`
 - `sample_barcode`
 
 Output:
 
-- `all_samples/motif_sample_expression_methylation_all.tsv.gz`
+- `motif_sample_expression_methylation_all.tsv.gz`
 
 ### 4b. Build matched-patient subset
 
-The matched branch keeps rows where the same patient has both:
+The matched-patient branch keeps only `gene` / `motif_id` / `patient_id` combinations where both of the following are present:
 
-- a healthy sample
-- a tumor sample
-
-for the same:
-
-- `gene`
-- `motif_id`
+- at least one healthy sample
+- at least one tumor sample
 
 Output:
 
 - `matched_patients/motif_sample_expression_methylation_matched_patients.tsv.gz`
 
-### 5. Run correlations
+### 5. Run correlation analysis
 
 The pipeline computes Pearson correlations between:
 
-- motif methylation
-- target-gene expression
+- motif methylation (`meth_beta`)
+- gene expression (`log2(expression + 1)`)
 
-Results are produced for:
+Correlations are computed:
 
-- pooled all-cancer data
-- each cancer separately
+- across all cancers combined,
+- separately within each cancer type.
 
-BH/FDR correction is applied:
+False discovery rate correction uses the Benjamini-Hochberg method:
 
-- globally for pooled results
-- within each cancer for by-cancer results
+- pooled correlations: corrected across all tested pairs,
+- by-cancer correlations: corrected within each cancer type.
 
-Outputs inside each branch:
+Outputs per branch:
 
-- `correlation_stats/pearson_correlation_all_pairs_all_cancers.tsv.gz`
-- `correlation_stats/pearson_correlation_all_pairs_by_cancer.tsv.gz`
+- `pearson_correlation_all_pairs_all_cancers.tsv.gz`
+- `pearson_correlation_all_pairs_by_cancer.tsv.gz`
 
-### 6. Plot top pairs
+### 6. Extract anti-correlated pairs
 
-The pipeline selects the top `n_top` pairs from the by-cancer statistics and creates multi-page PDF reports.
+Significant anti-correlated pairs are defined as:
 
-These reports include:
+- `pearson_r < -0.3`
+- `FDR < 0.05`
 
-- a pooled scatter plot across cancers
-- per-cancer scatter plots
-- pooled dual-panel expression/methylation box-and-jitter plots
-- per-cancer dual-panel plots
+The pipeline extracts:
 
-Notable plotting behavior:
+- pooled anti-correlated pairs,
+- by-cancer anti-correlated pairs.
 
-- expression is plotted as `log2(expression + 1)`
-- methylation is shown as percent when beta values are on the 0 to 1 scale
-- a red horizontal dashed line is drawn at `log2(expression + 1) = 1`
-- the line is annotated with `expression = 1`
-- healthy samples are triangles and tumor samples are circles in pooled scatter plots
+Outputs per branch:
 
-Output directory inside each branch:
+- `anti_correlated/significant_anti_correlated_pairs_all_cancers.tsv.gz`
+- `anti_correlated/significant_anti_correlated_pairs_by_cancer.tsv.gz`
 
-- `top_pair_plots/`
+### 7. Optional Wilcoxon Healthy vs Tumor filter
 
-### 7. Matched-patient plots
+For by-cancer anti-correlated pairs, the pipeline can additionally test whether healthy and tumor samples differ for:
 
-The same top-pair plotting logic is repeated for the matched-patient subset.
+- expression
+- methylation
 
-Matched reports also record patient-level counts where available.
+using Wilcoxon rank-sum tests.
 
-### 8 and 9. Extract anti-correlated pairs
+Current defaults in the script:
 
-Anti-correlated pairs are defined using:
+- Wilcoxon filtering enabled: `TRUE`
+- Wilcoxon FDR cutoff: `0.05`
+- Wilcoxon mode: `both`
 
-- `pearson_r < anti_r_cutoff`
-- `pearson_fdr < anti_fdr_cutoff`
+Available modes:
 
-Two result sets are produced:
+- `both`: require both expression and methylation to be significant
+- `either`: require either expression or methylation to be significant
+- `expression`: require only expression to be significant
+- `methylation`: require only methylation to be significant
 
-- pooled anti-correlated pairs across all cancers
-- by-cancer anti-correlated pairs
+If both healthy and tumor groups are not available in sufficient numbers for a cancer, the Wilcoxon rule is not applied to that case.
 
-If `wilcox_filter_enabled <- TRUE`, the by-cancer set is further filtered using healthy-vs-tumor Wilcoxon tests on:
+Output per branch:
 
-- target expression
-- motif methylation
+- `anti_correlated/wilcox_healthy_vs_tumor_by_cancer.tsv.gz`
 
-Outputs inside each branch:
+### 8. Generate PDF reports
 
-- `correlation_stats/anti_correlated/significant_anti_correlated_pairs_all_cancers.tsv.gz`
-- `correlation_stats/anti_correlated/significant_anti_correlated_pairs_by_cancer.tsv.gz`
-- `correlation_stats/anti_correlated/wilcox_healthy_vs_tumor_by_cancer.tsv.gz`
+The pipeline generates a PDF report for each selected anti-correlated `gene` / `motif_id` pair.
 
-### 10. Plot all anti-correlated pairs
+Reports include:
 
-The pipeline creates PDF reports for the union of:
+- all-cancer scatter plots of methylation vs expression,
+- per-cancer scatter plots,
+- dual-panel summaries of expression and methylation in healthy vs tumor samples,
+- matched-patient versions of the same report structure for the matched branch.
 
-- pooled anti-correlated pairs
-- by-cancer anti-correlated pairs
+Report index files are also written to summarize which plots were generated.
 
-Depending on `only_significant_cancers`:
+Outputs per branch:
 
-- `FALSE`: all cancers present for the pair are plotted
-- `TRUE`: only cancer types significant for that pair are plotted
+- `anti_correlated_pair_plots/selected_anti_correlated_pairs_all_<TF>.tsv`
+- `anti_correlated_pair_plots/generated_reports_<TF>.tsv`
+- `anti_correlated_pair_plots/*_report.pdf`
+- `anti_correlated_pair_plots/*_summary.tsv`
 
-Output directory inside each branch:
+## Key Parameters
 
-- `anti_correlated_pair_plots/`
-
-### 11. Optional interactive HTML
-
-If `make_interactive_html <- TRUE`, the pipeline generates interactive Plotly scatter plots for anti-correlated pairs.
-
-These plots include hover information for:
-
-- TF name
-- target gene
-- motif ID
-- sample and patient identifiers
-- cancer and sample type
-- motif methylation
-- target expression
-- TF expression
-- `NRF1` and `BANP` TPM values
-
-Output directory inside each branch:
-
-- `interactive_target_vs_methylation_only/`
-
-## Reuse of Intermediate Files
-
-If:
+The current script defines the following main parameters:
 
 ```r
+mc_cores        <- 20L
+batch_size_meth <- 20L
+batch_size_plot <- 5L
+plot_cores      <- 5L
+min_n_cor       <- 3L
+min_n_wilcox    <- 2L
+anti_r_cutoff   <- -0.3
+anti_fdr_cutoff <- 0.05
+only_significant_cancers <- FALSE
 reuse_existing_intermediate_files <- TRUE
+wilcox_filter_enabled <- TRUE
+wilcox_fdr_cutoff     <- 0.05
+wilcox_filter_mode    <- "both"
 ```
 
-the pipeline reuses previously generated intermediate files when they already exist. This is especially useful when you only want to rerun downstream filtering or plotting.
+## Main Output Structure
 
-## Notes on Sample Handling
-
-The script normalizes sample-type labels to:
-
-- `Healthy`
-- `Tumor`
-
-It also relies on TCGA barcode parsing helpers to recover:
-
-- sample barcodes
-- patient IDs
-- sample type codes
-- cancer identifiers
-
-Healthy samples correspond to code `11` and tumor samples correspond to code `01`.
-
-## Example Output Tree
+Typical output layout:
 
 ```text
-results/methylation/correlation_expression_methylation/
-└── tumor_vs_healthy/
-    └── BANP/
-        ├── all_samples/
-        │   ├── BANP_proximal_motif_probe_map_long.tsv.gz
-        │   ├── methylation_sample_annotation_3d4d_noOV.tsv.gz
-        │   ├── motif_sample_methylation_MAX_3d4d_noOV.tsv.gz
-        │   ├── motif_sample_expression_methylation_all.tsv.gz
-        │   ├── correlation_stats/
-        │   ├── top_pair_plots/
-        │   ├── anti_correlated_pair_plots/
-        │   └── interactive_target_vs_methylation_only/
-        └── matched_patients/
-            ├── motif_sample_expression_methylation_matched_patients.tsv.gz
-            ├── correlation_stats/
-            ├── top_pair_plots/
-            ├── anti_correlated_pair_plots/
-            └── interactive_target_vs_methylation_only/
+results/
+  methylation/
+    correlation_expression_methylation_2d/
+      tumor_vs_healthy/
+        BANP/
+          all_samples/
+            correlation_stats/
+            anti_correlated_pair_plots/
+          matched_patients/
+            correlation_stats/
+            anti_correlated_pair_plots/
+        NRF1/
+          all_samples/
+          matched_patients/
 ```
 
-## Practical Notes
+## Important Notes
 
-- The script is designed for large TCGA-scale data and uses `mclapply` for parallel execution.
-- Static PDFs are always generated by the plotting steps.
-- Interactive HTML is optional and disabled by default.
-- The Wilcoxon-based filtering only affects the by-cancer anti-correlated output, not the pooled anti-correlated table.
-- The matched-patient branch requires healthy and tumor samples from the same patient for the same gene-motif pair.
+- The analysis uses `log2(expression + 1)` for correlation and plotting.
+- Methylation values are plotted as percentages when beta values are in the `0-1` range.
+- Existing intermediate files are reused when `reuse_existing_intermediate_files = TRUE`.
+- The plotting step can include all cancers for a pair, not only cancers passing significance, because `only_significant_cancers` is currently `FALSE`.
+- The matched-patient branch is not a paired statistical model; it is a subset restricted to patients represented in both healthy and tumor groups.
 
-## Summary
+## Example Interpretation
 
-This pipeline is a TF-specific methylation-expression correlation workflow for `BANP` and `NRF1` that:
+For a given `gene` / `motif_id` pair, evidence in favor of a biologically interesting anti-correlation typically means:
 
-- quantifies **proximal** motif methylation using the maximum linked-probe beta
-- relates methylation to target-gene expression across pan-cancer and cancer-specific contexts
-- performs matched healthy-versus-tumor patient analyses
-- filters anti-correlated pairs with optional Wilcoxon rules
-- generates publication-style PDF reports and optional interactive HTML outputs
+- higher motif methylation is associated with lower gene expression,
+- the association is significant after FDR correction,
+- in the by-cancer setting, healthy and tumor samples may also differ significantly in expression and methylation.
+
+## Script Entry Point
+
+The pipeline is executed through:
+
+```r
+run_pipeline()
+```
+
+which runs the full workflow for the selected transcription factor across:
+
+- all available samples
+- the matched-patient subset

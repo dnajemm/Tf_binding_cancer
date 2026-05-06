@@ -2230,231 +2230,210 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
 
 dev.off()
 '
+#################################################
+# Barplot not only for the A vial but all of them
+#################################################
+mkdir -p ./methylation/methylation_counts
+mkdir -p ./results/methylation
 
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+  library(reshape2)
+})
 
 ###############################################################################
-# Methylation sample counts per cancer type restricted to 3d+4d_noOV cohort
-# Tumor = any 0X sample type
-# Healthy = any 1X sample type
-# Ordered from biggest cancer type to smallest
+# Count methylation files per cancer type
 ###############################################################################
 
-Rscript -e '
-library(data.table)
-library(ggplot2)
+meth_dir <- "./methylation/filtered_methylation"
+out_tsv  <- "./methylation/methylation_counts/methylation_presence_0X_1X.tsv"
+out_pdf  <- "./results/methylation/methylation_counts_barplot.pdf"
 
-# ============================================================
-# INPUTS
-# ============================================================
-cohort_file <- "./results/multi_omics/samples_3d+4d_noOV.tsv"
-meth_dir    <- "./methylation/filtered_methylation"
-
-out_dir   <- "./results/methylation/methylation_counts"
-out_table <- file.path(out_dir, "methylation_counts_3d4d_noOV_0X_1X.tsv")
-out_pdf   <- file.path(out_dir, "methylation_counts_barplot_3d4d_noOV_0X_1X.pdf")
-
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-# ============================================================
-# HELPERS
-# ============================================================
-extract_sample_barcode <- function(x) {
-  x <- basename(as.character(x))
-
-  # Extract sample barcode such as TCGA-XX-XXXX-01A, TCGA-XX-XXXX-11B, etc.
-  out <- sub("^HM450_TCGA-[^-]+-(TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z]).*$", "\\\\1", x)
-
-  out[!grepl("^TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z]$", out)] <- NA_character_
-  out
-}
-
-extract_patient_id <- function(x) {
-  x <- as.character(x)
-
-  # Extract patient ID: TCGA-XX-XXXX
-  out <- sub("^(TCGA-[^-]+-[^-]+).*$", "\\\\1", x)
-
-  out[!grepl("^TCGA-[^-]+-[^-]+$", out)] <- NA_character_
-  out
-}
-
-extract_sample_type <- function(x) {
-  x <- as.character(x)
-
-  # Extract the 2-digit TCGA sample type code:
-  # 01A -> 01
-  # 01B -> 01
-  # 06D -> 06
-  # 10A -> 10
-  # 11B -> 11
-  code <- sub("^TCGA-[^-]+-[^-]+-([0-9]{2}).*$", "\\\\1", x)
-
-  code[!grepl("^[0-9]{2}$", code)] <- NA_character_
-
-  # Any 0X code = tumor
-  # Any 1X code = healthy/normal
-  ifelse(
-    grepl("^0[0-9]$", code), "tumor",
-    ifelse(grepl("^1[0-9]$", code), "healthy", NA_character_)
-  )
-}
-
-extract_cancer <- function(x) {
-  x <- basename(as.character(x))
-
-  # Extract cancer type from filename:
-  # HM450_TCGA-KIRC-TCGA-XX-XXXX-01A_...
-  out <- sub("^HM450_TCGA-([^-]+)-.*$", "\\\\1", x)
-
-  out[!grepl("^[A-Z0-9]+$", out)] <- NA_character_
-  out
-}
-
-# ============================================================
-# LOAD 3d+4d_noOV PATIENT LIST
-# ============================================================
-cohort <- fread(cohort_file, header = FALSE)
-
-patients_keep <- unique(as.character(cohort[[1]]))
-patients_keep <- patients_keep[grepl("^TCGA-[^-]+-[^-]+$", patients_keep)]
-
-cat("[INFO] Patients in 3d+4d_noOV cohort:", length(patients_keep), "\\n")
-
-# ============================================================
-# LIST AND ANNOTATE METHYLATION FILES
-# ============================================================
 files <- list.files(
   meth_dir,
-  pattern = "[.]bed[.]gz$",
-  full.names = TRUE
+  pattern = "_annotated_methylation_filtered.bed.gz$",
+  full.names = FALSE
 )
 
-dt <- data.table(file = files)
-dt[, fname := basename(file)]
-dt[, sample_barcode := extract_sample_barcode(fname)]
-dt[, patient_id := extract_patient_id(sample_barcode)]
-dt[, sample_type := extract_sample_type(sample_barcode)]
-dt[, cancer := extract_cancer(fname)]
+cat(">>> Total methylation files found:", length(files), "\n")
 
-dt <- dt[
+if (length(files) == 0) {
+  stop("No methylation files found.")
+}
+
+dt <- data.table(filename = files)
+
+###############################################################################
+# Extract cancer type and TCGA sample barcode
+###############################################################################
+# Example:
+# HM450_TCGA-ACC-TCGA-OR-A5J1-01A_1_annotated_methylation_filtered.bed.gz
+###############################################################################
+
+dt[, cancer := sub(
+  "^HM450_TCGA-([A-Z0-9]+)-TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z].*$",
+  "\\1",
+  filename
+)]
+
+dt[!grepl("^[A-Z0-9]+$", cancer), cancer := NA_character_]
+
+dt[, sample_barcode := sub(
+  "^HM450_TCGA-[A-Z0-9]+-(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]).*$",
+  "\\1",
+  filename
+)]
+
+dt[!grepl("^TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]$", sample_barcode),
+   sample_barcode := NA_character_]
+
+# Extract only the TCGA sample type code: 01, 02, ..., 11, etc.
+# This ignores the vial letter A/B/C and therefore includes both A and B.
+dt[, sample_code := substr(sample_barcode, 14, 15)]
+
+dt[, sample_type := fifelse(
+  sample_code %in% sprintf("%02d", 1:9), "tumor",
+  fifelse(sample_code %in% sprintf("%02d", 10:19), "healthy", NA_character_)
+)]
+
+cat(">>> Parsed sample type counts:\n")
+print(table(dt$sample_type, useNA = "ifany"))
+
+cat(">>> First parsed examples:\n")
+print(head(dt[, .(filename, cancer, sample_barcode, sample_code, sample_type)], 10))
+
+if (any(is.na(dt$cancer)) || any(is.na(dt$sample_barcode)) || any(is.na(dt$sample_type))) {
+  cat(">>> WARNING: Some files were not parsed/classified correctly.\n")
+  print(head(dt[is.na(cancer) | is.na(sample_barcode) | is.na(sample_type)], 20))
+}
+
+###############################################################################
+# Keep tumor and healthy samples only
+###############################################################################
+
+dt_keep <- dt[
+  !is.na(cancer) &
   !is.na(sample_barcode) &
-    !is.na(patient_id) &
-    !is.na(sample_type) &
-    !is.na(cancer)
+  !is.na(sample_type)
 ]
 
-# Keep only patients from 3d+4d_noOV cohort
-dt <- dt[patient_id %in% patients_keep]
+if (nrow(dt_keep) == 0) {
+  stop("No methylation files classified as tumor or healthy.")
+}
 
-# One row per methylation sample
-dt <- unique(dt[, .(cancer, patient_id, sample_barcode, sample_type)])
+###############################################################################
+# Count per cancer and sample type
+###############################################################################
 
-cat("[INFO] Methylation samples kept:", nrow(dt), "\\n")
-cat("[INFO] Tumor 0X samples kept:", dt[sample_type == "tumor", .N], "\\n")
-cat("[INFO] Healthy 1X samples kept:", dt[sample_type == "healthy", .N], "\\n")
+summary_dt <- dt_keep[, .N, by = .(cancer, sample_type)]
 
-# Optional diagnostic: how many sample type codes were kept
-dt[, sample_code := sub("^TCGA-[^-]+-[^-]+-([0-9]{2}).*$", "\\\\1", sample_barcode)]
-cat("[INFO] Sample type code distribution after filtering:\\n")
-print(dt[, .N, by = .(sample_code, sample_type)][order(sample_type, sample_code)])
-
-# ============================================================
-# COUNT TUMOR / HEALTHY PER CANCER
-# ============================================================
-count_dt <- dcast(
-  dt[, .N, by = .(cancer, sample_type)],
+summary_wide <- data.table::dcast(
+  summary_dt,
   cancer ~ sample_type,
   value.var = "N",
   fill = 0
 )
 
-if (!"tumor" %in% names(count_dt)) count_dt[, tumor := 0L]
-if (!"healthy" %in% names(count_dt)) count_dt[, healthy := 0L]
+if (!"tumor" %in% names(summary_wide)) summary_wide[, tumor := 0L]
+if (!"healthy" %in% names(summary_wide)) summary_wide[, healthy := 0L]
 
-setcolorder(count_dt, c("cancer", "tumor", "healthy"))
+summary_wide <- summary_wide[, .(cancer, tumor, healthy)]
 
-# ============================================================
-# ORDER FROM BIGGEST CANCER TYPE TO SMALLEST
-# ============================================================
-count_dt[, total := tumor + healthy]
-count_dt <- count_dt[order(-total, cancer)]
+summary_wide[, no_healthy := healthy == 0]
+summary_wide[, total := tumor + healthy]
 
-# Freeze cancer order for ggplot
-count_dt[, cancer := factor(cancer, levels = as.character(cancer))]
+setorder(summary_wide, -total)
 
-# Flag cancer types with no healthy samples
-count_dt[, no_healthy := healthy == 0]
+fwrite(
+  summary_wide[, .(cancer, tumor, healthy)],
+  out_tsv,
+  sep = "\t"
+)
 
-fwrite(count_dt, out_table, sep = "\\t")
-cat("[DONE] Wrote table:", out_table, "\\n")
+cat(">>> Wrote:", out_tsv, "\n")
+cat(">>> Total tumor and healthy methylation samples:", sum(summary_wide$total), "\n")
 
-# ============================================================
-# PREPARE PLOT DATA
-# ============================================================
-label_df <- count_dt[, .(cancer, no_healthy)]
+###############################################################################
+# Plot
+###############################################################################
+
+total_samples <- sum(summary_wide$total)
+
+summary_wide[, cancer := factor(cancer, levels = cancer)]
+
+label_df <- summary_wide[, .(cancer, no_healthy)]
 
 df_long <- melt(
-  count_dt,
-  id.vars = c("cancer", "total", "no_healthy"),
+  summary_wide,
+  id.vars = "cancer",
   measure.vars = c("tumor", "healthy"),
   variable.name = "type",
   value.name = "count"
 )
 
-# ============================================================
-# BARPLOT
-# ============================================================
-pdf(out_pdf, width = 12, height = 8)
+pdf(
+  out_pdf,
+  width = 12,
+  height = 8,
+  family = "Times"
+)
 
-p <- ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
+ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
   geom_bar(stat = "identity", position = "dodge") +
   scale_fill_manual(
     values = c("tumor" = "salmon", "healthy" = "steelblue"),
-    labels = c("tumor" = "Tumor samples (0X)", "healthy" = "Healthy samples (1X)"),
     name = ""
   ) +
   labs(
-    title = "Tumor (0X) vs Healthy (1X) Methylation Sample Counts per Cancer Type",
-    subtitle = "Restricted to 3d+4d_noOV cohort; cancer types ordered by total sample count",
-    x = "Cancer Type",
-    y = "Number of Samples",
-    caption = "Red cancer names = cancer types with no healthy 1X samples"
+    title    = "Tumor versus Healthy DNA Methylation Sample Counts per Cancer Type",
+    subtitle = paste0("Total tumor and healthy DNA methylation samples: ", total_samples),
+    x        = "Cancer Type",
+    y        = "Number of Samples",
+    caption  = "Red cancer names = cancer types with no healthy samples"
   ) +
-  theme_minimal(base_size = 13) +
+  theme_minimal(base_size = 13, base_family = "Times") +
   theme(
-    plot.title = element_text(hjust = 0.5),
-    plot.subtitle = element_text(hjust = 0.5),
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank(),
-    axis.title.x = element_text(margin = margin(t = 25)),
-    plot.caption = element_text(hjust = 0.5, color = "red", size = 12),
-    plot.margin = margin(t = 10, r = 20, b = 90, l = 20)
+    text            = element_text(family = "Times"),
+    plot.title      = element_text(hjust = 0.5, family = "Times"),
+    plot.subtitle   = element_text(hjust = 0.5, size = 14, family = "Times"),
+    axis.title.x    = element_text(family = "Times"),
+    axis.title.y    = element_text(family = "Times"),
+    axis.text.x     = element_blank(),
+    axis.ticks.x    = element_blank(),
+    axis.text.y     = element_text(family = "Times"),
+    legend.title    = element_text(size = 16, family = "Times"),
+    legend.text     = element_text(size = 15, family = "Times"),
+    legend.key.size = unit(0.8, "cm"),
+    plot.caption    = element_text(hjust = 0.5, color = "red", size = 12, family = "Times"),
+    plot.margin     = margin(t = 10, r = 20, b = 60, l = 20)
   ) +
   coord_cartesian(clip = "off") +
   geom_text(
     data = label_df,
     aes(
-      x = cancer,
-      y = 0,
+      x     = cancer,
+      y     = 0,
       label = cancer,
       color = no_healthy
     ),
-    angle = 45,
-    hjust = 1,
-    vjust = 2.2,
+    angle       = 45,
+    hjust       = 1,
+    vjust       = 0.8,
     inherit.aes = FALSE,
-    size = 4
+    size        = 4,
+    family      = "Times"
   ) +
   scale_color_manual(
     values = c(`TRUE` = "red", `FALSE` = "black"),
-    guide = "none"
+    guide  = "none"
   )
 
-print(p)
 dev.off()
 
-cat("[DONE] Wrote plot:", out_pdf, "\\n")
-'
+cat(">>> Saved plot:", out_pdf, "\n")
+EOF
 
 # Statistics methylation probes per sample : 
 ###############################################################################
@@ -10347,64 +10326,149 @@ ggsave(out_pdf, plot = p, width = 10, height = 8)
 ###############################################################################
 
 mkdir -p ./expression/expression_counts
-out=./expression/expression_counts/expression_presence.tsv
+mkdir -p ./results/expression
 
-echo -e "cancer\ttumor_count(01-09A)\thealthy_count(10-19A)" > "$out"
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+})
 
-# get cancer list 
-cancers=$(ls -1 ./expression/ \
-  | grep augmented_star_gene_counts.tsv \
-  | cut -d'_' -f2 \
-  | cut -d'-' -f2 \
-  | sort -u)
+###############################################################################
+# Count RNA-seq files per cancer type
+###############################################################################
 
-for cancer in $cancers; do
-  # tumor: 01A..09A
-  tumor_count=$(ls -1 ./expression/ \
-    | grep augmented_star_gene_counts.tsv \
-    | grep -E "_TCGA-${cancer}-.*-0[1-9]A" \
-    | wc -l)
+expr_dir <- "./expression"
+out_tsv  <- "./expression/expression_counts/expression_presence.tsv"
+out_pdf  <- "./results/expression/expression_counts_healthy_cancer_per_cancer_type_barplot.pdf"
 
-  # healthy: 10A..19A
-  healthy_count=$(ls -1 ./expression/ \
-    | grep augmented_star_gene_counts.tsv \
-    | grep -E "_TCGA-${cancer}-.*-1[0-9]A" \
-    | wc -l)
+files <- list.files(
+  expr_dir,
+  pattern = "augmented_star_gene_counts.tsv$",
+  full.names = FALSE
+)
 
-  printf "%s\t%d\t%d\n" "$cancer" "$tumor_count" "$healthy_count" >> "$out"
-done
+cat(">>> Total augmented RNA-seq files found:", length(files), "\n")
 
-echo "[DONE] Wrote $out"
+if (length(files) == 0) {
+  stop("No augmented_star_gene_counts.tsv files found in ./expression/")
+}
 
-# Plot the number of RNAseq data per cancer type for tumor vs healthy samples (grouped barplot)
-Rscript -e '
-library(ggplot2)
-library(reshape2)
+dt <- data.table(filename = files)
 
-# Load RNA-seq counts
-df <- read.table("./expression/expression_counts/expression_presence.tsv",header = TRUE, sep = "\t")
-colnames(df) <- c("cancer", "tumor", "healthy")
+###############################################################################
+# Extract cancer type and sample barcode
+###############################################################################
+# Example:
+# RNA_TCGA-ACC-TCGA-OR-A5JB-01A_1.augmented_star_gene_counts.tsv
+###############################################################################
 
-# Flag cancers with no healthy samples
-df$no_healthy <- df$healthy == 0
+dt[, cancer := sub(
+  "^RNA_TCGA-([A-Z0-9]+)-TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z].*$",
+  "\\1",
+  filename
+)]
 
-# Total samples per cancer
-df$total <- df$tumor + df$healthy
+dt[!grepl("^[A-Z0-9]+$", cancer), cancer := NA_character_]
 
-# Reorder cancers by total (descending)
-df$cancer <- factor(df$cancer, levels = df$cancer[order(-df$total)])
+dt[, sample_barcode := sub(
+  "^RNA_TCGA-[A-Z0-9]+-(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]).*$",
+  "\\1",
+  filename
+)]
 
-# Label dataframe (after reordering)
-label_df <- df[, c("cancer", "no_healthy")]
+dt[!grepl("^TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[0-9]{2}[A-Z]$", sample_barcode),
+   sample_barcode := NA_character_]
 
-# Long format (tumor + healthy only)
-df_long <- melt(df,
-                id.vars = "cancer",
-                measure.vars = c("tumor", "healthy"),
-                variable.name = "type",
-                value.name = "count")
+dt[, sample_code := substr(sample_barcode, 14, 15)]
 
-pdf("./results/expression/expression_counts_healthy_cancer_per_cancer_type_barplot.pdf",width = 12, height = 8)
+dt[, sample_type := fifelse(
+  sample_code %in% sprintf("%02d", 1:9), "tumor",
+  fifelse(sample_code %in% sprintf("%02d", 10:19), "healthy", NA_character_)
+)]
+
+cat(">>> Parsed sample type counts:\n")
+print(table(dt$sample_type, useNA = "ifany"))
+
+cat(">>> Parsed cancer examples:\n")
+print(head(dt[, .(filename, cancer, sample_barcode, sample_code, sample_type)], 10))
+
+if (any(is.na(dt$cancer)) || any(is.na(dt$sample_barcode)) || any(is.na(dt$sample_type))) {
+  cat(">>> WARNING: Some files were not parsed/classified correctly.\n")
+  cat(">>> First problematic files:\n")
+  print(head(dt[is.na(cancer) | is.na(sample_barcode) | is.na(sample_type)], 20))
+}
+
+###############################################################################
+# Keep tumor and healthy samples only
+###############################################################################
+
+dt_keep <- dt[
+  !is.na(cancer) &
+  !is.na(sample_barcode) &
+  !is.na(sample_type)
+]
+
+if (nrow(dt_keep) == 0) {
+  stop("No files classified as tumor or healthy after parsing.")
+}
+
+###############################################################################
+# Count per cancer and sample type
+###############################################################################
+
+count_dt <- dt_keep[, .N, by = .(cancer, sample_type)]
+
+summary_dt <- data.table::dcast(
+  count_dt,
+  cancer ~ sample_type,
+  value.var = "N",
+  fill = 0
+)
+
+if (!"tumor" %in% names(summary_dt)) summary_dt[, tumor := 0L]
+if (!"healthy" %in% names(summary_dt)) summary_dt[, healthy := 0L]
+
+summary_dt <- summary_dt[, .(cancer, tumor, healthy)]
+
+summary_dt[, total := tumor + healthy]
+summary_dt[, no_healthy := healthy == 0]
+
+setorder(summary_dt, -total)
+
+fwrite(
+  summary_dt[, .(cancer, tumor, healthy)],
+  out_tsv,
+  sep = "\t"
+)
+
+cat(">>> Wrote:", out_tsv, "\n")
+cat(">>> Total tumor + healthy RNA-seq samples:", sum(summary_dt$total), "\n")
+
+###############################################################################
+# Plot
+###############################################################################
+
+total_samples <- sum(summary_dt$total)
+
+summary_dt[, cancer := factor(cancer, levels = cancer)]
+
+label_df <- summary_dt[, .(cancer, no_healthy)]
+
+df_long <- melt(
+  summary_dt,
+  id.vars = c("cancer", "total", "no_healthy"),
+  measure.vars = c("tumor", "healthy"),
+  variable.name = "type",
+  value.name = "count"
+)
+
+pdf(
+  out_pdf,
+  width = 12,
+  height = 8,
+  family = "Times"
+)
 
 ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
   geom_bar(stat = "identity", position = "dodge") +
@@ -10413,18 +10477,27 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     name = ""
   ) +
   labs(
-    title   = "Tumor (0XA) vs Healthy (1XA) RNA-seq Sample Counts per Cancer Type",
-    x       = "Cancer Type",
-    y       = "Number of Samples",
-    caption = "Red cancer names = cancer types with no healthy samples"
+    title    = "Tumor versus Healthy RNA-seq Sample Counts per Cancer Type",
+    subtitle = paste0("Total tumor and healthy RNA-seq samples: ", total_samples),
+    x        = "Cancer Type",
+    y        = "Number of Samples",
+    caption  = "Red cancer names = cancer types with no healthy samples"
   ) +
-  theme_minimal(base_size = 13) +
+  theme_minimal(base_size = 13, base_family = "Times") +
   theme(
-    plot.title   = element_text(hjust = 0.5),
-    axis.text.x  = element_blank(),
-    axis.ticks.x = element_blank(),
-    plot.caption = element_text(hjust = 0.5, color = "red", size = 12),
-    plot.margin  = margin(t = 10, r = 20, b = 60, l = 20)
+    text            = element_text(family = "Times"),
+    plot.title      = element_text(hjust = 0.5, family = "Times"),
+    plot.subtitle   = element_text(hjust = 0.5, size = 14, family = "Times"),
+    axis.title.x    = element_text(family = "Times"),
+    axis.title.y    = element_text(family = "Times"),
+    axis.text.x     = element_blank(),
+    axis.ticks.x    = element_blank(),
+    axis.text.y     = element_text(family = "Times"),
+    legend.title    = element_text(size = 16, family = "Times"),
+    legend.text     = element_text(size = 15, family = "Times"),
+    legend.key.size = unit(0.8, "cm"),
+    plot.caption    = element_text(hjust = 0.5, color = "red", size = 12, family = "Times"),
+    plot.margin     = margin(t = 10, r = 20, b = 60, l = 20)
   ) +
   coord_cartesian(clip = "off") +
   geom_text(
@@ -10437,9 +10510,10 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     ),
     angle       = 45,
     hjust       = 1,
-    vjust       = 1.2,
+    vjust       = 0.8,
     inherit.aes = FALSE,
-    size        = 4
+    size        = 4,
+    family      = "Times"
   ) +
   scale_color_manual(
     values = c(`TRUE` = "red", `FALSE` = "black"),
@@ -10447,7 +10521,9 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
   )
 
 dev.off()
-'
+
+cat(">>> Saved plot:", out_pdf, "\n")
+EOF
 
 ###############################################################################
 # 4) Count Number of patients with RNA seq data 
@@ -10463,52 +10539,109 @@ ls -1 ./expression/*augmented_star_gene_counts.tsv 2>/dev/null \
 ###############################################################################
 # 5) Count Number of GENE TYPE IN EACH FILE RNAseq data 
 ###############################################################################
-awk -F'\t' 'NR>1 && $1 ~ /^ENS/ {print $3}' ./expression/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv | sort | uniq -c 
-# plot the distribution of gene types in the RNA-seq files (barplot)
+###############################################################################
+# 5) Count number of gene types in one RNA-seq file
+###############################################################################
+
+awk -F'\t' 'NR>1 && $1 ~ /^ENS/ {print $3}' \
+  ./expression/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv \
+  | sort | uniq -c
+
+###############################################################################
+# Plot distribution of gene types in the RNA-seq file
+###############################################################################
+
 Rscript -e '
 library(data.table)
 
 infile <- "./expression/RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.augmented_star_gene_counts.tsv"
 outpdf <- "./results/expression/barplot_gene_types_RNA_TCGA-ACC-TCGA-OR-A5J1-01A_1.pdf"
-dir.create(dirname(outpdf), recursive=TRUE, showWarnings=FALSE)
+
+dir.create(dirname(outpdf), recursive = TRUE, showWarnings = FALSE)
 
 dt <- fread(infile)
-# keep gene rows only (those that start with ENS)
+
+# Keep gene rows only, those that start with ENS
 dt <- dt[grepl("^ENS", dt[[1]])]
 
 # gene_type is column 3
-cnt <- dt[, .N, by=.(gene_type = dt[[3]])]
+cnt <- dt[, .N, by = .(gene_type = dt[[3]])]
 setorder(cnt, -N)
 
-# -----  colors + y-axis scaling -----
+###############################################################################
+# Colors and y-axis scaling
+###############################################################################
+
 n <- nrow(cnt)
-cols <- grDevices::hcl.colors(n, palette="Dark2", alpha=0.9)
+cols <- grDevices::hcl.colors(n, palette = "Dark2", alpha = 0.9)
 
-ymax <- max(cnt$N, na.rm=TRUE)
-ylim <- c(0, ymax * 1.12)  # headroom for text labels
-# ---------------------------------------
+ymax <- max(cnt$N, na.rm = TRUE)
+ylim <- c(0, ymax * 1.20)
 
-pdf(outpdf, width=10, height=8)
-par(mar=c(10,4,4,2))
-bp <- barplot(
-  cnt$N,
-  names.arg=cnt$gene_type,
-  las=2,
-  ylab="Number of genes",
-  main="Gene biotypes in file",
-  col=cols,
-  border=NA,
-  ylim=ylim,
-  cex.names = 0.6
+###############################################################################
+# Plot
+###############################################################################
+
+pdf(outpdf, width = 10, height = 10, family = "Times")
+
+par(
+  mar = c(16, 4, 4, 2),
+  family = "Times"
 )
 
-text(bp, cnt$N, labels=cnt$N, pos=3, cex=0.5)
-grid(nx=NA, ny=NULL)
+bp <- barplot(
+  cnt$N,
+  names.arg = FALSE,
+  axes = FALSE,
+  ylab = "Number of genes",
+  col = cols,
+  border = NA,
+  ylim = ylim
+)
+
+# Y-axis with smaller numbers
+axis(
+  side = 2,
+  cex.axis = 0.7,
+  las = 1
+)
+
+# X-axis labels with larger text
+axis(
+  side = 1,
+  at = bp,
+  labels = cnt$gene_type,
+  las = 2,
+  tick = FALSE,
+  cex.axis = 0.85
+)
+
+# Lower title position
+title(
+  main = "Gene Biotypes",
+  line = -0.5,
+  cex.main = 2,
+  family = "Times"
+)
+
+# Add values above only the first three bars
+label_idx <- seq_len(min(1, nrow(cnt)))
+
+text(
+  bp[label_idx],
+  cnt$N[label_idx],
+  labels = cnt$N[label_idx],
+  pos = 3,
+  cex = 1,
+  family = "Times"
+)
+
+grid(nx = NA, ny = NULL)
+
 dev.off()
 
-cat("[DONE] -> ", outpdf, "\n", sep="")
+cat("[DONE] -> ", outpdf, "\n", sep = "")
 '
-
 ###############################################################################
 # 6) Range of tpm_unstranded for protein_coding
 ###############################################################################
@@ -10831,13 +10964,13 @@ map <- read_tsv(
 
 cat("[INFO] Reading 2d_noOV cohort file (headerless)...\n")
 cohort <- read_tsv(
-  "./results/multi_omics/samples_2d_noOV.tsv",
+  "./results/multi_omics/samples_2d_noOV_noCHOL.tsv",
   col_names = c("case_id", "cancer_cohort", "v3", "v4", "v5", "v6"),
   show_col_types = FALSE
 )
 
 cohort_case_ids <- unique(cohort$case_id)
-cat("[INFO] 2d_noOV unique case IDs: ", length(cohort_case_ids), "\n", sep = "")
+cat("[INFO] 2d_noOV_noCHOL unique case IDs: ", length(cohort_case_ids), "\n", sep = "")
 
 cat("[INFO] Listing NRF1/BANP per-sample files...\n")
 files <- list.files(
@@ -10889,14 +11022,14 @@ df <- df %>%
   filter(!is.na(cancer), !is.na(tpm_unstranded)) %>%
   filter(sample_type %in% c("Normal", "Tumor"))
 
-cat("[INFO] Rows before 2d_noOV filtering: ", nrow(df), "\n", sep = "")
+cat("[INFO] Rows before 2d_noOV_noCHOL filtering: ", nrow(df), "\n", sep = "")
 
 df <- df %>%
   filter(case_id %in% cohort_case_ids)
 
-cat("[INFO] Rows after 2d_noOV filtering: ", nrow(df), "\n", sep = "")
+cat("[INFO] Rows after 2d_noOV_noCHOL filtering: ", nrow(df), "\n", sep = "")
 
-cat("[INFO] Sample code breakdown after 2d_noOV filtering:\n")
+cat("[INFO] Sample code breakdown after 2d_noOV_noCHOL filtering:\n")
 print(table(df$code, df$sample_type, useNA = "ifany"))
 
 # ============================================================
@@ -10929,23 +11062,23 @@ df <- df %>%
 
 # ============================================================
 
-cat("[INFO] 2d_noOV Tumor samples:  ",
+cat("[INFO] 2d_noOV_noCHOL Tumor samples:  ",
     length(unique(df$sample_id[df$sample_type == "Tumor"])),
     "\n",
     sep = "")
 
-cat("[INFO] 2d_noOV Normal samples: ",
+cat("[INFO] 2d_noOV_noCHOL Normal samples: ",
     length(unique(df$sample_id[df$sample_type == "Normal"])),
     "\n",
     sep = "")
 
-cat("[INFO] 2d_noOV cancers: ",
+cat("[INFO] 2d_noOV_noCHOL cancers: ",
     length(unique(df$cancer)),
     "\n",
     sep = "")
 
 if (nrow(df) == 0) {
-  stop("No samples left after 2d_noOV filtering.")
+  stop("No samples left after 2d_noOV_noCHOL filtering.")
 }
 
 ymax <- max(df$tpm_unstranded, na.rm = TRUE)
@@ -10988,17 +11121,17 @@ cat("[INFO] Building plots...\n")
 
 p_nrf1 <- make_plot(
   filter(df, gene_name == "NRF1"),
-  "NRF1 TPM in 2d_noOV — Normal vs Tumor | cutoff = 50",
+  "NRF1 TPM in 2d_noOV_noCHOL — Normal vs Tumor | cutoff = 50",
   get_removed("NRF1")
 )
 
 p_banp <- make_plot(
   filter(df, gene_name == "BANP"),
-  "BANP TPM in 2d_noOV — Normal vs Tumor | cutoff = 30",
+  "BANP TPM in 2d_noOV_noCHOL — Normal vs Tumor | cutoff = 30",
   get_removed("BANP")
 )
 
-out <- "./results/expression/boxplot_TPM_NRF1_BANP_by_cancer_Normal_vs_Tumor_2d_noOV.pdf"
+out <- "./results/expression/boxplot_TPM_NRF1_BANP_by_cancer_Normal_vs_Tumor_2d_noOV_noCHOL.pdf"
 
 dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
 
@@ -11010,8 +11143,8 @@ print(p_banp)
 dev.off()
 
 cat("[DONE] Wrote ", out, "\n", sep = "")
-' # IM HERE
-
+' 
+#LAUNCHED
 ####################################################################################################################################################################################################
 # Build a list of the expression of NRF1 and BANP in all samples and then filter to keep only the samples for which we have both tumor and healthy samples
 ####################################################################################################################################################################################################
@@ -11395,8 +11528,6 @@ cat("Distal:", out[proximal_or_distal == 'distal', .N], "\n")
 EOF
 
 
-
-
 # Create a table of the samples for which we have 3d+4d data (SNV, METH, RNA) and whether we have ATAC data for them or not, to see how many samples we have with 3d+4d data and how many of those have ATAC data.
 # create a tsv of the samples with 3d+4d:
 cat ./results/multi_omics/sample_data_summary.tsv | awk '$3==1 && $4==1 && $5==1 && ($6==0 ||$6==1) {print $0}' > ./results/multi_omics/samples_3d+4d.tsv
@@ -11450,19 +11581,20 @@ ggsave("./results/multi_omics/samples_3+4datasets_barplot.pdf",plot = p, width =
 # Create a table of the samples for which we have 2d data (METH, RNA) 
 # create a tsv of the samples with 2d:
 cat ./results/multi_omics/sample_data_summary.tsv | awk ' $4==1 && $5==1 {print $0}' > ./results/multi_omics/samples_2d.tsv
-cat ./results/multi_omics/sample_data_summary.tsv | awk ' $2!="OV" && $4==1 && $5==1 {print $0}' > ./results/multi_omics/samples_2d_noOV.tsv
+cat ./results/multi_omics/sample_data_summary.tsv | awk ' $2!="OV" && $2!="CHOL" && $4==1 && $5==1 {print $0}' > ./results/multi_omics/samples_2d_noOV_noCHOL.tsv
 
-# barplot the number of samples witht 2d per cancer type:
+# barplot the number of patients witht 2d per cancer type without OV and CHOL:
 Rscript -e '
 library(data.table)
 library(ggplot2)
-
 dt <- fread("./results/multi_omics/samples_2d.tsv", header = FALSE)
 setnames(dt, c("sample","cancer","SNV","METH","RNA","ATAC"))
 
+# Remove CHOL and OV
+dt <- dt[cancer != "CHOL" & cancer != "OV"]
+
 counts <- dt[, .N, by = cancer]
 total_samples <- nrow(dt)
-
 # Read defined color file
 color_df <- fread(
   "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
@@ -11472,11 +11604,9 @@ setnames(color_df, c("Cancer_full", "Color"))
 color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
 color_df[, Color  := trimws(gsub("\r", "", Color))]
 palette <- setNames(color_df$Color, color_df$Cancer)
-
 # Match colors to cancers in the plot
 counts[, Color := palette[cancer]]
 counts[is.na(Color), Color := "grey70"]
-
 p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
   geom_bar(stat = "identity", color = "black") +
   geom_text(aes(label = N), hjust = -0.15, size = 3) +
@@ -11484,17 +11614,106 @@ p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
   scale_fill_manual(values = setNames(counts$Color, counts$cancer)) +
   labs(
     x = "Cancer type",
-    y = "Number of samples",
-    title = "Samples per Cancer Type",
+    y = "Number of patients",
+    title = "Patients per Cancer Type",
     subtitle = paste0("Multi-omics cohort (n = ", total_samples, ")")
   ) +
   expand_limits(y = max(counts$N) * 1.08) +
   theme_minimal() +
   theme(legend.position = "none")
-
 ggsave("./results/multi_omics/samples_2d_barplot.pdf",plot = p, width = 5, height = 5, dpi = 300, bg = "white")
 '
 
+# barplot the number of samples witht 2d per cancer type for the 2d_noOV and no CHOL cohort:
+Rscript -e '
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+})
+
+# Output paths
+out_pdf <- "./results/multi_omics/samples_2d_noOV_per_sampletype_barplot.pdf"
+
+# Read methylation sample annotation
+dt <- fread("./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/all_samples/methylation_sample_annotation_2d_noOV.tsv.gz")
+
+# Remove CHOL
+dt <- dt[cancer != "CHOL"]
+
+# Count samples per cancer and sample type
+counts <- dt[, .N, by = .(cancer, sample_type)]
+
+# Read cancer colors
+color_df <- fread("./results/multi_omics/cancer_color_order_with_defined_colours.tsv", header = FALSE)
+setnames(color_df, c("Cancer_full", "Color"))
+
+color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
+color_df[, Color := trimws(gsub("\r", "", Color))]
+
+palette <- setNames(color_df$Color, color_df$Cancer)
+
+counts[, Color := palette[cancer]]
+counts[is.na(Color), Color := "grey70"]
+
+# Flag cancers with no healthy samples
+cancers_no_healthy <- counts[
+  ,
+  .(has_healthy = any(sample_type == "Healthy")),
+  by = cancer
+][has_healthy == FALSE, cancer]
+
+# Define cancer order by total sample count
+cancer_order <- counts[
+  ,
+  .(total = sum(N)),
+  by = cancer
+][order(total), cancer]
+
+counts[, cancer := factor(cancer, levels = cancer_order)]
+
+# Axis label colors in exact plotting order
+axis_colors <- ifelse(cancer_order %in% cancers_no_healthy, "red", "black")
+
+total_samples <- nrow(dt)
+
+# Use one color per cancer
+fill_palette <- unique(counts[, .(cancer, Color)])
+fill_palette <- setNames(fill_palette$Color, as.character(fill_palette$cancer))
+
+p <- ggplot(counts, aes(x = cancer, y = N, fill = cancer)) +
+  geom_col(color = "black", linewidth = 0.25) +
+  geom_text(aes(label = N), hjust = -0.15, size = 3, family = "Arial") +
+  coord_flip() +
+  facet_wrap(~sample_type) +
+  scale_fill_manual(values = fill_palette) +
+  labs(
+    x = "Cancer type",
+    y = "Number of samples",
+    title = "Samples per Cancer Type",
+    subtitle = paste0("2d cohort (n = ", total_samples, ") | red = no healthy samples")
+  ) +
+  expand_limits(y = max(counts$N) * 1.10) +
+  theme_minimal(base_family = "Arial") +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 14, family = "Arial", face = "bold"),
+    plot.title = element_text(size = 14, family = "Arial", face = "bold"),
+    plot.subtitle = element_text(size = 10, family = "Arial"),
+    axis.text.y = element_text(colour = axis_colors, family = "Arial"),
+    axis.text.x = element_text(family = "Arial"),
+    axis.title = element_text(family = "Arial")
+  )
+
+# Save PDF using Cairo device to avoid broken text in Affinity
+ggsave(
+  filename = out_pdf,
+  plot = p,
+  width = 12,
+  height = 7,
+  device = cairo_pdf,
+  bg = "white"
+)
+'
 #################################################################################################
 # Create a submatrix of gene expression 
 #################################################################################################
@@ -11528,7 +11747,7 @@ awk '
 echo "Done! Saved: ./expression/gene_expression_matrix_3d4d_noOV.tsv"
 
 
-# for the 2d:
+# for the 2d and no OV:
 f="./results/multi_omics/samples_2d.tsv"
 
 zcat ./expression/gene_expression_matrix_protein_coding.tsv.gz | \
@@ -11557,6 +11776,34 @@ awk '
 > ./expression/gene_expression_matrix_2d_noOV.tsv
 echo "Done! Saved: ./expression/gene_expression_matrix_2d_noOV.tsv"
 
+# for the 2d and no OV and no CHOL:
+f="./results/multi_omics/samples_2d.tsv"
+
+zcat ./expression/gene_expression_matrix_protein_coding.tsv.gz | \
+awk '
+  NR==FNR {
+    # cohort file: keep patient IDs except OV
+    if ($2 != "OV" && $2 != "CHOL") keep[$1]=1
+    next
+  }
+  FNR==1 { print; next }  # keep header
+
+  {
+    if (FNR % 500 == 0)
+      printf("[awk] processed %d expression rows | kept %d\n", FNR, kept) > "/dev/stderr"
+
+    # extract patient barcode from expression sample id (no {n} intervals)
+    if (match($1, /TCGA-[A-Z0-9][A-Z0-9]-[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/)) {
+      pat = substr($1, RSTART, RLENGTH)
+      if (pat in keep) { print; kept++ }
+    }
+  }
+  END {
+    printf("[awk] DONE | kept %d rows (plus header)\n", kept) > "/dev/stderr"
+  }
+' "$f" - \
+> ./expression/gene_expression_matrix_2d_noOV_noCHOL.tsv
+echo "Done! Saved: ./expression/gene_expression_matrix_2d_noOV_noCHOL.tsv"
 #################################################################
 # Euler Ven diagram that shows the 2d samples chosen
 #################################################################
@@ -11568,13 +11815,16 @@ out_pdf  <- "./results/multi_omics/sample_availability_2d.pdf"
 out_tsv  <- "./results/multi_omics/sample_availability_2d.tsv"
 
 # Set to TRUE if you want to exclude OV
-exclude_OV <- FALSE
+exclude_OV <- TRUE
 
 dt <- fread(in_file)
 
 if (exclude_OV) {
   dt <- dt[cancer != "OV"]
 }
+
+# Remove CHOL
+dt <- dt[cancer != "CHOL"]
 
 # ============================================================
 # DEFINE SETS

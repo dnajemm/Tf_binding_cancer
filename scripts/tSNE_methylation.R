@@ -1408,10 +1408,516 @@ cat("Wrote plot:", out_pdf, "\n")
 cat("Wrote RDS:", out_rds, "\n")
 EOF
 
+################################################
+# TSNE 3views on the 2d cohort 
+################################################
+###################################################
+# Step 5: t-SNE 3 views for 2d_noOV methylation
+# Output folder: ./results/methylation/tSNE_methylation_2d
+# Group-wise median imputation per cancer × sample_type: for each CpG, missing values are replaced by the median of non-missing samples in the same group, but only if fewer than 50% of that group are NA — otherwise the CpG is dropped entirely.
+###################################################
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+  library(Rtsne)
+  library(Polychrome)
+  library(patchwork)
+  library(grid)
+})
 
+cat("STEP 5/5 - Starting 2d_noOV t-SNE\n")
 
+# ============================================================
+# Inputs
+# ============================================================
+sample_file <- "./results/methylation/pca_2d_noOV/methylation_files_2d_noOV_0X_1X.tsv"
+in_rdata    <- "./results/methylation/pca_2d_noOV/TCGA_2d_noOV_0X_1X_top10k_most_variable.RData"
+color_file  <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
 
+# ============================================================
+# Outputs
+# ============================================================
+out_dir <- "./results/methylation/tSNE_methylation/tsne_2d"
+out_pdf <- file.path(
+  out_dir,
+  "tSNE_methylation_2d_noOV_0X_1X_top10k_3views_vertical.pdf"
+)
+out_tsv <- file.path(
+  out_dir,
+  "tSNE_methylation_2d_noOV_0X_1X_top10k_3views_coordinates.tsv"
+)
+out_rds <- file.path(
+  out_dir,
+  "tSNE_methylation_2d_noOV_0X_1X_top10k_3views_rtsne.rds"
+)
 
+#  verify output directory is writable before running anything expensive
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+if (!dir.exists(out_dir)) {
+  stop("Could not create output directory: ", out_dir)
+}
+
+# ============================================================
+# Helpers
+# ============================================================
+clean_txt <- function(x) {
+  x <- as.character(x)
+  x <- trimws(x)
+  x <- gsub('^"|"$', "", x)
+  x <- gsub("^'|'$", "", x)
+  x
+}
+
+organ_map <- list(
+  CNS           = c("GBM", "LGG"),
+  Breast        = c("BRCA"),
+  Gynecologic   = c("CESC", "OV", "UCEC", "UCS"),
+  Lung          = c("LUAD", "LUSC"),
+  HeadNeck      = c("HNSC"),
+  ThyroidThymus = c("THCA", "THYM"),
+  SkinEye       = c("SKCM", "UVM"),
+  GI            = c("COAD", "READ", "ESCA", "STAD"),
+  Hepatobiliary = c("LIHC", "CHOL"),
+  Pancreas      = c("PAAD"),
+  Kidney        = c("KICH", "KIRC", "KIRP"),
+  Bladder       = c("BLCA"),
+  Prostate      = c("PRAD"),
+  Testis        = c("TGCT"),
+  Adrenal       = c("ACC", "PCPG"),
+  Sarcoma       = c("SARC"),
+  HemeLymph     = c("LAML", "DLBC"),
+  Mesothelioma  = c("MESO")
+)
+
+tissue_map <- list(
+  Adenocarcinoma = c(
+    "BRCA", "COAD", "READ", "STAD", "PAAD", "PRAD", "LUAD",
+    "UCEC", "CHOL", "LIHC", "THCA",
+    "KIRC", "KIRP", "KICH", "ACC"
+  ),
+  Squamous      = c("HNSC", "LUSC"),
+  Urothelial    = c("BLCA"),
+  Mixed         = c("CESC", "ESCA"),
+  NonEpithelial = c(
+    "GBM", "LGG", "LAML", "DLBC", "SKCM", "UVM", "SARC",
+    "TGCT", "PCPG", "MESO", "THYM"
+  ),
+  Carcinosarcoma = c("UCS"),
+  Serous         = c("OV")
+)
+
+map_group <- function(ct, mapping) {
+  ct2 <- gsub("^TCGA-", "", as.character(ct))
+  for (g in names(mapping)) {
+    if (ct2 %in% mapping[[g]]) return(g)
+  }
+  "Other"
+}
+
+# ============================================================
+# Read 2d_noOV metadata
+# ============================================================
+cat("STEP 5/5 - Reading 2d_noOV sample metadata\n")
+meta <- fread(sample_file)
+
+required_cols <- c("sample_barcode", "patient_id", "cancer", "sample_code")
+missing_cols  <- setdiff(required_cols, colnames(meta))
+if (length(missing_cols) > 0) {
+  stop(
+    "Missing required columns in sample_file: ",
+    paste(missing_cols, collapse = ", ")
+  )
+}
+
+meta[, sample_barcode := as.character(sample_barcode)]
+meta[, patient        := as.character(patient_id)]
+meta[, cancer         := clean_txt(cancer)]
+meta[, cancer_plot    := sub("^TCGA-", "", cancer)]
+
+# fread can convert 01 to 1, so restore leading zero
+meta[, sample_code := sprintf("%02d", as.integer(sample_code))]
+
+# 0X = Tumor, 1X = Healthy
+meta[, sample_group := fifelse(
+  sample_code %in% sprintf("%02d", 1:9),   "0X",
+  fifelse(sample_code %in% sprintf("%02d", 10:19), "1X", NA_character_)
+)]
+meta[, sample_type := fifelse(
+  sample_code %in% sprintf("%02d", 1:9),   "Tumor",
+  fifelse(sample_code %in% sprintf("%02d", 10:19), "Healthy", NA_character_)
+)]
+meta[, sample_type := factor(sample_type, levels = c("Tumor", "Healthy"))]
+
+cat("STEP 5/5 - Sample type table:\n")
+print(table(meta$sample_code, meta$sample_type, useNA = "ifany"))
+
+cat("STEP 5/5 - Example annotations:\n")
+print(head(meta[, .(
+  sample_barcode, patient, sample_code,
+  sample_group,  sample_type, cancer, cancer_plot
+)]))
+
+cat("STEP 5/5 - Unique cancers in metadata:\n")
+print(sort(unique(meta$cancer_plot)))
+
+# ============================================================
+# Read cancer color file
+# ============================================================
+cat("STEP 5/5 - Reading cancer color file\n")
+col_dt <- fread(color_file, header = FALSE)
+if (ncol(col_dt) < 2) {
+  stop("color_file must have at least 2 columns: cancer and colour")
+}
+col_dt <- col_dt[, 1:2]
+setnames(col_dt, c("cancer_raw", "colour"))
+col_dt[, cancer_raw  := clean_txt(cancer_raw)]
+col_dt[, colour      := clean_txt(colour)]
+col_dt[, cancer_plot := sub("^TCGA-", "", cancer_raw)]
+
+cat("STEP 5/5 - First rows of color file:\n")
+print(head(col_dt))
+
+cancer_cols     <- setNames(col_dt$colour, col_dt$cancer_plot)
+missing_palette <- setdiff(unique(meta$cancer_plot), names(cancer_cols))
+cat("STEP 5/5 - Cancers missing from palette:", length(missing_palette), "\n")
+if (length(missing_palette) > 0) {
+  print(missing_palette)
+  for (cc in missing_palette) cancer_cols[cc] <- "#7f7f7f"
+}
+
+# ============================================================
+# Load beta_var matrix
+# ============================================================
+cat("STEP 5/5 - Loading beta_var matrix\n")
+load(in_rdata)
+if (!exists("beta_var")) {
+  stop("Object beta_var not found in RData.")
+}
+cat(
+  "STEP 5/5 - beta_var dimensions:",
+  nrow(beta_var), "CpGs x", ncol(beta_var), "samples\n"
+)
+
+samples <- unique(as.character(meta$sample_barcode))
+cat("STEP 5/5 - Number of metadata samples:", length(samples), "\n")
+
+missing_samples <- setdiff(samples, colnames(beta_var))
+cat("STEP 5/5 - Missing samples in beta_var:", length(missing_samples), "\n")
+if (length(missing_samples) > 0) {
+  cat("First missing samples:\n")
+  print(head(missing_samples, 20))
+  stop("Some metadata samples are missing from beta_var.")
+}
+
+# Keep metadata samples in the same order
+beta_var <- beta_var[, samples, drop = FALSE]
+cat(
+  "STEP 5/5 - Subset beta_var dimensions:",
+  nrow(beta_var), "CpGs x", ncol(beta_var), "samples\n"
+)
+
+# ============================================================
+# Transpose to samples x CpGs
+# ============================================================
+cat("STEP 5/5 - Transposing to samples x CpGs\n")
+x <- t(beta_var)
+cat(
+  "STEP 5/5 - Initial matrix dimensions:",
+  nrow(x), "samples x", ncol(x), "CpGs\n"
+)
+
+# ============================================================
+# Remove zero-variance CpGs
+# ============================================================
+cat("STEP 5/5 - Removing zero-variance / non-finite-variance CpGs\n")
+vars0    <- apply(x, 2, function(v) var(v, na.rm = TRUE))
+keep_var <- is.finite(vars0) & vars0 > 0
+cat(
+  "STEP 5/5 - CpGs removed due to zero/non-finite variance:",
+  sum(!keep_var), "\n"
+)
+x <- x[, keep_var, drop = FALSE]
+cat(
+  "STEP 5/5 - Matrix after variance filter:",
+  nrow(x), "samples x", ncol(x), "CpGs\n"
+)
+if (ncol(x) < 2) {
+  stop("Too few CpGs after zero-variance filtering.")
+}
+
+# ============================================================
+# Group-wise NA imputation by cancer x sample_type
+# ============================================================
+cat("STEP 5/5 - Group-wise NA imputation by cancer x sample_type\n")
+
+# deduplicate by sample_barcode before the key join to prevent silent row duplication
+meta_sub <- unique(
+  meta[, .(sample_barcode, cancer_plot, sample_type)],
+  by = "sample_barcode"
+)
+setkey(meta_sub, sample_barcode)
+
+sample_order <- rownames(x)
+meta_sub     <- meta_sub[J(sample_order)]
+
+if (any(is.na(meta_sub$cancer_plot))) {
+  stop("Missing cancer_plot after matching metadata to x rows.")
+}
+if (any(is.na(meta_sub$sample_type))) {
+  stop("Missing sample_type after matching metadata to x rows.")
+}
+
+groups <- unique(meta_sub[, .(cancer_plot, sample_type)])
+cat(
+  "STEP 5/5 - Number of cancer x sample_type groups:",
+  nrow(groups), "\n"
+)
+
+na_before_total <- sum(is.na(x))
+cat("STEP 5/5 - Total NA values before imputation:", na_before_total, "\n")
+
+n_imputed        <- 0L
+n_blocked_ge50   <- 0L
+n_cpg_group_all_na <- 0L
+
+for (g in seq_len(nrow(groups))) {
+  this_cancer <- groups$cancer_plot[g]
+  this_type   <- groups$sample_type[g]
+  idx <- which(
+    meta_sub$cancer_plot == this_cancer &
+    meta_sub$sample_type == this_type
+  )
+  if (length(idx) == 0) next
+
+  x_grp   <- x[idx, , drop = FALSE]
+  na_frac <- colMeans(is.na(x_grp))
+  can_impute <- na_frac < 0.5
+
+  if (any(!can_impute)) {
+    n_blocked_ge50 <- n_blocked_ge50 +
+      sum(!can_impute & colSums(is.na(x_grp)) > 0)
+  }
+
+  cols_to_check <- which(can_impute & colSums(is.na(x_grp)) > 0)
+  if (length(cols_to_check) == 0) next
+
+  for (j in cols_to_check) {
+    med_j <- median(x_grp[, j], na.rm = TRUE)
+    if (!is.finite(med_j)) {
+      n_cpg_group_all_na <- n_cpg_group_all_na + 1L
+      next
+    }
+    na_idx_local <- which(is.na(x_grp[, j]))
+    if (length(na_idx_local) > 0) {
+      x[idx[na_idx_local], j] <- med_j
+      n_imputed <- n_imputed + length(na_idx_local)
+    }
+  }
+}
+
+na_after_impute <- sum(is.na(x))
+cat("STEP 5/5 - NA values imputed:", n_imputed, "\n")
+cat(
+  "STEP 5/5 - CpG-group combinations blocked because NA fraction >= 50%:",
+  n_blocked_ge50, "\n"
+)
+cat(
+  "STEP 5/5 - CpG-group combinations skipped because median could not be computed:",
+  n_cpg_group_all_na, "\n"
+)
+cat("STEP 5/5 - Total NA values after group-wise imputation:", na_after_impute, "\n")
+
+# ============================================================
+# Remove CpGs still containing NA
+# ============================================================
+cat("STEP 5/5 - Removing CpGs still containing NA after imputation\n")
+keep_complete <- colSums(is.na(x)) == 0
+cat(
+  "STEP 5/5 - CpGs removed because NA remained:",
+  sum(!keep_complete), "\n"
+)
+x <- x[, keep_complete, drop = FALSE]
+cat(
+  "STEP 5/5 - Final matrix dimensions for t-SNE:",
+  nrow(x), "samples x", ncol(x), "CpGs\n"
+)
+
+if (nrow(x) < 2)  stop("Too few samples for t-SNE.")
+if (ncol(x) < 2)  stop("Too few CpGs for t-SNE after filtering/imputation.")
+
+# ============================================================
+# Run t-SNE
+# ============================================================
+set.seed(1)
+perp <- min(30, floor((nrow(x) - 1) / 3))
+if (perp < 2) stop("Too few samples for valid t-SNE perplexity.")
+
+# FIX #5: warn when perplexity is very low
+if (perp < 5) {
+  warning("Very low perplexity (", perp, ") — t-SNE results may be unreliable.")
+}
+
+cat("STEP 5/5 - Using perplexity:", perp, "\n")
+cat("STEP 5/5 - Running Rtsne\n")
+
+# FIX #4: explicit initial_dims for reproducibility and clarity
+ts <- Rtsne(
+  x,
+  dims            = 2,
+  perplexity      = perp,
+  initial_dims    = 50,
+  check_duplicates = FALSE,
+  pca             = TRUE,
+  verbose         = TRUE,
+  max_iter        = 1000
+)
+
+# ============================================================
+# Build coordinate table
+# ============================================================
+coord <- data.table(
+  sample_barcode = rownames(x),
+  tSNE1          = ts$Y[, 1],
+  tSNE2          = ts$Y[, 2]
+)
+
+# FIX #8: deduplicate meta by sample_barcode before merge
+meta_merge <- unique(meta, by = "sample_barcode")
+coord <- merge(
+  coord,
+  meta_merge,
+  by    = "sample_barcode",
+  all.x = TRUE
+)
+
+coord[, cancer      := clean_txt(cancer)]
+coord[, cancer_plot := sub("^TCGA-", "", cancer)]
+
+coord[, organ_group := factor(
+  vapply(cancer_plot, map_group, character(1), mapping = organ_map)
+)]
+coord[, tissue_type := factor(
+  vapply(cancer_plot, map_group, character(1), mapping = tissue_map)
+)]
+
+coord[, cancer_plot := factor(cancer_plot)]
+coord[, sample_type := factor(sample_type, levels = c("Tumor", "Healthy"))]
+
+cat("STEP 5/5 - Example coordinates after merge:\n")
+print(head(coord[, .(
+  sample_barcode, patient, sample_code, sample_group,
+  sample_type,   cancer,  cancer_plot, organ_group, tissue_type
+)]))
+
+# ============================================================
+# Save outputs
+# ============================================================
+cat("STEP 5/5 - Writing coordinates\n")
+fwrite(coord, out_tsv, sep = "\t")
+
+cat("STEP 5/5 - Saving Rtsne object\n")
+saveRDS(ts, out_rds)
+
+# ============================================================
+# Palettes
+# ============================================================
+missing_plot_cols <- setdiff(levels(coord$cancer_plot), names(cancer_cols))
+if (length(missing_plot_cols) > 0) {
+  for (cc in missing_plot_cols) cancer_cols[cc] <- "#7f7f7f"
+}
+pal_cancer <- cancer_cols[levels(coord$cancer_plot)]
+
+# FIX #6: guard createPalette against n = 1 (needs at least 2)
+n_organ  <- max(2, nlevels(coord$organ_group))
+n_tissue <- max(2, nlevels(coord$tissue_type))
+
+pal_organ <- Polychrome::createPalette(
+  n_organ,
+  seedcolors = c("#ff00c3ff", "#815801ff", "#24099eff", "#55ffd2ff")
+)
+names(pal_organ) <- levels(coord$organ_group)
+
+pal_tissue <- Polychrome::createPalette(
+  n_tissue,
+  seedcolors = c("#2bff00ff", "#d9ff00ff", "#9e8dffff", "#004a36ff")
+)
+names(pal_tissue) <- levels(coord$tissue_type)
+
+# ============================================================
+# Plot
+# ============================================================
+base_theme <- theme_bw(base_size = 16) +
+  theme(
+    panel.grid   = element_blank(),
+    plot.title   = element_text(face = "bold", size = 20),
+    axis.title   = element_text(size = 18),
+    axis.text    = element_text(size = 15),
+    legend.position = "bottom",
+    legend.title    = element_blank(),
+    legend.text     = element_text(size = 13),
+    legend.key.size = unit(0.5, "cm")
+  )
+
+cat("STEP 5/5 - Plotting PDF\n")
+
+# FIX #9: constrain legend columns to avoid overflow with many cancer types
+p_cancer <- ggplot(
+  coord,
+  aes(x = tSNE1, y = tSNE2, color = cancer_plot, shape = sample_type)
+) +
+  geom_point(size = 1.5, alpha = 0.85) +
+  scale_color_manual(values = pal_cancer, drop = FALSE, na.value = "grey70") +
+  scale_shape_manual(values = c(Tumor = 16, Healthy = 17), drop = FALSE) +
+  guides(color = guide_legend(ncol = 6)) +
+  labs(title = "Cancer type", x = "tSNE1", y = "tSNE2") +
+  base_theme
+
+p_organ <- ggplot(
+  coord,
+  aes(x = tSNE1, y = tSNE2, color = organ_group)
+) +
+  geom_point(size = 1.5, alpha = 0.85) +
+  scale_color_manual(values = pal_organ, drop = FALSE, na.value = "grey70") +
+  labs(title = "Organ group", x = "tSNE1", y = "tSNE2") +
+  base_theme
+
+p_tissue <- ggplot(
+  coord,
+  aes(x = tSNE1, y = tSNE2, color = tissue_type)
+) +
+  geom_point(size = 1.5, alpha = 0.85) +
+  scale_color_manual(values = pal_tissue, drop = FALSE, na.value = "grey70") +
+  labs(title = "Tissue type", x = "tSNE1", y = "tSNE2") +
+  base_theme
+
+pdf(out_pdf, width = 12, height = 24)
+print(
+  (p_cancer / p_organ / p_tissue) +
+    plot_annotation(
+      title    = "t-SNE of TCGA HM450 methylation - 2d_noOV cohort",
+      subtitle = paste0(
+        "0X tumor and 1X normal samples | top ",
+        ncol(x),
+        " variable CpGs | n = ",
+        nrow(coord),
+        " samples | perplexity = ",
+        perp
+      ),
+      theme = theme(
+        plot.title    = element_text(size = 24, face = "bold"),
+        plot.subtitle = element_text(size = 18)
+      )
+    )
+)
+dev.off()
+
+cat("STEP 5/5 - DONE\n")
+cat("Wrote coordinates:", out_tsv, "\n")
+cat("Wrote plot:",        out_pdf, "\n")
+cat("Wrote RDS:",         out_rds, "\n")
+
+EOF
 
 
 
