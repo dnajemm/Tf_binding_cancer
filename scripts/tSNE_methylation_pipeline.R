@@ -702,15 +702,534 @@ select_top_variable_cpgs <- function() {
 }
 
 ###############################################################################
+# 9) Step 4: PCA on top variable CpGs
+###############################################################################
+
+run_pca <- function() {
+
+  cat("\n============================================================\n")
+  cat("STEP 4: PCA on top variable CpGs\n")
+  cat("============================================================\n")
+
+  if (file.exists(pca_coords_file) && file.exists(pca_pdf_file) && file.exists(pca_rds_file)) {
+    cat(">>> PCA outputs already exist, skipping Step 4:\n")
+    cat(">>> ", pca_coords_file, "\n", sep = "")
+    cat(">>> ", pca_pdf_file, "\n", sep = "")
+    cat(">>> ", pca_rds_file, "\n", sep = "")
+    return(invisible(NULL))
+  }
+
+  if (!file.exists(top_matrix_file)) {
+    stop("Step 3 output does not exist: ", top_matrix_file)
+  }
+
+  if (!file.exists(files_table)) {
+    stop("Methylation file table does not exist: ", files_table)
+  }
+
+  cat(">>> Loading top variable CpG matrix:\n")
+  cat(">>> ", top_matrix_file, "\n", sep = "")
+
+  load(top_matrix_file)
+
+  if (!exists("beta_var")) {
+    stop("Object beta_var was not found in: ", top_matrix_file)
+  }
+
+  cat(">>> beta_var dimensions:", paste(dim(beta_var), collapse = " x "), "\n")
+
+  cat(">>> Reading methylation sample annotation:\n")
+  cat(">>> ", files_table, "\n", sep = "")
+
+  sample_annot <- fread(files_table)
+
+  required_cols <- c("sample_barcode", "patient_id", "cancer", "sample_type")
+
+  missing_cols <- setdiff(required_cols, names(sample_annot))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing required columns in sample annotation: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  sample_annot <- unique(
+    sample_annot[, .(
+      sample_barcode,
+      patient_id,
+      cancer,
+      sample_type,
+      sample_group
+    )]
+  )
+
+  #############################################################################
+  # Match annotation to beta matrix columns
+  #############################################################################
+
+  sample_names <- colnames(beta_var)
+
+  sample_annot <- sample_annot[
+    match(sample_names, sample_barcode)
+  ]
+
+  if (any(is.na(sample_annot$sample_barcode))) {
+    stop("Some beta_var columns were not found in sample annotation.")
+  }
+
+  #############################################################################
+  # Read cancer color file
+  #############################################################################
+
+  cat(">>> Reading cancer color file:\n")
+  cat(">>> ", color_file, "\n", sep = "")
+
+  if (!file.exists(color_file)) {
+    stop("Cancer color file does not exist: ", color_file)
+  }
+
+  color_df <- fread(color_file, header = FALSE)
+
+  if (ncol(color_df) < 2) {
+    stop("Cancer color file must contain at least two columns: cancer and color.")
+  }
+
+  color_df <- color_df[, .(
+    cancer_raw = as.character(V1),
+    color = as.character(V2)
+  )]
+
+  color_df[, cancer := sub("^TCGA-", "", trimws(cancer_raw))]
+  color_df[, color := trimws(gsub("\r", "", color))]
+
+  cancer_colors <- setNames(color_df$color, color_df$cancer)
+
+  missing_colors <- setdiff(unique(sample_annot$cancer), names(cancer_colors))
+
+  if (length(missing_colors) > 0) {
+    cat(">>> WARNING: Missing colors for cancers:\n")
+    print(missing_colors)
+  }
+
+  #############################################################################
+  # Prepare PCA input: samples x CpGs
+  #############################################################################
+
+  cat(">>> Preparing PCA input matrix: samples x CpGs...\n")
+
+  pca_input <- t(beta_var)
+
+  cat(">>> PCA input dimensions:", paste(dim(pca_input), collapse = " x "), "\n")
+
+  if (anyNA(pca_input)) {
+    stop("NA values found in PCA input. Step 3 should have imputed all missing values.")
+  }
+
+  #############################################################################
+  # Run PCA
+  #############################################################################
+
+  cat(">>> Running PCA...\n")
+
+  pca_res <- prcomp(
+    pca_input,
+    center = TRUE,
+    scale. = TRUE
+  )
+
+  saveRDS(pca_res, pca_rds_file)
+
+  cat(">>> Saved PCA object:\n")
+  cat(">>> ", pca_rds_file, "\n", sep = "")
+
+  #############################################################################
+  # Variance explained
+  #############################################################################
+
+  eig <- pca_res$sdev^2
+  var_explained <- eig / sum(eig) * 100
+
+  pc1_lab <- paste0("PC1 (", round(var_explained[1], 2), "%)")
+  pc2_lab <- paste0("PC2 (", round(var_explained[2], 2), "%)")
+  pc3_lab <- paste0("PC3 (", round(var_explained[3], 2), "%)")
+  pc4_lab <- paste0("PC4 (", round(var_explained[4], 2), "%)")
+
+  #############################################################################
+  # Save PCA coordinates
+  #############################################################################
+
+  pca_coords <- data.table(
+    sample_barcode = rownames(pca_res$x),
+    PC1 = pca_res$x[, 1],
+    PC2 = pca_res$x[, 2],
+    PC3 = pca_res$x[, 3],
+    PC4 = pca_res$x[, 4]
+  )
+
+  pca_coords <- merge(
+    pca_coords,
+    sample_annot,
+    by = "sample_barcode",
+    all.x = TRUE
+  )
+
+  fwrite(pca_coords, pca_coords_file, sep = "\t")
+
+  cat(">>> Saved PCA coordinates:\n")
+  cat(">>> ", pca_coords_file, "\n", sep = "")
+
+  #############################################################################
+  # PCA plots
+  #############################################################################
+
+  p1 <- ggplot(
+    pca_coords,
+    aes(
+      x = PC1,
+      y = PC2,
+      color = cancer,
+      shape = sample_type
+    )
+  ) +
+    geom_point(size = 2.2, alpha = 0.85) +
+    scale_color_manual(values = cancer_colors, na.value = "grey70") +
+    scale_shape_manual(values = c("Healthy" = 17, "Tumor" = 16)) +
+    labs(
+      title = paste0("PCA of DNA methylation profiles — top ", top_cpgs, " variable CpGs"),
+      subtitle = "PC1 vs PC2",
+      x = pc1_lab,
+      y = pc2_lab,
+      color = "Cancer type",
+      shape = "Sample type"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(hjust = 0.5),
+      axis.text = element_text(color = "black"),
+      legend.position = "right"
+    )
+
+  p2 <- ggplot(
+    pca_coords,
+    aes(
+      x = PC3,
+      y = PC4,
+      color = cancer,
+      shape = sample_type
+    )
+  ) +
+    geom_point(size = 2.2, alpha = 0.85) +
+    scale_color_manual(values = cancer_colors, na.value = "grey70") +
+    scale_shape_manual(values = c("Healthy" = 17, "Tumor" = 16)) +
+    labs(
+      title = paste0("PCA of DNA methylation profiles — top ", top_cpgs, " variable CpGs"),
+      subtitle = "PC3 vs PC4",
+      x = pc3_lab,
+      y = pc4_lab,
+      color = "Cancer type",
+      shape = "Sample type"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(hjust = 0.5),
+      axis.text = element_text(color = "black"),
+      legend.position = "right"
+    )
+
+  pdf(pca_pdf_file, width = 12, height = 8)
+  print(p1)
+  print(p2)
+  dev.off()
+
+  cat(">>> Saved PCA PDF:\n")
+  cat(">>> ", pca_pdf_file, "\n", sep = "")
+
+  invisible(NULL)
+}
+
+###############################################################################
+# 10) Step 5: t-SNE on PCA-reduced methylation data
+###############################################################################
+
+run_tsne <- function() {
+
+  cat("\n============================================================\n")
+  cat("STEP 5: t-SNE on PCA-reduced methylation data\n")
+  cat("============================================================\n")
+
+  if (
+    file.exists(tsne_coords_file) &&
+    file.exists(tsne_pdf_file) &&
+    file.exists(tsne_rds_file)
+  ) {
+    cat(">>> t-SNE outputs already exist, skipping Step 5:\n")
+    cat(">>> ", tsne_coords_file, "\n", sep = "")
+    cat(">>> ", tsne_pdf_file, "\n", sep = "")
+    cat(">>> ", tsne_rds_file, "\n", sep = "")
+    return(invisible(NULL))
+  }
+
+  if (!file.exists(pca_rds_file)) {
+    stop("PCA RDS file does not exist. Run Step 4 first: ", pca_rds_file)
+  }
+
+  if (!file.exists(files_table)) {
+    stop("Methylation file table does not exist: ", files_table)
+  }
+
+  #############################################################################
+  # Load PCA object
+  #############################################################################
+
+  cat(">>> Loading PCA object:\n")
+  cat(">>> ", pca_rds_file, "\n", sep = "")
+
+  pca_res <- readRDS(pca_rds_file)
+
+  if (is.null(pca_res$x)) {
+    stop("PCA object does not contain PCA coordinates.")
+  }
+
+  n_samples <- nrow(pca_res$x)
+  n_pcs_available <- ncol(pca_res$x)
+
+  cat(">>> PCA coordinates dimensions:", paste(dim(pca_res$x), collapse = " x "), "\n")
+
+  #############################################################################
+  # Choose number of PCs for t-SNE
+  #############################################################################
+
+  n_pcs_use <- min(initial_dims, n_pcs_available, n_samples - 1)
+
+  if (n_pcs_use < 2) {
+    stop("Not enough PCA dimensions available for t-SNE.")
+  }
+
+  cat(">>> PCs used for t-SNE:", n_pcs_use, "\n")
+
+  tsne_input <- pca_res$x[, seq_len(n_pcs_use), drop = FALSE]
+
+  if (anyNA(tsne_input)) {
+    stop("NA values found in t-SNE input.")
+  }
+
+  if (any(!is.finite(tsne_input))) {
+    stop("Non-finite values found in t-SNE input.")
+  }
+
+  #############################################################################
+  # Define safe perplexity
+  #############################################################################
+
+  perplexity_value <- min(30, floor((n_samples - 1) / 3))
+
+  if (perplexity_value < 5) {
+    perplexity_value <- max(2, floor((n_samples - 1) / 3))
+  }
+
+  if (perplexity_value >= n_samples / 3) {
+    perplexity_value <- floor((n_samples - 1) / 3)
+  }
+
+  cat(">>> Number of samples:", n_samples, "\n")
+  cat(">>> t-SNE perplexity:", perplexity_value, "\n")
+  cat(">>> t-SNE seed:", seed, "\n")
+  cat(">>> t-SNE max_iter:", max_iter, "\n")
+
+  #############################################################################
+  # Run t-SNE
+  #############################################################################
+
+  set.seed(seed)
+
+  tsne_res <- Rtsne(
+    tsne_input,
+    dims = 2,
+    perplexity = perplexity_value,
+    max_iter = max_iter,
+    pca = FALSE,
+    check_duplicates = FALSE,
+    verbose = TRUE
+  )
+
+  saveRDS(tsne_res, tsne_rds_file)
+
+  cat(">>> Saved t-SNE object:\n")
+  cat(">>> ", tsne_rds_file, "\n", sep = "")
+
+  #############################################################################
+  # Read annotation
+  #############################################################################
+
+  sample_annot <- fread(files_table)
+
+  required_cols <- c("sample_barcode", "patient_id", "cancer", "sample_type")
+
+  missing_cols <- setdiff(required_cols, names(sample_annot))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing required columns in sample annotation: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  sample_annot <- unique(
+    sample_annot[, .(
+      sample_barcode,
+      patient_id,
+      cancer,
+      sample_type,
+      sample_group
+    )]
+  )
+
+  sample_names <- rownames(tsne_input)
+
+  sample_annot <- sample_annot[
+    match(sample_names, sample_barcode)
+  ]
+
+  if (any(is.na(sample_annot$sample_barcode))) {
+    stop("Some t-SNE samples were not found in sample annotation.")
+  }
+
+  #############################################################################
+  # Read cancer colors
+  #############################################################################
+
+  cat(">>> Reading cancer color file:\n")
+  cat(">>> ", color_file, "\n", sep = "")
+
+  if (!file.exists(color_file)) {
+    stop("Cancer color file does not exist: ", color_file)
+  }
+
+  color_df <- fread(color_file, header = FALSE)
+
+  if (ncol(color_df) < 2) {
+    stop("Cancer color file must contain at least two columns: cancer and color.")
+  }
+
+  color_df <- color_df[, .(
+    cancer_raw = as.character(V1),
+    color = as.character(V2)
+  )]
+
+  color_df[, cancer := sub("^TCGA-", "", trimws(cancer_raw))]
+  color_df[, color := trimws(gsub("\r", "", color))]
+
+  cancer_colors <- setNames(color_df$color, color_df$cancer)
+
+  missing_colors <- setdiff(unique(sample_annot$cancer), names(cancer_colors))
+
+  if (length(missing_colors) > 0) {
+    cat(">>> WARNING: Missing colors for cancers:\n")
+    print(missing_colors)
+  }
+
+  #############################################################################
+  # Save t-SNE coordinates
+  #############################################################################
+
+  tsne_coords <- data.table(
+    sample_barcode = sample_names,
+    tSNE1 = tsne_res$Y[, 1],
+    tSNE2 = tsne_res$Y[, 2],
+    PCs_used = n_pcs_use,
+    perplexity = perplexity_value,
+    seed = seed,
+    max_iter = max_iter
+  )
+
+  tsne_coords <- cbind(
+    tsne_coords,
+    sample_annot[, .(
+      patient_id,
+      cancer,
+      sample_type,
+      sample_group
+    )]
+  )
+
+  fwrite(tsne_coords, tsne_coords_file, sep = "\t")
+
+  cat(">>> Saved t-SNE coordinates:\n")
+  cat(">>> ", tsne_coords_file, "\n", sep = "")
+
+  #############################################################################
+  # Main t-SNE plot
+  #############################################################################
+
+  p_tsne <- ggplot(
+    tsne_coords,
+    aes(
+      x = tSNE1,
+      y = tSNE2,
+      color = cancer,
+      shape = sample_type
+    )
+  ) +
+    geom_point(size = 2.2, alpha = 0.85) +
+    scale_color_manual(values = cancer_colors, na.value = "grey70") +
+    scale_shape_manual(values = c("Healthy" = 17, "Tumor" = 16)) +
+    labs(
+      title = paste0("t-SNE of DNA methylation profiles — top ", top_cpgs, " variable CpGs"),
+      subtitle = paste0(
+        "Input: first ", n_pcs_use,
+        " PCA components | perplexity = ", perplexity_value,
+        " | seed = ", seed
+      ),
+      x = "t-SNE 1",
+      y = "t-SNE 2",
+      color = "Cancer type",
+      shape = "Sample type"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(hjust = 0.5),
+      axis.text = element_text(color = "black"),
+      legend.position = "right"
+    )
+
+  pdf(tsne_pdf_file, width = 12, height = 8)
+  print(p_tsne)
+  dev.off()
+
+  cat(">>> Saved t-SNE PDF:\n")
+  cat(">>> ", tsne_pdf_file, "\n", sep = "")
+
+  invisible(NULL)
+}
+
+###############################################################################
 # Run pipeline
 ###############################################################################
 
 build_methylation_file_table()
 create_pan_cancer_matrix()
+select_top_variable_cpgs()
+run_pca()
+run_tsne()
 
 cat("\n============================================================\n")
 cat("Pipeline steps completed successfully.\n")
 cat("Completed: Step 1 methylation file table\n")
 cat("Completed: Step 2 pan-cancer methylation matrix\n")
+cat("Completed: Step 3 top variable CpG selection\n")
+cat("Completed: Step 4 PCA\n")
+cat("Completed: Step 5 t-SNE\n")
 cat("Output directory: ", run_out, "\n", sep = "")
 cat("============================================================\n")
+
+# exemple to run
+# Rscript ./scripts/tSNE_methylation_pipeline.R \
+  --cohort_file ./results/multi_omics/samples_2d_noOV_noCHOL.tsv \
+  --top_cpgs 2000 \
+  --seed 123 \
+  --initial_dims 30 \
+  --max_iter 1000
