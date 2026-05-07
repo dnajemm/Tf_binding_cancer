@@ -11144,7 +11144,324 @@ dev.off()
 
 cat("[DONE] Wrote ", out, "\n", sep = "")
 ' 
-#LAUNCHED
+
+# plot the boxplot of each TF separately adding the colors for the cancer type and shape for tumor vz healthy --> outputs 2 pdf 
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(stringr)
+  library(ggplot2)
+  library(grid)
+})
+
+cat("[INFO] Reading mapping file...\n")
+map <- read_tsv(
+  "./all_tcga_samples_with_cancer.tsv",
+  col_names = c("sample_id", "cancer"),
+  show_col_types = FALSE
+)
+
+cat("[INFO] Reading cancer color file...\n")
+color_df <- read_tsv(
+  "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
+  col_names = c("cancer_raw", "color"),
+  show_col_types = FALSE
+) %>%
+  mutate(
+    cancer = str_replace(cancer_raw, "^TCGA-", ""),
+    color = str_trim(color)
+  )
+
+cancer_palette <- setNames(color_df$color, color_df$cancer)
+
+cat("[INFO] Reading 2d_noOV cohort file headerless...\n")
+cohort <- read_tsv(
+  "./results/multi_omics/samples_2d_noOV_noCHOL.tsv",
+  col_names = c("case_id", "cancer_cohort", "v3", "v4", "v5", "v6"),
+  show_col_types = FALSE
+)
+
+cohort_case_ids <- unique(cohort$case_id)
+
+cat("[INFO] 2d_noOV_noCHOL unique case IDs: ",
+    length(cohort_case_ids),
+    "\n",
+    sep = "")
+
+cat("[INFO] Listing NRF1/BANP per-sample files...\n")
+files <- list.files(
+  "./expression/expression_of_NRF1_BANP",
+  pattern = "_NRF1_BANP_expression.tsv$",
+  full.names = TRUE
+)
+
+cat("[INFO] Found ", length(files), " files\n", sep = "")
+
+if (length(files) == 0) {
+  stop("No NRF1/BANP expression files found.")
+}
+
+cat("[INFO] Reading expression files...\n")
+df <- bind_rows(lapply(files, function(f) {
+  cat("[READ] ", basename(f), "\n", sep = "")
+
+  read_tsv(f, show_col_types = FALSE) %>%
+    mutate(
+      sample_id = str_extract(
+        basename(f),
+        "TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-[0-9]{2}[A-Za-z]"
+      )
+    )
+}))
+
+cat("[INFO] Preparing table and joining cancer annotation...\n")
+
+map <- map %>%
+  mutate(
+    case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", "")
+  )
+
+df <- df %>%
+  select(sample_id, gene_name, tpm_unstranded) %>%
+  filter(gene_name %in% c("NRF1", "BANP")) %>%
+  mutate(
+    tpm_unstranded = as.numeric(tpm_unstranded),
+    case_id = str_replace(sample_id, "-[0-9]{2}[A-Za-z]$", ""),
+    code = str_match(sample_id, "-([0-9]{2})[A-Za-z]$")[, 2],
+    sample_type = case_when(
+      code %in% c("01", "02", "03", "05", "06", "07", "08", "09") ~ "Tumor",
+      code %in% c("10", "11", "12", "13", "14") ~ "Healthy",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  left_join(map %>% select(case_id, cancer), by = "case_id") %>%
+  mutate(
+    cancer = str_replace(cancer, "^TCGA-", "")
+  ) %>%
+  filter(!is.na(cancer), !is.na(tpm_unstranded)) %>%
+  filter(sample_type %in% c("Healthy", "Tumor"))
+
+cat("[INFO] Rows before 2d_noOV_noCHOL filtering: ",
+    nrow(df),
+    "\n",
+    sep = "")
+
+df <- df %>%
+  filter(case_id %in% cohort_case_ids)
+
+cat("[INFO] Rows after 2d_noOV_noCHOL filtering: ",
+    nrow(df),
+    "\n",
+    sep = "")
+
+cat("[INFO] Sample code breakdown after 2d_noOV_noCHOL filtering:\n")
+print(table(df$code, df$sample_type, useNA = "ifany"))
+
+# ============================================================
+# Gene-specific cutoffs + removed counts + filtering
+# ============================================================
+
+df <- df %>%
+  mutate(
+    cutoff = case_when(
+      gene_name == "NRF1" ~ 50,
+      gene_name == "BANP" ~ 30,
+      TRUE ~ Inf
+    )
+  )
+
+removed <- df %>%
+  group_by(gene_name) %>%
+  summarise(
+    n_removed = sum(tpm_unstranded > cutoff, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+get_removed <- function(g) {
+  x <- removed$n_removed[removed$gene_name == g]
+  ifelse(length(x) == 0, 0, x)
+}
+
+df <- df %>%
+  filter(tpm_unstranded <= cutoff)
+
+# ============================================================
+
+cat("[INFO] 2d_noOV_noCHOL Tumor samples:  ",
+    length(unique(df$sample_id[df$sample_type == "Tumor"])),
+    "\n",
+    sep = "")
+
+cat("[INFO] 2d_noOV_noCHOL Healthy samples: ",
+    length(unique(df$sample_id[df$sample_type == "Healthy"])),
+    "\n",
+    sep = "")
+
+cat("[INFO] 2d_noOV_noCHOL cancers: ",
+    length(unique(df$cancer)),
+    "\n",
+    sep = "")
+
+if (nrow(df) == 0) {
+  stop("No samples left after 2d_noOV_noCHOL filtering.")
+}
+
+present_cancers <- sort(unique(df$cancer))
+missing_colors <- setdiff(present_cancers, names(cancer_palette))
+
+if (length(missing_colors) > 0) {
+  warning(
+    "Missing colors for cancers: ",
+    paste(missing_colors, collapse = ", "),
+    ". They will appear in grey."
+  )
+
+  cancer_palette <- c(
+    cancer_palette,
+    setNames(rep("grey70", length(missing_colors)), missing_colors)
+  )
+}
+
+cancer_palette <- cancer_palette[present_cancers]
+
+make_plot <- function(d, gene, cutoff_value, removed_n) {
+
+  ymax <- max(d$tpm_unstranded, na.rm = TRUE)
+
+  ggplot(d, aes(x = cancer, y = tpm_unstranded)) +
+
+    geom_boxplot(
+      aes(color = cancer),
+      outlier.shape = NA,
+      linewidth = 0.5,
+      show.legend = FALSE
+    ) +
+
+    geom_jitter(
+      aes(color = cancer, shape = sample_type),
+      width = 0.2,
+      alpha = 0.65,
+      size = 2
+    ) +
+
+    geom_hline(
+      yintercept = 1,
+      color = "blue",
+      linewidth = 0.8
+    ) +
+
+    scale_color_manual(
+      values = cancer_palette,
+      drop = FALSE
+    ) +
+
+    scale_shape_manual(
+      values = c(
+        Healthy = 17,
+        Tumor = 16
+      )
+    ) +
+
+    guides(
+      color = guide_legend(
+        override.aes = list(size = 4, linewidth = 1)
+      ),
+      shape = guide_legend(
+        override.aes = list(size = 4)
+      )
+    ) +
+
+    coord_cartesian(ylim = c(0, ymax)) +
+
+    theme_bw() +
+
+    theme(
+      axis.text.x = element_text(
+        angle = 60,
+        hjust = 1
+      ),
+
+      plot.title = element_text(
+        hjust = 0.5,
+        face = "bold"
+      ),
+
+      plot.subtitle = element_text(
+        hjust = 0.5
+      ),
+
+      legend.position = "right",
+
+      legend.title = element_text(
+        size = 14,
+        face = "bold"
+      ),
+
+      legend.text = element_text(
+        size = 12
+      ),
+
+      legend.key.size = unit(0.7, "cm")
+    ) +
+
+    labs(
+      title = paste0(gene, " TPM in 2D cohort"),
+      subtitle = paste0(
+        "Healthy vs Tumor | cutoff = ",
+        cutoff_value,
+        " TPM | removed above cutoff = ",
+        removed_n
+      ),
+      x = "Cancer type",
+      y = "TPM",
+      color = "Cancer type",
+      shape = "Sample type"
+    )
+}
+
+cat("[INFO] Building plots...\n")
+
+p_nrf1 <- make_plot(
+  d = filter(df, gene_name == "NRF1"),
+  gene = "NRF1",
+  cutoff_value = 50,
+  removed_n = get_removed("NRF1")
+)
+
+p_banp <- make_plot(
+  d = filter(df, gene_name == "BANP"),
+  gene = "BANP",
+  cutoff_value = 30,
+  removed_n = get_removed("BANP")
+)
+
+out_dir <- "./results/expression"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+out_nrf1 <- file.path(
+  out_dir,
+  "boxplot_TPM_NRF1_by_cancer_Healthy_vs_Tumor_2d_noOV_noCHOL.pdf"
+)
+
+out_banp <- file.path(
+  out_dir,
+  "boxplot_TPM_BANP_by_cancer_Healthy_vs_Tumor_2d_noOV_noCHOL.pdf"
+)
+
+cat("[INFO] Writing NRF1 PDF...\n")
+pdf(out_nrf1, width = 14, height = 6, onefile = TRUE)
+print(p_nrf1)
+dev.off()
+
+cat("[INFO] Writing BANP PDF...\n")
+pdf(out_banp, width = 14, height = 6, onefile = TRUE)
+print(p_banp)
+dev.off()
+
+cat("[DONE] Wrote ", out_nrf1, "\n", sep = "")
+cat("[DONE] Wrote ", out_banp, "\n", sep = "")
+EOF
 ####################################################################################################################################################################################################
 # Build a list of the expression of NRF1 and BANP in all samples and then filter to keep only the samples for which we have both tumor and healthy samples
 ####################################################################################################################################################################################################
@@ -11585,57 +11902,107 @@ cat ./results/multi_omics/sample_data_summary.tsv | awk ' $2!="OV" && $2!="CHOL"
 
 # barplot the number of patients witht 2d per cancer type without OV and CHOL:
 Rscript -e '
-library(data.table)
-library(ggplot2)
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+  library(scales)
+})
+
+# Read multi-omics cohort table
 dt <- fread("./results/multi_omics/samples_2d.tsv", header = FALSE)
-setnames(dt, c("sample","cancer","SNV","METH","RNA","ATAC"))
+setnames(dt, c("sample", "cancer", "SNV", "METH", "RNA", "ATAC"))
 
 # Remove CHOL and OV
 dt <- dt[cancer != "CHOL" & cancer != "OV"]
 
+# Count patients per cancer
 counts <- dt[, .N, by = cancer]
 total_samples <- nrow(dt)
-# Read defined color file
+
+# Read defined cancer color file
 color_df <- fread(
   "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
   header = FALSE
 )
+
 setnames(color_df, c("Cancer_full", "Color"))
+
 color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
-color_df[, Color  := trimws(gsub("\r", "", Color))]
+color_df[, Color := trimws(gsub("\r", "", Color))]
+
 palette <- setNames(color_df$Color, color_df$Cancer)
+
 # Match colors to cancers in the plot
 counts[, Color := palette[cancer]]
 counts[is.na(Color), Color := "grey70"]
+
+# Plot
 p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
   geom_bar(stat = "identity", color = "black") +
-  geom_text(aes(label = N), hjust = -0.15, size = 3) +
+  geom_text(
+    aes(label = comma(N)),
+    hjust = -0.15,
+    size = 3,
+    family = "Times New Roman"
+  ) +
   coord_flip() +
   scale_fill_manual(values = setNames(counts$Color, counts$cancer)) +
+  scale_y_continuous(labels = label_comma()) +
   labs(
     x = "Cancer type",
     y = "Number of patients",
     title = "Patients per Cancer Type",
-    subtitle = paste0("Multi-omics cohort (n = ", total_samples, ")")
+    subtitle = paste0("Multi-omics cohort (n = ", comma(total_samples), ")")
   ) +
   expand_limits(y = max(counts$N) * 1.08) +
-  theme_minimal() +
-  theme(legend.position = "none")
-ggsave("./results/multi_omics/samples_2d_barplot.pdf",plot = p, width = 5, height = 5, dpi = 300, bg = "white")
-'
+  theme_minimal(base_family = "Times New Roman") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(
+      size = 14,
+      family = "Times New Roman",
+      face = "bold",
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      size = 10,
+      family = "Times New Roman",
+      hjust = 0.5
+    ),
+    axis.title = element_text(
+      family = "Times New Roman"
+    ),
+    axis.text = element_text(
+      family = "Times New Roman"
+    )
+  )
 
-# barplot the number of samples witht 2d per cancer type for the 2d_noOV and no CHOL cohort:
+# Save PDF
+ggsave(
+  filename = "./results/multi_omics/samples_2d_barplot.pdf",
+  plot = p,
+  width = 5,
+  height = 5,
+  dpi = 300,
+  device = cairo_pdf,
+  bg = "white"
+)
+'
+# barplot the number of samples witht 2d per cancer type without OV nor CHOL:
 Rscript -e '
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
+  library(scales)
 })
 
-# Output paths
+# Output path
 out_pdf <- "./results/multi_omics/samples_2d_noOV_per_sampletype_barplot.pdf"
 
 # Read methylation sample annotation
-dt <- fread("./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/all_samples/methylation_sample_annotation_2d_noOV.tsv.gz")
+dt <- fread(
+  "./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/all_samples/methylation_sample_annotation_2d_noOV.tsv.gz"
+)
 
 # Remove CHOL
 dt <- dt[cancer != "CHOL"]
@@ -11644,7 +12011,11 @@ dt <- dt[cancer != "CHOL"]
 counts <- dt[, .N, by = .(cancer, sample_type)]
 
 # Read cancer colors
-color_df <- fread("./results/multi_omics/cancer_color_order_with_defined_colours.tsv", header = FALSE)
+color_df <- fread(
+  "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
+  header = FALSE
+)
+
 setnames(color_df, c("Cancer_full", "Color"))
 
 color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
@@ -11680,31 +12051,71 @@ total_samples <- nrow(dt)
 fill_palette <- unique(counts[, .(cancer, Color)])
 fill_palette <- setNames(fill_palette$Color, as.character(fill_palette$cancer))
 
+# Plot
 p <- ggplot(counts, aes(x = cancer, y = N, fill = cancer)) +
   geom_col(color = "black", linewidth = 0.25) +
-  geom_text(aes(label = N), hjust = -0.15, size = 3, family = "Arial") +
+  geom_text(
+    aes(label = comma(N)),
+    hjust = -0.15,
+    size = 5,
+    family = "Times New Roman"
+  ) +
   coord_flip() +
   facet_wrap(~sample_type) +
   scale_fill_manual(values = fill_palette) +
+  scale_y_continuous(labels = label_comma()) +
   labs(
     x = "Cancer type",
     y = "Number of samples",
     title = "Samples per Cancer Type",
-    subtitle = paste0("2d cohort (n = ", total_samples, ") | red = no healthy samples")
+    subtitle = paste0(
+      "2D cohort (n = ",
+      comma(total_samples),
+      ") | red = no healthy samples"
+    )
   ) +
   expand_limits(y = max(counts$N) * 1.10) +
-  theme_minimal(base_family = "Arial") +
+  theme_minimal(base_family = "Times New Roman") +
   theme(
     legend.position = "none",
-    strip.text = element_text(size = 14, family = "Arial", face = "bold"),
-    plot.title = element_text(size = 14, family = "Arial", face = "bold"),
-    plot.subtitle = element_text(size = 10, family = "Arial"),
-    axis.text.y = element_text(colour = axis_colors, family = "Arial"),
-    axis.text.x = element_text(family = "Arial"),
-    axis.title = element_text(family = "Arial")
+
+    strip.text = element_text(
+      size = 11,
+      family = "Times New Roman",
+      face = "bold"
+    ),
+
+    plot.title = element_text(
+      size = 14,
+      family = "Times New Roman",
+      face = "bold",
+      hjust = 0.5
+    ),
+
+    plot.subtitle = element_text(
+      size = 10,
+      family = "Times New Roman",
+      hjust = 0.5
+    ),
+
+    axis.text.y = element_text(
+      size = 11,
+      colour = axis_colors,
+      family = "Times New Roman"
+    ),
+
+    axis.text.x = element_text(
+      size = 11,
+      family = "Times New Roman"
+    ),
+
+    axis.title = element_text(
+      size = 11,
+      family = "Times New Roman"
+    )
   )
 
-# Save PDF using Cairo device to avoid broken text in Affinity
+# Save PDF using Cairo device to avoid broken text in Affinity/Illustrator
 ggsave(
   filename = out_pdf,
   plot = p,
