@@ -64,6 +64,11 @@ anti_r_cutoff   <- -0.3
 anti_fdr_cutoff <- 0.05
 only_significant_cancers <- FALSE
 
+# Plot coloring mode:
+# "cancer"      = color points by cancer type
+# "sample_type" = Tumor red points, Healthy black outlined triangles
+plot_color_mode <- "sample_type"
+
 # Reuse already generated intermediate files if they exist.
 # Useful when rerunning only for plots/filtering.
 reuse_existing_intermediate_files <- TRUE
@@ -972,32 +977,55 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
       paste0("Top pair across all cancers: ", target_gene, " | ", target_motif)
     }
 
-    p1 <- ggplot(plot_dt_p1, aes(x = meth_percent, y = log2_expr, color = cancer, shape = sample_type)) +
-      geom_point(size = 2.2, alpha = 0.65) +
-      geom_hline(yintercept = 1, color = "red", linewidth = 0.8, linetype = "dashed") +
-      annotate("text", x = 95, y = 1, label = "expression = 1", color = "red", vjust = -0.5, hjust = 1, size = 4) +
-      geom_smooth(
-        data = plot_dt_p1,
-        mapping = aes(x = meth_percent, y = log2_expr, group = 1),
-        method = "lm", se = FALSE, inherit.aes = FALSE,
-        color = "black", linewidth = 0.8
-      ) +
-      annotate("text", x = Inf, y = Inf, label = global_lab, hjust = 1.02, vjust = 1.05, size = 4) +
-      scale_x_continuous(limits = c(0, 100), breaks = c(0, 25, 50, 75, 100), expand = c(0.01, 0.01)) +
-      scale_color_manual(values = color_map, breaks = names(color_map), labels = names(color_map), drop = FALSE, name = "Cancer type") +
-      scale_shape_manual(values = c(Tumor = 16, Healthy = 17), breaks = c("Tumor", "Healthy"), labels = c("Tumor", "Healthy"), name = "Sample type") +
-      guides(
-        shape = guide_legend(order = 1, override.aes = list(size = 3, alpha = 1, color = "black")),
-        color = guide_legend(order = 2, override.aes = list(shape = 16, size = 3, alpha = 1))
-      ) +
-      labs(
-        title = title1,
-        subtitle = "Shape shows sample type; color shows cancer type",
-        x = "Motif methylation (%) [MAX probe beta]",
-        y = "log2(expression + 1)"
-      ) +
-      theme_bw(base_size = 13) +
-      theme(plot.title = element_text(face = "bold"), legend.position = "right")
+    if (plot_color_mode == "cancer") {
+
+  p1 <- ggplot(plot_dt_p1, aes(x = meth_percent, y = log2_expr, color = cancer, shape = sample_type)) +
+    geom_point(size = 2.2, alpha = 0.65) +
+    scale_color_manual(values = color_map, breaks = names(color_map), labels = names(color_map), drop = FALSE, name = "Cancer type") +
+    scale_shape_manual(values = c(Tumor = 16, Healthy = 17), breaks = c("Tumor", "Healthy"), labels = c("Tumor", "Healthy"), name = "Sample type") +
+    guides(
+      shape = guide_legend(order = 1, override.aes = list(size = 3, alpha = 1, color = "black")),
+      color = guide_legend(order = 2, override.aes = list(shape = 16, size = 3, alpha = 1))
+    ) +
+    labs(subtitle = "Shape shows sample type; color shows cancer type")
+
+} else if (plot_color_mode == "sample_type") {
+
+  p1 <- ggplot(plot_dt_p1, aes(x = meth_percent, y = log2_expr)) +
+    geom_point(
+      data = plot_dt_p1[sample_type == "Tumor"],
+      color = "red",
+      shape = 16,
+      size = 2.2,
+      alpha = 0.65
+    ) +
+    geom_point(
+      data = plot_dt_p1[sample_type == "Healthy"],
+      color = "black",
+      fill = "white",
+      shape = 24,
+      size = 3.2,
+      stroke = 1.1,
+      alpha = 1
+    ) +
+    labs(subtitle = "Tumor samples are shown as red points; Healthy samples are shown as black outlined triangles")
+
+  } else {
+    stop("Unsupported plot_color_mode: ", plot_color_mode)
+  }
+
+  p1 <- p1 +
+    geom_hline(yintercept = 1, color = "red", linewidth = 0.8, linetype = "dashed") +
+    annotate("text", x = 95, y = 1, label = "expression = 1", color = "red", vjust = -0.5, hjust = 1, size = 4) +
+    annotate("text", x = Inf, y = Inf, label = global_lab, hjust = 1.02, vjust = 1.05, size = 4) +
+    scale_x_continuous(limits = c(0, 100), breaks = c(0, 25, 50, 75, 100), expand = c(0.01, 0.01)) +
+    labs(
+      title = title1,
+      x = "Motif methylation (%) [MAX probe beta]",
+      y = "gene expression (log2(TPM + 1))"
+    ) +
+    theme_bw(base_size = 18) +
+    theme(plot.title = element_text(face = "bold"), legend.position = "right")
     print(p1)
 
     for (ca in levels(plot_dt$cancer)) {
@@ -1026,15 +1054,56 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
       }
 
       # Red threshold line is intentionally added to every individual cancer scatter page.
+      if (plot_color_mode == "cancer") {
+
       p_ca <- ggplot() +
-        geom_point(data = dca_p[sample_type == "Tumor"], aes(x = meth_percent, y = log2_expr),
-                   color = as.character(color_map[as.character(ca)]), shape = 16, size = 1.8, alpha = 0.40) +
-        geom_point(data = dca_p[sample_type == "Healthy"], aes(x = meth_percent, y = log2_expr),
-                   color = as.character(color_map[as.character(ca)]), shape = 17, size = 3.5, stroke = 1.0, alpha = 1) +
+        geom_point(
+          data = dca_p[sample_type == "Tumor"],
+          aes(x = meth_percent, y = log2_expr),
+          color = as.character(color_map[as.character(ca)]),
+          shape = 16,
+          size = 1.8,
+          alpha = 0.40
+        ) +
+        geom_point(
+          data = dca_p[sample_type == "Healthy"],
+          aes(x = meth_percent, y = log2_expr),
+          color = as.character(color_map[as.character(ca)]),
+          shape = 17,
+          size = 3.5,
+          stroke = 1.0,
+          alpha = 1
+        )
+
+    } else if (plot_color_mode == "sample_type") {
+
+      p_ca <- ggplot() +
+        geom_point(
+          data = dca_p[sample_type == "Tumor"],
+          aes(x = meth_percent, y = log2_expr),
+          color = "red",
+          shape = 16,
+          size = 2.0,
+          alpha = 0.55
+        ) +
+        geom_point(
+          data = dca_p[sample_type == "Healthy"],
+          aes(x = meth_percent, y = log2_expr),
+          color = "black",
+          fill = "white",
+          shape = 24,
+          size = 3.5,
+          stroke = 1.1,
+          alpha = 1
+        )
+
+    } else {
+      stop("Unsupported plot_color_mode: ", plot_color_mode)
+    }
+
+    p_ca <- p_ca +
         geom_hline(yintercept = 1, color = "red", linewidth = 0.8, linetype = "dashed") +
         annotate("text", x = 95, y = 1, label = "expression = 1", color = "red", vjust = -0.5, hjust = 1, size = 4) +
-        geom_smooth(data = dca, aes(x = meth_percent, y = log2_expr), method = "lm", se = FALSE,
-                    color = "black", linewidth = 0.8) +
         annotate("text", x = min(dca$meth_percent, na.rm = TRUE), y = max(dca$log2_expr, na.rm = TRUE),
                  label = sc_lab, hjust = 0, vjust = 1, size = 4) +
         scale_x_continuous(limits = c(0, 100), breaks = c(0, 25, 50, 75, 100), expand = c(0.01, 0.01)) +
@@ -1042,9 +1111,9 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
           title = paste0(if (matched) "Matched patients - " else "Scatter plot - ", ca, " | ", target_gene, " | ", target_motif),
           subtitle = subtitle_ca,
           x = "Motif methylation (%) [MAX probe beta]",
-          y = "log2(expression + 1)"
+          y = "gene expression (log2(TPM + 1))"
         ) +
-        theme_bw(base_size = 13) +
+        theme_bw(base_size = 18) +
         theme(plot.title = element_text(face = "bold"))
       print(p_ca)
     }
@@ -1070,8 +1139,52 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
     p5 <- ggplot() +
       geom_boxplot(data = d_all, aes(x = x_num, y = value_plot, group = x_num),
                    width = 0.55, outlier.shape = NA, color = "#0b3c5d", fill = NA) +
-      geom_jitter(data = d_all, aes(x = x_num, y = value_plot, color = cancer),
-                  width = 0.12, height = 0, size = 1.7, alpha = 0.55) +
+      {
+        if (plot_color_mode == "cancer") {
+          list(
+            geom_jitter(
+              data = d_all,
+              aes(x = x_num, y = value_plot, color = cancer),
+              width = 0.12,
+              height = 0,
+              size = 1.7,
+              alpha = 0.55
+            ),
+            scale_color_manual(
+              values = color_map,
+              breaks = names(color_map),
+              labels = legend_map[names(color_map)],
+              drop = FALSE
+            )
+          )
+        } else if (plot_color_mode == "sample_type") {
+          list(
+            geom_jitter(
+              data = d_all[sample_type == "Tumor"],
+              aes(x = x_num, y = value_plot),
+              color = "red",
+              width = 0.12,
+              height = 0,
+              size = 1.8,
+              alpha = 0.60
+            ),
+            geom_jitter(
+              data = d_all[sample_type == "Healthy"],
+              aes(x = x_num, y = value_plot),
+              color = "black",
+              fill = "white",
+              shape = 24,
+              width = 0.12,
+              height = 0,
+              size = 2.8,
+              stroke = 1.1,
+              alpha = 1
+            )
+          )
+        } else {
+          stop("Unsupported plot_color_mode: ", plot_color_mode)
+        }
+      } +
       stat_summary(data = d_all, aes(x = x_num, y = value_plot, group = x_num),
                    fun = median, geom = "point", shape = 95, size = 10, color = "black") +
       annotate("segment", x = 1, xend = 2, y = expr_y_all, yend = expr_y_all, linewidth = 0.7) +
@@ -1081,22 +1194,22 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
       annotate("segment", x = 3, xend = 3, y = min(d_all$value_plot, na.rm = TRUE), yend = max(d_all$value_plot, na.rm = TRUE), linewidth = 1.5) +
       annotate("text", x = 0.45, y = mean(range(d_all$value_plot, na.rm = TRUE)), label = "expression", angle = 90, size = 7) +
       annotate("text", x = 5.55, y = mean(range(d_all$value_plot, na.rm = TRUE)), label = "methylation", angle = 270, size = 7) +
-      scale_x_continuous(breaks = c(1, 2, 4, 5), labels = c("H", "C", "H", "C"), limits = c(0.3, 5.7)) +
+      scale_x_continuous(breaks = c(1, 2, 4, 5), labels = c("Healthy", "Cancer", "Healthy", "Cancer"), limits = c(0.3, 5.7)) +
       scale_y_continuous(
-        name = "log2(expression + 1)",
+        name = "gene expression (log2(TPM + 1))",
         sec.axis = sec_axis(trans = ~ (. - y1_min_all) / sf_all + y2_min_all,
                             name = "Motif methylation (%) [MAX probe beta]")
       ) +
-      scale_color_manual(values = color_map, breaks = names(color_map), labels = legend_map[names(color_map)], drop = FALSE) +
       labs(
         title = paste0(if (matched) "Matched patients dual-panel: " else "Dual-panel summary across all cancers: ", target_gene, " | ", target_motif),
         subtitle = paste0(
           "Expression H vs C: ", expr_star_all, " (p=", fmt_p(expr_test_all$p), ", H=", expr_test_all$n_h, ", C=", expr_test_all$n_t, ") ; ",
           "Methylation H vs C: ", meth_star_all, " (p=", fmt_p(meth_test_all$p), ", H=", meth_test_all$n_h, ", C=", meth_test_all$n_t, ")"
         ),
-        x = NULL, color = "Cancer"
+        x = NULL,
+        color = if (plot_color_mode == "cancer") "Cancer" else NULL
       ) +
-      theme_bw(base_size = 13) +
+      theme_bw(base_size = 18) +
       theme(plot.title = element_text(face = "bold"), axis.title.x = element_blank(), legend.position = "right")
     print(p5)
 
@@ -1125,8 +1238,45 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
       p6_ca <- ggplot() +
         geom_boxplot(data = dca, aes(x = x_num, y = value_plot, group = x_num),
                      width = 0.55, outlier.shape = NA, color = "#0b3c5d", fill = NA) +
-        geom_jitter(data = dca, aes(x = x_num, y = value_plot),
-                    color = as.character(color_map[as.character(ca)]), width = 0.12, height = 0, size = 1.8, alpha = 0.60) +
+        {
+          if (plot_color_mode == "cancer") {
+            geom_jitter(
+              data = dca,
+              aes(x = x_num, y = value_plot),
+              color = as.character(color_map[as.character(ca)]),
+              width = 0.12,
+              height = 0,
+              size = 1.8,
+              alpha = 0.60
+            )
+          } else if (plot_color_mode == "sample_type") {
+            list(
+              geom_jitter(
+                data = dca[sample_type == "Tumor"],
+                aes(x = x_num, y = value_plot),
+                color = "red",
+                width = 0.12,
+                height = 0,
+                size = 1.8,
+                alpha = 0.60
+              ),
+              geom_jitter(
+                data = dca[sample_type == "Healthy"],
+                aes(x = x_num, y = value_plot),
+                color = "black",
+                fill = "white",
+                shape = 24,
+                width = 0.12,
+                height = 0,
+                size = 2.8,
+                stroke = 1.1,
+                alpha = 1
+              )
+            )
+          } else {
+            stop("Unsupported plot_color_mode: ", plot_color_mode)
+          }
+        } +
         stat_summary(data = dca, aes(x = x_num, y = value_plot, group = x_num),
                      fun = median, geom = "point", shape = 95, size = 10, color = "black") +
         annotate("segment", x = 1, xend = 2, y = expr_y, yend = expr_y, linewidth = 0.7) +
@@ -1138,7 +1288,7 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
         annotate("text", x = 5.55, y = mean(range(dca$value_plot, na.rm = TRUE)), label = "methylation", angle = 270, size = 7) +
         scale_x_continuous(breaks = c(1, 2, 4, 5), labels = c("H", "C", "H", "C"), limits = c(0.3, 5.7)) +
         scale_y_continuous(
-          name = "log2(expression + 1)",
+          name = "gene expression (log2(TPM + 1))",
           sec.axis = sec_axis(trans = ~ (. - y1_min) / sf + y2_min,
                               name = "Motif methylation (%) [MAX probe beta]")
         ) +
@@ -1148,9 +1298,9 @@ plot_pair_report <- function(plot_dt, pair_stats, sel_row, out_pdf, out_info, co
             "Expression H vs C: ", expr_star, " (p=", fmt_p(expr_test$p), ", H=", expr_test$n_h, ", C=", expr_test$n_t, ") ; ",
             "Methylation H vs C: ", meth_star, " (p=", fmt_p(meth_test$p), ", H=", meth_test$n_h, ", C=", meth_test$n_t, ")"
           ),
-          x = NULL, y = "log2(expression + 1)"
+          x = NULL, y = "gene expression (log2(TPM + 1))"
         ) +
-        theme_bw(base_size = 13) +
+        theme_bw(base_size = 18) +
         theme(plot.title = element_text(face = "bold"), axis.title.x = element_blank())
       print(p6_ca)
     }

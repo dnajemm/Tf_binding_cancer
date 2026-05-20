@@ -172,6 +172,11 @@ tsne_pdf_file <- file.path(
   paste0("tSNE_top", top_cpgs, ".pdf")
 )
 
+tsne_organ_pdf_file <- file.path(
+  run_out,
+  paste0("tSNE_top", top_cpgs, "_affected_organ_only.pdf")
+)
+
 tsne_rds_file <- file.path(
   run_out,
   paste0("tSNE_top", top_cpgs, "_rtsne.rds")
@@ -1165,17 +1170,31 @@ run_tsne <- function() {
   #############################################################################
 
   p_tsne <- ggplot(
-    tsne_coords,
-    aes(
-      x = tSNE1,
-      y = tSNE2,
-      color = cancer,
-      shape = sample_type
-    )
+  tsne_coords,
+  aes(
+    x = tSNE1,
+    y = tSNE2
+  )
   ) +
-    geom_point(size = 2.2, alpha = 0.85) +
+    geom_point(
+      data = tsne_coords[sample_type == "Tumor"],
+      aes(color = cancer),
+      shape = 16,
+      size = 2.2,
+      alpha = 0.85
+    ) +
+    geom_point(
+      data = tsne_coords[sample_type == "Healthy"],
+      aes(fill = cancer),
+      shape = 24,
+      color = "black",
+      size = 2.8,
+      stroke = 0.7,
+      alpha = 0.95
+    ) +
     scale_color_manual(values = cancer_colors, na.value = "grey70") +
-    scale_shape_manual(values = c("Healthy" = 17, "Tumor" = 16)) +
+    scale_fill_manual(values = cancer_colors, na.value = "grey70") +
+    guides(fill = "none") +
     labs(
       title = paste0("t-SNE of DNA methylation profiles — top ", top_cpgs, " variable CpGs"),
       subtitle = paste0(
@@ -1186,7 +1205,7 @@ run_tsne <- function() {
       x = "t-SNE 1",
       y = "t-SNE 2",
       color = "Cancer type",
-      shape = "Sample type"
+      fill = "Cancer type"
     ) +
     theme_bw(base_size = 11) +
     theme(
@@ -1207,6 +1226,395 @@ run_tsne <- function() {
 }
 
 ###############################################################################
+# 11) Step 6: Faceted 4-view t-SNE plot
+###############################################################################
+
+run_tsne_4views <- function() {
+
+  cat("\n============================================================\n")
+  cat("STEP 6: Create 4-view t-SNE summary plot\n")
+  cat("============================================================\n")
+
+  if (file.exists(tsne_4view_pdf_file)) {
+    cat(">>> 4-view t-SNE PDF already exists, skipping Step 6:\n")
+    cat(">>> ", tsne_4view_pdf_file, "\n", sep = "")
+    return(invisible(NULL))
+  }
+
+  if (!file.exists(tsne_coords_file)) {
+    stop("t-SNE coordinates file does not exist. Run Step 5 first: ", tsne_coords_file)
+  }
+
+  if (!file.exists(color_file)) {
+    stop("Cancer color file does not exist: ", color_file)
+  }
+
+  cat(">>> Reading t-SNE coordinates:\n")
+  cat(">>> ", tsne_coords_file, "\n", sep = "")
+
+  tsne_df <- fread(tsne_coords_file)
+
+  required_cols <- c("tSNE1", "tSNE2", "cancer", "sample_type")
+
+  missing_cols <- setdiff(required_cols, names(tsne_df))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing required columns in t-SNE coordinate file: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  #############################################################################
+  # Clean sample type labels
+  #############################################################################
+
+  tsne_df[, sample_type := fifelse(
+    sample_type %in% c("Tumor", "tumor", "Primary Tumor"),
+    "Tumor",
+    fifelse(
+      sample_type %in% c("Healthy", "healthy", "Normal", "Solid Tissue Normal"),
+      "Healthy",
+      sample_type
+    )
+  )]
+
+  tsne_df[, sample_type := factor(sample_type, levels = c("Tumor", "Healthy"))]
+
+  #############################################################################
+  # Cancer colors
+  #############################################################################
+
+  cat(">>> Reading cancer color file:\n")
+  cat(">>> ", color_file, "\n", sep = "")
+
+  color_dt <- fread(color_file, header = FALSE)
+
+  if (ncol(color_dt) < 2) {
+    stop("Cancer color file must contain at least two columns: cancer and color.")
+  }
+
+  color_dt <- color_dt[, .(
+    cancer = sub("^TCGA-", "", trimws(as.character(V1))),
+    color  = trimws(gsub("\r", "", as.character(V2)))
+  )]
+
+  cancer_colors <- setNames(color_dt$color, color_dt$cancer)
+
+  present_cancers <- sort(unique(na.omit(tsne_df$cancer)))
+
+  missing_colors <- setdiff(present_cancers, names(cancer_colors))
+
+  if (length(missing_colors) > 0) {
+    cat(">>> WARNING: Missing colors for cancers:\n")
+    print(missing_colors)
+  }
+
+  cancer_colors <- cancer_colors[names(cancer_colors) %in% present_cancers]
+
+  #############################################################################
+  # Organ group mapping
+  #############################################################################
+
+  organ_map <- list(
+    Adrenal = c("ACC", "PCPG"),
+    Bladder = c("BLCA"),
+    Brain_CNS = c("GBM", "LGG"),
+    Breast = c("BRCA"),
+    Cervix = c("CESC"),
+    Colorectal = c("COAD", "READ"),
+    Esophagus = c("ESCA"),
+    Head_Neck = c("HNSC"),
+    Hematologic = c("LAML", "DLBC"),
+    Kidney = c("KICH", "KIRC", "KIRP"),
+    Liver = c("LIHC"),
+    Lung = c("LUAD", "LUSC"),
+    Mesothelium = c("MESO"),
+    Pancreas = c("PAAD"),
+    Prostate = c("PRAD"),
+    Sarcoma = c("SARC"),
+    Skin = c("SKCM"),
+    Stomach = c("STAD"),
+    Testis = c("TGCT"),
+    Thyroid = c("THCA"),
+    Thymus = c("THYM"),
+    Uterus = c("UCEC", "UCS"),
+    Eye = c("UVM")
+  )
+
+  tsne_df[, organ_group := NA_character_]
+
+  for (nm in names(organ_map)) {
+    tsne_df[cancer %in% organ_map[[nm]], organ_group := nm]
+  }
+
+  tsne_df[is.na(organ_group), organ_group := "Other"]
+
+  #############################################################################
+  # Tissue / cancer class mapping
+  #############################################################################
+
+  tissue_map <- list(
+    Adenocarcinoma = c(
+      "BRCA", "COAD", "READ", "STAD", "PAAD", "PRAD", "LUAD",
+      "UCEC", "UCS", "LIHC", "THCA", "KIRC", "KIRP", "KICH", "ACC"
+    ),
+    Squamous = c("HNSC", "LUSC"),
+    Mixed = c("ESCA", "CESC", "BLCA"),
+    NonEpithelial = c(
+      "GBM", "LGG", "LAML", "DLBC", "SKCM", "UVM", "SARC",
+      "TGCT", "PCPG", "MESO", "THYM"
+    )
+  )
+
+  tsne_df[, tissue_class := NA_character_]
+
+  for (nm in names(tissue_map)) {
+    tsne_df[cancer %in% tissue_map[[nm]], tissue_class := nm]
+  }
+
+  tsne_df[is.na(tissue_class), tissue_class := "Other"]
+
+  #############################################################################
+  # Colors
+  #############################################################################
+
+  sample_type_colors <- c(
+    Healthy = "darkgreen",
+    Tumor = "red3"
+  )
+
+  organ_colors <- c(
+    Adrenal = "#E69F00",
+    Bladder = "#56B4E9",
+    Brain_CNS = "#CC79A7",
+    Breast = "#F781BF",
+    Cervix = "#999999",
+    Colorectal = "#009E73",
+    Esophagus = "#D55E00",
+    Head_Neck = "#A6761D",
+    Hematologic = "#7570B3",
+    Kidney = "#1B9E77",
+    Liver = "#E6AB02",
+    Lung = "#66A61E",
+    Mesothelium = "#A6CEE3",
+    Pancreas = "#FC8D62",
+    Prostate = "#377EB8",
+    Sarcoma = "#B2DF8A",
+    Skin = "#FB9A99",
+    Stomach = "#8DA0CB",
+    Testis = "#CAB2D6",
+    Thyroid = "#FFD92F",
+    Thymus = "#BC80BD",
+    Uterus = "#80B1D3",
+    Eye = "#B3DE69",
+    Other = "black"
+  )
+
+  organ_colors <- organ_colors[names(organ_colors) %in% unique(tsne_df$organ_group)]
+
+  tissue_colors <- c(
+    Adenocarcinoma = "#1B9E77",
+    Squamous = "#D95F02",
+    Mixed = "#7570B3",
+    NonEpithelial = "#E7298A",
+    Other = "black"
+  )
+
+  tissue_colors <- tissue_colors[names(tissue_colors) %in% unique(tsne_df$tissue_class)]
+
+  #############################################################################
+  # Common theme
+  #############################################################################
+
+  base_theme <- theme_bw(base_family = "Times") +
+    theme(
+      text = element_text(family = "Times"),
+      plot.title = element_text(hjust = 0.5, size = 19, family = "Times"),
+      plot.subtitle = element_text(hjust = 0.5, size = 13, family = "Times"),
+      axis.text = element_text(size = 7, color = "black"),
+      axis.title = element_text(size = 13, family = "Times"),
+      legend.title = element_text(size = 14, family = "Times"),
+      legend.text = element_text(size = 11, family = "Times"),
+      legend.key.size = unit(0.40, "cm"),
+      legend.position = "right",
+      plot.margin = margin(6, 6, 6, 6)
+    )
+
+  shape_values <- c(
+    Tumor = 16,
+    Healthy = 17
+  )
+
+  #############################################################################
+  # Plot 1: Cancer type
+  #############################################################################
+
+  p1 <- ggplot(
+    tsne_df,
+    aes(
+      x = tSNE1,
+      y = tSNE2,
+      color = cancer,
+      shape = sample_type
+    )
+  ) +
+    geom_point(size = 1.4, alpha = 0.85) +
+    scale_color_manual(values = cancer_colors, na.value = "grey70") +
+    scale_shape_manual(values = shape_values, na.translate = FALSE) +
+    base_theme +
+    labs(
+      title = "Cancer type",
+      x = "t-SNE 1",
+      y = "t-SNE 2",
+      color = "Cancer",
+      shape = "Sample"
+    )
+
+  #############################################################################
+  # Plot 2: Tumor versus healthy
+  #############################################################################
+
+  p2 <- ggplot(
+    tsne_df,
+    aes(
+      x = tSNE1,
+      y = tSNE2,
+      color = sample_type,
+      shape = sample_type
+    )
+  ) +
+    geom_point(size = 1.4, alpha = 0.85) +
+    scale_color_manual(values = sample_type_colors, na.translate = FALSE) +
+    scale_shape_manual(values = shape_values, na.translate = FALSE) +
+    base_theme +
+    labs(
+      title = "Tumor versus healthy",
+      x = "t-SNE 1",
+      y = "t-SNE 2",
+      color = "Sample",
+      shape = "Sample"
+    )
+
+  #############################################################################
+  # Plot 3: Organ group
+  #############################################################################
+
+  p3 <- ggplot(
+    tsne_df,
+    aes(
+      x = tSNE1,
+      y = tSNE2
+    )
+  ) +
+    geom_point(
+      data = tsne_df[sample_type == "Tumor"],
+      aes(color = organ_group),
+      shape = 16,
+      size = 1.4,
+      alpha = 0.85
+    ) +
+    geom_point(
+      data = tsne_df[sample_type == "Healthy"],
+      aes(fill = organ_group),
+      shape = 24,
+      color = "black",
+      size = 1.8,
+      stroke = 0.6,
+      alpha = 0.95
+    ) +
+    scale_color_manual(values = organ_colors, na.translate = FALSE) +
+    scale_fill_manual(values = organ_colors, na.translate = FALSE) +
+    guides(fill = "none") +
+    base_theme +
+    labs(
+      title = "Affected organ group",
+      x = "t-SNE 1",
+      y = "t-SNE 2",
+      color = "Organ"
+    )
+
+  #############################################################################
+  # Save affected organ group plot alone
+  #############################################################################
+
+  pdf(tsne_organ_pdf_file, width = 12, height = 8, family = "Times")
+  print(p3)
+  dev.off()
+
+  cat(">>> Saved affected organ t-SNE PDF:\n")
+  cat(">>> ", tsne_organ_pdf_file, "\n", sep = "")
+
+  #############################################################################
+  # Plot 4: Tissue / cancer class
+  #############################################################################
+
+  p4 <- ggplot(
+    tsne_df,
+    aes(
+      x = tSNE1,
+      y = tSNE2,
+      color = tissue_class,
+      shape = sample_type
+    )
+  ) +
+    geom_point(size = 1.4, alpha = 0.85) +
+    scale_color_manual(values = tissue_colors, na.translate = FALSE) +
+    scale_shape_manual(values = shape_values, na.translate = FALSE) +
+    base_theme +
+    labs(
+      title = "Tissue / cancer class",
+      x = "t-SNE 1",
+      y = "t-SNE 2",
+      color = "Class",
+      shape = "Sample"
+    )
+
+  #############################################################################
+  # Save one-page PDF
+  #############################################################################
+
+  pdf(tsne_4view_pdf_file, width = 18, height = 12, family = "Times")
+
+  grid.arrange(
+    p1, p2,
+    p3, p4,
+    ncol = 2,
+    nrow = 2,
+    top = textGrob(
+      paste0(
+        "t-SNE of DNA methylation profiles — top ",
+        top_cpgs,
+        " variable CpGs"
+      ),
+      gp = gpar(
+        fontsize = 18,
+        fontfamily = "Times",
+        fontface = "bold"
+      )
+    )
+  )
+
+  dev.off()
+
+  cat(">>> Saved 4-view t-SNE PDF:\n")
+  cat(">>> ", tsne_4view_pdf_file, "\n", sep = "")
+
+  #############################################################################
+  # Save annotated coordinates
+  #############################################################################
+
+  out_annot <- sub("\\.pdf$", "_annotated_coordinates.tsv", tsne_4view_pdf_file)
+
+  fwrite(tsne_df, out_annot, sep = "\t")
+
+  cat(">>> Saved annotated t-SNE coordinates:\n")
+  cat(">>> ", out_annot, "\n", sep = "")
+
+  invisible(NULL)
+}
+
+###############################################################################
 # Run pipeline
 ###############################################################################
 
@@ -1215,6 +1623,7 @@ create_pan_cancer_matrix()
 select_top_variable_cpgs()
 run_pca()
 run_tsne()
+run_tsne_4views()
 
 cat("\n============================================================\n")
 cat("Pipeline steps completed successfully.\n")
@@ -1223,13 +1632,9 @@ cat("Completed: Step 2 pan-cancer methylation matrix\n")
 cat("Completed: Step 3 top variable CpG selection\n")
 cat("Completed: Step 4 PCA\n")
 cat("Completed: Step 5 t-SNE\n")
+cat("Completed: Step 6 4-view t-SNE summary plot\n")
 cat("Output directory: ", run_out, "\n", sep = "")
 cat("============================================================\n")
 
 # exemple to run
-# Rscript ./scripts/tSNE_methylation_pipeline.R \
-  --cohort_file ./results/multi_omics/samples_2d_noOV_noCHOL.tsv \
-  --top_cpgs 2000 \
-  --seed 123 \
-  --initial_dims 30 \
-  --max_iter 1000
+# Rscript ./scripts/tSNE_methylation_pipeline.R --cohort_file ./results/multi_omics/samples_2d_noOV_noCHOL.tsv --top_cpgs 10000 --seed 123 --initial_dims 30 --max_iter 1000

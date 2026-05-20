@@ -542,7 +542,7 @@ files_map <- list(
 statuses <- c(
   "All motifs",
   "mm0to2_noCGmm",
-  "After chrX/Y filtering"
+  "After chrX/Y/M filtering"
 )
 
 banp_counts <- sapply(files_map[["BANP"]], count_gz_lines)
@@ -572,7 +572,6 @@ p <- ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
   theme_minimal() +
   labs(
     title = "Number of motifs before and after filtering",
-    subtitle = "All motifs vs mm0to2_noCGmm vs after chrX/Y filtering",
     y = "Count",
     x = "Motif"
   ) +
@@ -2231,7 +2230,7 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
 dev.off()
 '
 #################################################
-# Barplot not only for the A vial but all of them
+# Barplot tumor vz healthy DNA methylation sample count not only for the A vial but all of them
 #################################################
 mkdir -p ./methylation/methylation_counts
 mkdir -p ./results/methylation
@@ -2383,7 +2382,7 @@ pdf(
 ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
   geom_bar(stat = "identity", position = "dodge") +
   scale_fill_manual(
-    values = c("tumor" = "salmon", "healthy" = "steelblue"),
+    values = c("tumor" = "red", "healthy" = "black"),
     name = ""
   ) +
   labs(
@@ -2393,28 +2392,28 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     y        = "Number of Samples",
     caption  = "Red cancer names = cancer types with no healthy samples"
   ) +
-  theme_minimal(base_size = 13, base_family = "Times") +
+  theme_minimal(base_size = 15, base_family = "Times") +
   theme(
     text            = element_text(family = "Times"),
     plot.title      = element_text(hjust = 0.5, family = "Times"),
-    plot.subtitle   = element_text(hjust = 0.5, size = 14, family = "Times"),
-    axis.title.x    = element_text(family = "Times"),
+    plot.subtitle   = element_text(hjust = 0.5, size = 16, family = "Times"),
+    axis.title.x = element_text(family = "Times", margin = margin(t = 20)),
     axis.title.y    = element_text(family = "Times"),
     axis.text.x     = element_blank(),
     axis.ticks.x    = element_blank(),
     axis.text.y     = element_text(family = "Times"),
-    legend.title    = element_text(size = 16, family = "Times"),
-    legend.text     = element_text(size = 15, family = "Times"),
+    legend.title    = element_text(size = 21, family = "Times"),
+    legend.text     = element_text(size = 18, family = "Times"),
     legend.key.size = unit(0.8, "cm"),
-    plot.caption    = element_text(hjust = 0.5, color = "red", size = 12, family = "Times"),
-    plot.margin     = margin(t = 10, r = 20, b = 60, l = 20)
+    plot.caption    = element_text(hjust = 0.5, color = "red", size = 15, family = "Times"),
+    plot.margin     = margin(t = 10, r = 20, b = 120, l = 20)
   ) +
   coord_cartesian(clip = "off") +
   geom_text(
     data = label_df,
     aes(
       x     = cancer,
-      y     = 0,
+      y     = -0.1,
       label = cancer,
       color = no_healthy
     ),
@@ -2422,7 +2421,7 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     hjust       = 1,
     vjust       = 0.8,
     inherit.aes = FALSE,
-    size        = 4,
+    size        = 6,
     family      = "Times"
   ) +
   scale_color_manual(
@@ -7783,7 +7782,7 @@ EOF
 #################################################################################################################################################
 # plot the correlation across all samples across all cancer between expression of gene and methylation of linked probes --> this code is for one gene at a time, and will output a pdf with 3 pages: 1) all samples, 2) tumor samples only, 3) normal samples only. Each page will have a scatter plot of expression vs methylation, colored by cancer type, and will show the correlation coefficient and p-value in the title. This is to check if the correlation is consistent across all samples, or if it is driven by tumor or normal samples only.
 #################################################################################################################################################
-# LAUNCHED FOR NRF1 and BANP
+
 ###################################################################
 # Plot for multiple genes
 ###################################################################
@@ -10451,7 +10450,12 @@ cat(">>> Total tumor + healthy RNA-seq samples:", sum(summary_dt$total), "\n")
 
 total_samples <- sum(summary_dt$total)
 
-summary_dt[, cancer := factor(cancer, levels = cancer)]
+my_order <- c("BRCA", "HNSC", "THCA", "PRAD", "LGG", "LUAD", "KIRC", "UCEC",
+               "SKCM", "BLCA", "LIHC", "LUSC", "STAD", "COAD", "KIRP",  "CESC",
+               "SARC", "ESCA", "PAAD", "LAML",   "PCPG", "TGCT", "GBM", "THYM",
+               "READ", "MESO", "ACC", "UVM", "KICH", "UCS", "DLBC", "CHOL",  "OV")
+
+summary_dt[, cancer := factor(cancer, levels = my_order)]
 
 label_df <- summary_dt[, .(cancer, no_healthy)]
 
@@ -10473,7 +10477,7 @@ pdf(
 ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
   geom_bar(stat = "identity", position = "dodge") +
   scale_fill_manual(
-    values = c("tumor" = "salmon", "healthy" = "steelblue"),
+    values = c("tumor" = "red", "healthy" = "black"),
     name = ""
   ) +
   labs(
@@ -10483,28 +10487,28 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     y        = "Number of Samples",
     caption  = "Red cancer names = cancer types with no healthy samples"
   ) +
-  theme_minimal(base_size = 13, base_family = "Times") +
+  theme_minimal(base_size = 15, base_family = "Times") +
   theme(
     text            = element_text(family = "Times"),
     plot.title      = element_text(hjust = 0.5, family = "Times"),
-    plot.subtitle   = element_text(hjust = 0.5, size = 14, family = "Times"),
-    axis.title.x    = element_text(family = "Times"),
+    plot.subtitle   = element_text(hjust = 0.5, size = 16, family = "Times"),
+    axis.title.x = element_text(family = "Times", margin = margin(t = 20)),
     axis.title.y    = element_text(family = "Times"),
     axis.text.x     = element_blank(),
     axis.ticks.x    = element_blank(),
     axis.text.y     = element_text(family = "Times"),
-    legend.title    = element_text(size = 16, family = "Times"),
-    legend.text     = element_text(size = 15, family = "Times"),
+    legend.title    = element_text(size = 21, family = "Times"),
+    legend.text     = element_text(size = 18, family = "Times"),
     legend.key.size = unit(0.8, "cm"),
-    plot.caption    = element_text(hjust = 0.5, color = "red", size = 12, family = "Times"),
-    plot.margin     = margin(t = 10, r = 20, b = 60, l = 20)
+    plot.caption    = element_text(hjust = 0.5, color = "red", size = 15, family = "Times"),
+    plot.margin     = margin(t = 10, r = 20, b = 120, l = 20)
   ) +
   coord_cartesian(clip = "off") +
   geom_text(
     data = label_df,
     aes(
       x     = cancer,
-      y     = 0,
+      y     = -0.01,
       label = cancer,
       color = no_healthy
     ),
@@ -10512,7 +10516,7 @@ ggplot(df_long, aes(x = cancer, y = count, fill = type)) +
     hjust       = 1,
     vjust       = 0.8,
     inherit.aes = FALSE,
-    size        = 4,
+    size        = 6,
     family      = "Times"
   ) +
   scale_color_manual(
@@ -11146,6 +11150,7 @@ cat("[DONE] Wrote ", out, "\n", sep = "")
 ' 
 
 # plot the boxplot of each TF separately adding the colors for the cancer type and shape for tumor vz healthy --> outputs 2 pdf 
+# plot the boxplot of each TF separately adding the colors for the cancer type and shape for tumor vz healthy --> outputs 2 pdf 
 Rscript - <<'EOF'
 suppressPackageStartupMessages({
   library(readr)
@@ -11339,10 +11344,21 @@ make_plot <- function(d, gene, cutoff_value, removed_n) {
     ) +
 
     geom_jitter(
+      data = d %>% filter(sample_type == "Tumor"),
       aes(color = cancer, shape = sample_type),
       width = 0.2,
       alpha = 0.65,
       size = 2
+    ) +
+
+    geom_jitter(
+      data = d %>% filter(sample_type == "Healthy"),
+      aes(fill = cancer, shape = sample_type),
+      width = 0.2,
+      alpha = 0.65,
+      size = 2,
+      color = "black",
+      stroke = 0.6
     ) +
 
     geom_hline(
@@ -11356,14 +11372,20 @@ make_plot <- function(d, gene, cutoff_value, removed_n) {
       drop = FALSE
     ) +
 
+    scale_fill_manual(
+      values = cancer_palette,
+      drop = FALSE
+    ) +
+
     scale_shape_manual(
       values = c(
-        Healthy = 17,
+        Healthy = 24,
         Tumor = 16
       )
     ) +
 
     guides(
+      fill = "none",
       color = guide_legend(
         override.aes = list(size = 4, linewidth = 1)
       ),
@@ -11462,6 +11484,7 @@ dev.off()
 cat("[DONE] Wrote ", out_nrf1, "\n", sep = "")
 cat("[DONE] Wrote ", out_banp, "\n", sep = "")
 EOF
+
 ####################################################################################################################################################################################################
 # Build a list of the expression of NRF1 and BANP in all samples and then filter to keep only the samples for which we have both tumor and healthy samples
 ####################################################################################################################################################################################################
@@ -12215,38 +12238,29 @@ awk '
 ' "$f" - \
 > ./expression/gene_expression_matrix_2d_noOV_noCHOL.tsv
 echo "Done! Saved: ./expression/gene_expression_matrix_2d_noOV_noCHOL.tsv"
+
 #################################################################
-# Euler Ven diagram that shows the 2d samples chosen
+# Proportional Euler diagram showing RNA-seq and DNA methylation
 #################################################################
 Rscript -e '
-suppressPackageStartupMessages(library(data.table))
-
+suppressPackageStartupMessages({
+  library(data.table)
+  library(eulerr)
+  library(grid)
+})
 in_file  <- "./results/multi_omics/sample_data_summary.tsv"
 out_pdf  <- "./results/multi_omics/sample_availability_2d.pdf"
 out_tsv  <- "./results/multi_omics/sample_availability_2d.tsv"
 
-# Set to TRUE if you want to exclude OV
 exclude_OV <- TRUE
-
 dt <- fread(in_file)
-
-if (exclude_OV) {
-  dt <- dt[cancer != "OV"]
-}
-
-# Remove CHOL
+if (exclude_OV) dt <- dt[cancer != "OV"]
 dt <- dt[cancer != "CHOL"]
 
-# ============================================================
-# DEFINE SETS
-# ============================================================
 all_ids  <- unique(dt$sample)
 meth_ids <- unique(dt[methylation == 1, sample])
 rna_ids  <- unique(dt[rnaseq == 1, sample])
 
-# ============================================================
-# COUNTS
-# ============================================================
 n_all       <- length(all_ids)
 n_meth      <- length(meth_ids)
 n_rna       <- length(rna_ids)
@@ -12257,213 +12271,111 @@ n_neither   <- length(setdiff(all_ids, union(meth_ids, rna_ids)))
 
 counts <- data.table(
   category = c(
-    "All samples",
-    "Methylation",
-    "RNA-seq",
+    "All samples", "Methylation", "RNA-seq",
     "Both methylation and RNA-seq",
-    "Methylation only",
-    "RNA-seq only",
+    "Methylation only", "RNA-seq only",
     "Neither methylation nor RNA-seq"
   ),
-  n = c(
-    n_all, n_meth, n_rna, n_both, n_meth_only, n_rna_only, n_neither
-  )
+  n = c(n_all, n_meth, n_rna, n_both, n_meth_only, n_rna_only, n_neither)
 )
-
 fwrite(counts, out_tsv, sep = "\t")
 
-# ============================================================
-# GEOMETRY: 3 TRUE CIRCLES
-# ============================================================
-# Outer circle
-r_all <- 1.00
-x_all <- 0
-y_all <- 0
+fit <- euler(c(
+  "RNA-seq"                 = n_rna_only,
+  "DNA methylation"         = n_meth_only,
+  "RNA-seq&DNA methylation" = n_both
+))
 
-# Inner circles
-r_rna  <- 0.62
-r_meth <- 0.62
-
-x_rna  <- -0.27
-y_rna  <- 0
-
-x_meth <-  0.27
-y_meth <-  0
-
-# ============================================================
-# COLORS
-# ============================================================
-col_all_fill  <- "grey97"
-col_all_edge  <- "grey55"
-
-col_rna_fill  <- adjustcolor("#5DADE2", alpha.f = 0.42)
-col_rna_edge  <- "#2E86C1"
-
-col_meth_fill <- adjustcolor("#F4A300", alpha.f = 0.42)
-col_meth_edge <- "#C97C00"
-
-col_overlap_fill <- adjustcolor("red", alpha.f = 0.28)
-col_overlap_edge <- "#C00000"
-
-# ============================================================
-# HELPER FUNCTIONS TO DRAW THE RED OVERLAP LENS
-# ============================================================
-angle_seq_ccw <- function(a1, a2, n = 200) {
-  if (a2 < a1) a2 <- a2 + 2*pi
-  seq(a1, a2, length.out = n)
+plot_title <- if (exclude_OV) {
+  "Overview of patient availability"
+} else {
+  "RNA-seq and DNA methylation availability - All patients"
 }
 
-arc_points <- function(cx, cy, r, a1, a2, n = 200, ccw = TRUE) {
-  if (ccw) {
-    ang <- angle_seq_ccw(a1, a2, n)
-  } else {
-    ang <- rev(angle_seq_ccw(a2, a1, n))
-  }
-  cbind(cx + r*cos(ang), cy + r*sin(ang))
-}
+# ── Pull circle geometry from the fit ────────────────────────────────────────
+ell     <- fit$ellipses
+cx_rna  <- ell["RNA-seq",         "h"];  r_rna  <- ell["RNA-seq",         "a"]
+cx_meth <- ell["DNA methylation", "h"];  r_meth <- ell["DNA methylation", "a"]
+cy_rna  <- ell["RNA-seq",         "k"]
+cy_meth <- ell["DNA methylation", "k"]
 
-draw_circle_overlap <- function(x1, y1, r1, x2, y2, r2,
-                                col = adjustcolor("red", alpha.f = 0.25),
-                                border = "#C00000", lwd = 2, n = 300) {
-  d <- sqrt((x2 - x1)^2 + (y2 - y1)^2)
+# ── Pick angles that sit in the exclusive crescent of each circle ─────────────
+# RNA-seq crescent is on the LEFT  -> angle ~135 degrees (upper-left)
+# Meth    crescent is on the RIGHT -> angle ~45  degrees (upper-right)
+angle_rna  <- 135 * pi / 180
+angle_meth <-  45 * pi / 180
 
-  # No overlap / complete containment / identical circles
-  if (d >= r1 + r2 || d <= abs(r1 - r2) || d == 0) return(invisible(NULL))
+# Line start: exactly on the circle outline
+rna_x0  <- cx_rna  + r_rna  * cos(angle_rna)
+rna_y0  <- cy_rna  + r_rna  * sin(angle_rna)
+meth_x0 <- cx_meth + r_meth * cos(angle_meth)
+meth_y0 <- cy_meth + r_meth * sin(angle_meth)
 
-  # Geometry of the 2 intersection points
-  a <- (r1^2 - r2^2 + d^2) / (2*d)
-  h <- sqrt(max(r1^2 - a^2, 0))
+# Line end: extend outward from the circle in the same direction
+extend  <- r_rna * 0.55   # how far the leader extends beyond the circle edge
+rna_x1  <- rna_x0  + extend * cos(angle_rna)
+rna_y1  <- rna_y0  + extend * sin(angle_rna)
+meth_x1 <- meth_x0 + extend * cos(angle_meth)
+meth_y1 <- meth_y0 + extend * sin(angle_meth)
 
-  xm <- x1 + a * (x2 - x1) / d
-  ym <- y1 + a * (y2 - y1) / d
+# ── Plot ──────────────────────────────────────────────────────────────────────
+pdf(out_pdf, width = 10, height = 7)
 
-  rx <- -(y2 - y1) * (h / d)
-  ry <-  (x2 - x1) * (h / d)
-
-  p1 <- c(xm + rx, ym + ry)
-  p2 <- c(xm - rx, ym - ry)
-
-  # Angles on circle 1
-  a11 <- atan2(p1[2] - y1, p1[1] - x1)
-  a12 <- atan2(p2[2] - y1, p2[1] - x1)
-
-  # Angles on circle 2
-  a21 <- atan2(p1[2] - y2, p1[1] - x2)
-  a22 <- atan2(p2[2] - y2, p2[1] - x2)
-
-  # Candidate arcs for circle 1
-  arc1a <- arc_points(x1, y1, r1, a11, a12, n = n, ccw = TRUE)
-  arc1b <- arc_points(x1, y1, r1, a11, a12, n = n, ccw = FALSE)
-
-  mid1a <- arc1a[round(n/2), ]
-  mid1b <- arc1b[round(n/2), ]
-
-  inside2_a <- ((mid1a[1] - x2)^2 + (mid1a[2] - y2)^2) <= r2^2 + 1e-9
-  inside2_b <- ((mid1b[1] - x2)^2 + (mid1b[2] - y2)^2) <= r2^2 + 1e-9
-
-  arc1 <- if (inside2_a) arc1a else arc1b
-
-  # Candidate arcs for circle 2 (from p2 back to p1)
-  arc2a <- arc_points(x2, y2, r2, a22, a21, n = n, ccw = TRUE)
-  arc2b <- arc_points(x2, y2, r2, a22, a21, n = n, ccw = FALSE)
-
-  mid2a <- arc2a[round(n/2), ]
-  mid2b <- arc2b[round(n/2), ]
-
-  inside1_a <- ((mid2a[1] - x1)^2 + (mid2a[2] - y1)^2) <= r1^2 + 1e-9
-  inside1_b <- ((mid2b[1] - x1)^2 + (mid2b[2] - y1)^2) <= r1^2 + 1e-9
-
-  arc2 <- if (inside1_a) arc2a else arc2b
-
-  lens <- rbind(arc1, arc2)
-  polygon(lens[,1], lens[,2], col = col, border = border, lwd = lwd)
-}
-
-# ============================================================
-# PLOT
-# ============================================================
-pdf(out_pdf, width = 9, height = 8)
-par(mar = c(1.5, 1.5, 4.5, 1.5), xpd = NA, family = "sans")
-
-plot(0, 0,
-     type = "n",
-     xlim = c(-1.25, 1.25),
-     ylim = c(-1.20, 1.25),
-     axes = FALSE,
-     xlab = "",
-     ylab = "",
-     asp = 1)
-
-# Big outer circle
-symbols(x_all, y_all, circles = r_all, inches = FALSE, add = TRUE,
-        bg = col_all_fill, fg = col_all_edge, lwd = 2)
-
-# RNA-seq circle
-symbols(x_rna, y_rna, circles = r_rna, inches = FALSE, add = TRUE,
-        bg = col_rna_fill, fg = col_rna_edge, lwd = 2)
-
-# Methylation circle
-symbols(x_meth, y_meth, circles = r_meth, inches = FALSE, add = TRUE,
-        bg = col_meth_fill, fg = col_meth_edge, lwd = 2)
-
-# Red highlighted overlap
-draw_circle_overlap(
-  x_rna, y_rna, r_rna,
-  x_meth, y_meth, r_meth,
-  col = col_overlap_fill,
-  border = col_overlap_edge,
-  lwd = 2
+plot(
+  fit,
+  fills      = list(fill = c("#5DADE2", "#F4A300"), alpha = 0.45),
+  edges      = list(col  = c("#2E86C1", "#C97C00"), lwd = 2.5),
+  labels     = FALSE,
+  quantities = FALSE,
+  main       = list(label = plot_title, font = 1, cex = 1.1)
 )
 
-# Redraw circle borders so they stay crisp
-symbols(x_rna, y_rna, circles = r_rna, inches = FALSE, add = TRUE,
-        bg = NA, fg = col_rna_edge, lwd = 2)
+# Navigate into the eulerr panel viewport using its known lattice-style name
+# (works across eulerr versions — finds any viewport with "panel" in its path)
+vp_tree <- grid.ls(grobs = FALSE, viewports = TRUE, print = FALSE)
+vp_name <- grep("panel", vp_tree$name, value = TRUE)[1]
+seekViewport(vp_name)
 
-symbols(x_meth, y_meth, circles = r_meth, inches = FALSE, add = TRUE,
-        bg = NA, fg = col_meth_edge, lwd = 2)
-
-# Title
-title(
-  main = "Overview of sample availability",
-  sub  = if (exclude_OV) "Non-OV patients only" else "All patients",
-  font.main = 2,
-  cex.main = 1.6,
-  cex.sub = 1.0
+# Now draw in native coordinates — eulerr panel uses the same coordinate space
+# as fit$ellipses, so no rescaling needed at all
+grid.lines(
+  x  = unit(c(rna_x0,  rna_x1),  "native"),
+  y  = unit(c(rna_y0,  rna_y1),  "native"),
+  gp = gpar(col = "#2E86C1", lwd = 1.5)
+)
+grid.text(
+  label = paste0("RNA-seq only\nn = ", format(n_rna_only, big.mark = ",")),
+  x     = unit(rna_x1  + extend * 0.15 * cos(angle_rna),  "native"),
+  y     = unit(rna_y1  + extend * 0.15 * sin(angle_rna),  "native"),
+  just  = "centre",
+  gp    = gpar(fontsize = 9, col = "#1A5276", fontface = "bold")
 )
 
-# Labels
-text(0, 1.10,
-     labels = paste0("All samples\nn = ", format(n_all, big.mark = ",")),
-     font = 2, cex = 1.15)
+grid.lines(
+  x  = unit(c(meth_x0, meth_x1), "native"),
+  y  = unit(c(meth_y0, meth_y1), "native"),
+  gp = gpar(col = "#C97C00", lwd = 1.5)
+)
+grid.text(
+  label = paste0("DNA methylation only\nn = ", format(n_meth_only, big.mark = ",")),
+  x     = unit(meth_x1 + extend * 0.15 * cos(angle_meth), "native"),
+  y     = unit(meth_y1 + extend * 0.15 * sin(angle_meth), "native"),
+  just  = "centre",
+  gp    = gpar(fontsize = 9, col = "#7D5A00", fontface = "bold")
+)
 
-text(x_rna, y_rna + r_rna + 0.10,
-     labels = paste0("RNA-seq\n(total = ", format(n_rna, big.mark = ","), ")"),
-     col = "#1F618D", font = 2, cex = 1.0)
+# Overlap count in centre
+grid.text(
+  label = format(n_both, big.mark = ","),
+  x     = unit((cx_rna + cx_meth) / 2, "native"),
+  y     = unit((cy_rna + cy_meth) / 2, "native"),
+  gp    = gpar(fontsize = 16, fontface = "bold", col = "grey20")
+)
 
-text(x_meth, y_meth + r_meth + 0.10,
-     labels = paste0("Methylation\n(total = ", format(n_meth, big.mark = ","), ")"),
-     col = "#AF601A", font = 2, cex = 1.0)
-
-text(-0.60, 0,
-     labels = paste0("RNA-seq only\n", format(n_rna_only, big.mark = ",")),
-     font = 2, cex = 1.08)
-
-text(0.60, 0,
-     labels = paste0("Methylation only\n", format(n_meth_only, big.mark = ",")),
-     font = 2, cex = 1.08)
-
-text(0, 0,
-     labels = paste0("Both\n", format(n_both, big.mark = ",")),
-     font = 2, cex = 1.35)
-
-text(0, -1.05,
-     labels = paste0("Neither methylation nor RNA-seq\n", format(n_neither, big.mark = ",")),
-     cex = 0.98, col = "grey20")
-
+upViewport()
 dev.off()
 
 cat("Saved plot:", out_pdf, "\n")
 cat("Saved counts:", out_tsv, "\n")
 print(counts)
 '
-

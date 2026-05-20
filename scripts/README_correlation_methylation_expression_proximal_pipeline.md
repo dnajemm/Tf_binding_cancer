@@ -336,9 +336,7 @@ For a given `gene` / `motif_id` pair, evidence in favor of a biologically intere
 
 The pipeline is executed through:
 
-```r
-run_pipeline()
-```
+Rscript ./scripts/correlation_methylation_expression_proximal_pipeline.R NRF1
 
 which runs the full workflow for the selected transcription factor across:
 
