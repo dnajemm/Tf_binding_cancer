@@ -1637,4 +1637,4 @@ cat("Output directory: ", run_out, "\n", sep = "")
 cat("============================================================\n")
 
 # exemple to run
-# Rscript ./scripts/tSNE_methylation_pipeline.R --cohort_file ./results/multi_omics/samples_2d_noOV_noCHOL.tsv --top_cpgs 10000 --seed 123 --initial_dims 30 --max_iter 1000
+# Rscript ./scripts/tSNE_methylation_pipeline.R --cohort_file ./results/multi_omics/samples_2d_noOV_noCHOL.tsv --top_cpgs 470851 --seed 123 --initial_dims 30 --max_iter 1000

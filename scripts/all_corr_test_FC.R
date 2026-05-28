@@ -1,3 +1,37 @@
+# =============================================================================
+# Volcano-style scatter plot: Expression log2FC (or methylation delta)
+# vs. Pearson correlation (motif methylation ~ gene expression)
+#
+# For a given transcription factor (TF), this script:
+#   1. Reads pre-computed Pearson correlation statistics between TF motif
+#      methylation and target gene expression, across cancer types (TCGA).
+#   2. Reads a merged methylation-expression matrix and computes, per
+#      gene-motif-cancer triplet:
+#        - Expression log2FC  (mean Tumor - mean Healthy, in log2 TPM+1)
+#        - Methylation delta  (mean Tumor - mean Healthy, in % points)
+#   3. Filters to cancer types that have both Healthy and Tumor samples.
+#   4. Classifies each pair as "Anti-correlation significant" when:
+#        Pearson r < -0.3  AND  FDR < 0.05  AND  |expression log2FC| >= 0
+#   5. Loads a CSV of curated gene-cancer pairs (YES/MAYBE significance) and
+#      highlights them with red circles and labels on the plot.
+#   6. Produces a PDF scatter plot (x = expression log2FC or methylation delta,
+#      y = Pearson r) for two sample sets: all samples and matched patients.
+#
+# Usage:
+#   Rscript ./scripts/all_correlation.R <TF_NAME>
+#   e.g.: Rscript ./scripts/all_correlation.R BANP
+#
+# Inputs:
+#   - ./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/
+#       <TF>/{all_samples,matched_patients}/correlation_stats/
+#       pearson_correlation_all_pairs_by_cancer.tsv.gz
+#   - Same subdirs: motif_sample_expression_methylation_*.tsv.gz
+#   - <TF>/<TF>_GENES-Table.csv  (curated gene-cancer pairs to highlight)
+#
+# Output:
+#   - PDF plots saved to: ./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/<TF>/volcano_plots/
+# =============================================================================
+
 #!/usr/bin/env Rscript
 
 suppressPackageStartupMessages({
@@ -12,8 +46,14 @@ tf_name <- if (length(args) >= 1) toupper(args[1]) else "BANP"
 
 anti_r_cutoff   <- -0.3
 anti_fdr_cutoff <- 0.05
+log2fc_cutoff   <- 0
 
-# Number of top significant anti-correlated pairs to label automatically
+# Choose what you want on the x-axis:
+# "expr_log2FC" = expression change Tumor - Healthy
+# "meth_delta"  = methylation change Tumor - Healthy
+x_axis_to_plot <- "expr_log2FC"
+
+# Number of top significant pairs to label automatically
 n_top_labels <- 0
 
 base_dir <- file.path(
@@ -49,15 +89,8 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 # ------------------------------------------------------------
 
 extra_label_pairs <- list(
-  list(gene = "GGT6", cancer = "KIRC")
+  list(gene = "TDRD1", cancer = "PRAD")
 )
-
-# To add several labels:
-# extra_label_pairs <- list(
-#   list(gene = "GGT6", cancer = "KIRC"),
-#   list(gene = "SFRP1", cancer = "BRCA"),
-#   list(gene = "ZNF582", cancer = "COAD")
-# )
 
 # ------------------------------------------------------------
 # Automatically create force_label_pairs from CSV file
@@ -121,7 +154,7 @@ labels_long <- unique(labels_long[
     cancer != ""
 ])
 
-# Create list format used later by the volcano function
+# Create list format used later by the plot function
 if (nrow(labels_long) > 0) {
   force_label_pairs <- lapply(
     seq_len(nrow(labels_long)),
@@ -151,10 +184,13 @@ if (length(force_label_pairs) > 0) {
 }
 
 # ------------------------------------------------------------
-# Volcano plot function
+# Plot function:
+# x-axis = expression log2FC OR methylation delta
+# y-axis = Pearson r
+# category = anti-correlation significant or not
 # ------------------------------------------------------------
 
-plot_volcano <- function(corr_file, merged_file, label) {
+plot_change_vs_r <- function(corr_file, merged_file, label) {
 
   if (!file.exists(corr_file)) {
     cat(">>> File not found, skipping:", corr_file, "\n")
@@ -166,22 +202,47 @@ plot_volcano <- function(corr_file, merged_file, label) {
     return(invisible(NULL))
   }
 
+  if (!x_axis_to_plot %in% c("expr_log2FC", "meth_delta")) {
+    stop("x_axis_to_plot must be either 'expr_log2FC' or 'meth_delta'")
+  }
+
   out_pdf <- file.path(
     out_dir,
-    paste0("volcano_all_pairs_", tf_name, "_", label, ".pdf")
+    paste0(
+      x_axis_to_plot,
+      "_vs_pearson_r_anti_correlation_significant_",
+      tf_name,
+      "_",
+      label,
+      ".pdf"
+    )
   )
+
+  # ------------------------------------------------------------
+  # 1. Read correlation file
+  # ------------------------------------------------------------
 
   dt <- fread(corr_file)
 
   dt[, cancer := sub("^TCGA-", "", as.character(cancer))]
   dt[, gene   := as.character(gene)]
 
-  st_dt <- fread(merged_file, select = c("cancer", "sample_type"))
+  if (!"motif_id" %in% names(dt)) {
+    stop("Column motif_id not found in correlation file: ", corr_file)
+  }
 
-  st_dt[, cancer      := sub("^TCGA-", "", as.character(cancer))]
-  st_dt[, sample_type := trimws(as.character(sample_type))]
+  # ------------------------------------------------------------
+  # 2. Read merged methylation-expression file
+  # ------------------------------------------------------------
 
-  st_dt[
+  merged_dt <- fread(merged_file)
+
+  merged_dt[, cancer      := sub("^TCGA-", "", as.character(cancer))]
+  merged_dt[, gene        := as.character(gene)]
+  merged_dt[, motif_id    := as.character(motif_id)]
+  merged_dt[, sample_type := trimws(as.character(sample_type))]
+
+  merged_dt[
     tolower(sample_type) %in% c(
       "healthy",
       "normal",
@@ -191,7 +252,7 @@ plot_volcano <- function(corr_file, merged_file, label) {
     sample_type := "Healthy"
   ]
 
-  st_dt[
+  merged_dt[
     tolower(sample_type) %in% c(
       "tumor",
       "primary tumor",
@@ -201,7 +262,11 @@ plot_volcano <- function(corr_file, merged_file, label) {
     sample_type := "Tumor"
   ]
 
-  cancers_both <- st_dt[
+  # ------------------------------------------------------------
+  # 3. Keep only cancer types with both Healthy and Tumor samples
+  # ------------------------------------------------------------
+
+  cancers_both <- merged_dt[
     ,
     .(
       has_healthy = any(sample_type == "Healthy"),
@@ -223,12 +288,130 @@ plot_volcano <- function(corr_file, merged_file, label) {
   cat(">>> [", label, "] Cancers kept:",
       paste(sort(cancers_both), collapse = ", "), "\n")
 
+  # ------------------------------------------------------------
+  # 4. Prepare expression values
+  # ------------------------------------------------------------
+
+  if ("log2_expr" %in% names(merged_dt)) {
+
+    merged_dt[, expr_for_fc := as.numeric(log2_expr)]
+
+  } else if ("expression" %in% names(merged_dt)) {
+
+    merged_dt[, expr_for_fc := log2(as.numeric(expression) + 1)]
+
+  } else {
+
+    stop(
+      "Could not find log2_expr or expression column in merged file: ",
+      merged_file
+    )
+  }
+
+  # ------------------------------------------------------------
+  # 5. Prepare methylation values
+  # ------------------------------------------------------------
+
+  if ("meth_percent" %in% names(merged_dt)) {
+
+    merged_dt[, meth_for_delta := as.numeric(meth_percent)]
+
+  } else if ("meth_beta" %in% names(merged_dt)) {
+
+    merged_dt[, meth_beta := as.numeric(meth_beta)]
+
+    if (max(merged_dt$meth_beta, na.rm = TRUE) <= 1.5) {
+      merged_dt[, meth_for_delta := meth_beta * 100]
+    } else {
+      merged_dt[, meth_for_delta := meth_beta]
+    }
+
+  } else {
+
+    stop(
+      "Could not find meth_percent or meth_beta column in merged file: ",
+      merged_file
+    )
+  }
+
+  # ------------------------------------------------------------
+  # 6. Compute expression log2FC and methylation delta
+  # ------------------------------------------------------------
+
+  fc_dt <- merged_dt[
+    cancer %in% cancers_both &
+      sample_type %in% c("Healthy", "Tumor") &
+      !is.na(expr_for_fc) &
+      !is.na(meth_for_delta) &
+      is.finite(expr_for_fc) &
+      is.finite(meth_for_delta),
+    .(
+      mean_expr_healthy = mean(expr_for_fc[sample_type == "Healthy"], na.rm = TRUE),
+      mean_expr_tumor   = mean(expr_for_fc[sample_type == "Tumor"], na.rm = TRUE),
+
+      mean_meth_healthy = mean(meth_for_delta[sample_type == "Healthy"], na.rm = TRUE),
+      mean_meth_tumor   = mean(meth_for_delta[sample_type == "Tumor"], na.rm = TRUE),
+
+      n_healthy = sum(
+        sample_type == "Healthy" &
+          !is.na(expr_for_fc) &
+          !is.na(meth_for_delta)
+      ),
+
+      n_tumor = sum(
+        sample_type == "Tumor" &
+          !is.na(expr_for_fc) &
+          !is.na(meth_for_delta)
+      )
+    ),
+    by = .(gene, motif_id, cancer)
+  ]
+
+  fc_dt <- fc_dt[
+    n_healthy > 0 &
+      n_tumor > 0 &
+      is.finite(mean_expr_healthy) &
+      is.finite(mean_expr_tumor) &
+      is.finite(mean_meth_healthy) &
+      is.finite(mean_meth_tumor)
+  ]
+
+  fc_dt[, expr_log2FC := mean_expr_tumor - mean_expr_healthy]
+  fc_dt[, meth_delta  := mean_meth_tumor - mean_meth_healthy]
+
+  # ------------------------------------------------------------
+  # 7. Merge correlation values with log2FC and methylation delta
+  # ------------------------------------------------------------
+
+  dt <- merge(
+    dt,
+    fc_dt[, .(
+      gene,
+      motif_id,
+      cancer,
+      expr_log2FC,
+      meth_delta,
+      mean_expr_healthy,
+      mean_expr_tumor,
+      mean_meth_healthy,
+      mean_meth_tumor,
+      n_healthy,
+      n_tumor
+    )],
+    by = c("gene", "motif_id", "cancer"),
+    all = FALSE
+  )
+
   dt <- dt[
     tested == TRUE &
       !is.na(pearson_r) &
       !is.na(pearson_fdr) &
+      !is.na(expr_log2FC) &
+      !is.na(meth_delta) &
       is.finite(pearson_r) &
       is.finite(pearson_fdr) &
+      is.finite(expr_log2FC) &
+      is.finite(meth_delta) &
       pearson_fdr > 0
   ]
 
@@ -237,34 +420,51 @@ plot_volcano <- function(corr_file, merged_file, label) {
     return(invisible(NULL))
   }
 
-  dt[, neg_log10_fdr := -log10(pearson_fdr)]
+  # ------------------------------------------------------------
+  # 8. Define categories:
+  # Anti-correlation significant or not
+  #
+  # Anti-correlation significant =
+  # Pearson r < -0.3
+  # Pearson FDR < 0.05
+  # absolute expression log2FC >= 1
+  # ------------------------------------------------------------
 
   dt[, category := fcase(
-    pearson_r < anti_r_cutoff & pearson_fdr < anti_fdr_cutoff,
-    "Anti-correlated (sig.)",
+    pearson_r < anti_r_cutoff &
+      pearson_fdr < anti_fdr_cutoff &
+      abs(expr_log2FC) >= log2fc_cutoff,
+    "Anti-correlation significant",
+
     default = "Not significant"
   )]
 
   dt[, category := factor(
     category,
-    levels = c("Anti-correlated (sig.)", "Not significant")
+    levels = c("Anti-correlation significant", "Not significant")
   )]
 
-  n_anti    <- dt[category == "Anti-correlated (sig.)", .N]
-  n_ns      <- dt[category == "Not significant", .N]
+  n_anti <- dt[category == "Anti-correlation significant", .N]
+  n_ns   <- dt[category == "Not significant", .N]
   n_cancers <- uniqueN(dt$cancer)
 
-  fdr_line <- -log10(anti_fdr_cutoff)
-  y_max    <- max(dt$neg_log10_fdr, na.rm = TRUE)
+  # This creates a generic plotting column depending on the chosen x-axis
+  dt[, plot_x := get(x_axis_to_plot)]
+
+  x_min <- min(dt$plot_x, na.rm = TRUE)
+  x_max <- max(dt$plot_x, na.rm = TRUE)
+
+  x_pad <- 0.08 * (x_max - x_min)
+  if (!is.finite(x_pad) || x_pad == 0) x_pad <- 0.5
 
   # ------------------------------------------------------------
-  # 1. Automatically label top significant anti-correlated pairs
+  # 9. Automatically label top anti-correlation significant pairs
   # ------------------------------------------------------------
 
   top_label_dt <- dt[
-    category == "Anti-correlated (sig.)"
+    category == "Anti-correlation significant"
   ][
-    order(pearson_fdr, pearson_r)
+    order(pearson_fdr, pearson_r, -abs(expr_log2FC))
   ]
 
   if (nrow(top_label_dt) > 0 && n_top_labels > 0) {
@@ -278,7 +478,7 @@ plot_volcano <- function(corr_file, merged_file, label) {
   cat(">>> [", label, "] Top labelled pairs:", nrow(top_label_dt), "\n")
 
   # ------------------------------------------------------------
-  # 2. Manually/externally selected pairs to circle in red
+  # 10. Manually/externally selected pairs to circle in red
   # ------------------------------------------------------------
 
   if (length(force_label_pairs) > 0) {
@@ -303,10 +503,11 @@ plot_volcano <- function(corr_file, merged_file, label) {
       all = FALSE
     )
 
-    # Keep only forced pairs that pass the volcano thresholds
+    # Keep only forced pairs that pass all three thresholds
     circle_dt <- circle_dt[
       pearson_r < anti_r_cutoff &
-        pearson_fdr < anti_fdr_cutoff
+        pearson_fdr < anti_fdr_cutoff &
+        abs(expr_log2FC) >= log2fc_cutoff
     ]
 
   } else {
@@ -316,19 +517,19 @@ plot_volcano <- function(corr_file, merged_file, label) {
   n_circled <- nrow(circle_dt)
 
   if (n_circled == 0) {
-    cat(">>> WARNING: none of the force_label_pairs were found in the data for", label, "\n")
+    cat(">>> WARNING: none of the force_label_pairs passed all thresholds for", label, "\n")
   } else {
     cat(
-      ">>> [", label, "] Manually circled pairs:",
+      ">>> [", label, "] Red-circled pairs:",
       paste(paste(circle_dt$gene, circle_dt$cancer, sep = " | "), collapse = ", "),
       "\n"
     )
   }
 
   cat(">>> [", label, "] Number of red-circled pairs:", n_circled, "\n")
- 
+
   # ------------------------------------------------------------
-  # 3. Extra manually selected labels
+  # 11. Extra manually selected labels
   # ------------------------------------------------------------
 
   if (length(extra_label_pairs) > 0) {
@@ -354,6 +555,7 @@ plot_volcano <- function(corr_file, merged_file, label) {
     )
 
     manual_label_dt[, label_text := paste0(gene, " | ", cancer)]
+    manual_label_dt[, plot_x := get(x_axis_to_plot)]
 
   } else {
     manual_label_dt <- dt[0]
@@ -373,12 +575,24 @@ plot_volcano <- function(corr_file, merged_file, label) {
   }
 
   # ------------------------------------------------------------
-  # 3. Plot
+  # 12. Axis label depending on selected x-axis
+  # ------------------------------------------------------------
+
+  if (x_axis_to_plot == "expr_log2FC") {
+    x_lab <- "Expression log2FC (Tumor - Healthy; log2(TPM + 1))"
+    vline_value <- 0
+  } else {
+    x_lab <- "Methylation delta (Tumor - Healthy; percentage points)"
+    vline_value <- 0
+  }
+
+  # ------------------------------------------------------------
+  # 13. Plot
   # ------------------------------------------------------------
 
   pdf(out_pdf, width = 14, height = 9)
 
-  p <- ggplot(dt, aes(x = pearson_r, y = neg_log10_fdr)) +
+  p <- ggplot(dt, aes(x = plot_x, y = pearson_r)) +
 
     geom_point(
       data  = dt[category == "Not significant"],
@@ -388,35 +602,36 @@ plot_volcano <- function(corr_file, merged_file, label) {
     ) +
 
     geom_point(
-      data  = dt[category == "Anti-correlated (sig.)"],
+      data  = dt[category == "Anti-correlation significant"],
       color = "#000000",
-      size  = 1.4,
+      size  = 1.5,
       alpha = 0.90
     ) +
 
     geom_hline(
-      yintercept = fdr_line,
-      linetype   = "dashed",
-      color      = "grey40",
-      linewidth  = 0.55
-    ) +
-
-    geom_vline(
-      xintercept = anti_r_cutoff,
+      yintercept = anti_r_cutoff,
       linetype   = "dashed",
       color      = "#000000",
       linewidth  = 0.55
     ) +
 
     geom_vline(
-      xintercept = 0,
+      xintercept = vline_value,
+      linetype   = "dashed",
+      color      = "grey40",
+      linewidth  = 0.55
+    ) +
+
+    geom_hline(
+      yintercept = 0,
       color      = "grey30",
       linewidth  = 0.35
     ) +
 
     geom_text_repel(
       data               = top_label_dt,
-      aes(label          = label_text),
+      aes(x = plot_x, y = pearson_r, label = label_text),
+      inherit.aes        = FALSE,
       size               = 3.5,
       color              = "#000000",
       fontface           = "bold",
@@ -431,7 +646,7 @@ plot_volcano <- function(corr_file, merged_file, label) {
 
     geom_point(
       data        = circle_dt,
-      aes(x = pearson_r, y = neg_log10_fdr),
+      aes(x = plot_x, y = pearson_r),
       inherit.aes = FALSE,
       color       = "red",
       size        = 5.5,
@@ -440,9 +655,9 @@ plot_volcano <- function(corr_file, merged_file, label) {
       stroke      = 1.5
     ) +
 
-        geom_text_repel(
+    geom_text_repel(
       data               = manual_label_dt,
-      aes(x = pearson_r, y = neg_log10_fdr, label = label_text),
+      aes(x = plot_x, y = pearson_r, label = label_text),
       inherit.aes        = FALSE,
       size               = 3.8,
       color              = "red",
@@ -457,29 +672,29 @@ plot_volcano <- function(corr_file, merged_file, label) {
 
     annotate(
       "text",
-      x = -1,
-      y = y_max * 0.98,
-      label = paste0("Anti-corr. sig.: n = ", n_anti),
+      x = x_min,
+      y = -0.98,
+      label = paste0("Anti-correlation significant: n = ", n_anti),
       hjust = 0,
-      size = 4.2,
+      size = 4.0,
       color = "#000000",
       fontface = "bold"
     ) +
 
     annotate(
       "text",
-      x = 0,
-      y = y_max * 0.98,
-      label = paste0("Not sig.: n = ", n_ns),
-      hjust = 0.5,
+      x = x_max,
+      y = 0.95,
+      label = paste0("Not significant: n = ", n_ns),
+      hjust = 1,
       size = 3.8,
       color = "grey50"
     ) +
 
     annotate(
       "text",
-      x = 1,
-      y = y_max * 0.98,
+      x = x_max,
+      y = -0.98,
       label = paste0("Red circled: n = ", n_circled),
       hjust = 1,
       size = 4.0,
@@ -488,30 +703,33 @@ plot_volcano <- function(corr_file, merged_file, label) {
     ) +
 
     scale_x_continuous(
-      limits = c(-1, 1),
-      breaks = seq(-1, 1, by = 0.25)
+      limits = c(x_min - x_pad, x_max + x_pad)
     ) +
 
     scale_y_continuous(
-      expand = expansion(mult = c(0.02, 0.08))
+      limits = c(-1, 1),
+      breaks = seq(-1, 1, by = 0.25)
     ) +
 
     labs(
       title = paste0(
         tf_name,
-        " - Pearson r versus -log10(FDR) across all gene-motif-cancer pairs"
+        " - ",
+        x_axis_to_plot,
+        " versus Pearson r across all gene-motif-cancer pairs"
       ),
       subtitle = paste0(
         label, "  |  ",
         n_cancers, " cancer types with both Healthy and Tumor samples  |  ",
         nrow(dt), " total pairs  |  ",
-        "r threshold: ", anti_r_cutoff,
-        "  |  FDR threshold: ", anti_fdr_cutoff,
+        "Anti-correlation significant: r < ", anti_r_cutoff,
+        ", Pearson FDR < ", anti_fdr_cutoff,
+        ", |expression log2FC| >= ", log2fc_cutoff,
         "  |  Top labels: ", n_top_labels,
         "  |  Red circled: ", n_circled
       ),
-      x = "Pearson r  (methylation vs. log2(TPM + 1))",
-      y = expression(-log[10](FDR))
+      x = x_lab,
+      y = "Pearson r (motif methylation vs. gene expression)"
     ) +
 
     theme_bw(base_size = 15) +
@@ -529,10 +747,10 @@ plot_volcano <- function(corr_file, merged_file, label) {
 }
 
 # ------------------------------------------------------------
-# Run volcano plots
+# Run plots
 # ------------------------------------------------------------
 
-plot_volcano(
+plot_change_vs_r(
   corr_file   = corr_file_all,
   merged_file = file.path(
     all_dir,
@@ -541,7 +759,7 @@ plot_volcano(
   label = "all_samples"
 )
 
-plot_volcano(
+plot_change_vs_r(
   corr_file   = corr_file_matched,
   merged_file = file.path(
     matched_dir,
@@ -550,4 +768,5 @@ plot_volcano(
   label = "matched_patients"
 )
 
-# to run this script: Rscript ./scripts/all_correlation.R BANP
+# To run:
+# Rscript ./scripts/all_correlation.R BANP

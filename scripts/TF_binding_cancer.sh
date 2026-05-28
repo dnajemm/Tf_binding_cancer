@@ -12379,3 +12379,149 @@ cat("Saved plot:", out_pdf, "\n")
 cat("Saved counts:", out_tsv, "\n")
 print(counts)
 '
+
+
+#######################################################################################################################
+# Enrichment analysis of the genes with methylation-expression correlation in the 2d cohort annotated as yes or maybe
+#######################################################################################################################
+# using pipeline from /data/bardeta/scripts/gene_enrichment_pipeline.sh
+
+# 1) make a list of the genes with correlation annotated as "yes" or "maybe" in the 2d cohort for BANP and NRF1:
+NRF1_file="./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/NRF1/NRF1_GENES-Table.csv"
+awk -F';' '$4=="YES" || $4=="MAYBE" {print $1}' "$NRF1_file" | sort | uniq > ./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/NRF1/NRF1_genes_2d.txt
+BANP_file="./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/BANP_GENES-Table.csv"
+awk -F';' '$4=="YES" || $4=="MAYBE" {print $1}' "$BANP_file" | sort | uniq > ./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/BANP_genes_2d.txt
+
+# 2) run the enrichment pipeline for each of the gene lists:
+mkdir -p ./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/NRF1/plots
+mkdir -p ./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/plots
+
+file="./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/BANP_genes_2d.txt"
+
+column=1
+species="hsa"
+format="name"
+pvalue=0.00001
+database="go_biological_process"
+
+while getopts "hf:s:n:c:p:o:d:" opt; do
+    case $opt in
+	h)
+	    echo -e $help >&2
+	    exit
+	    ;;
+	f)
+	    file=$OPTARG
+	    ;;
+	s)
+	    species=$OPTARG
+	    ;;
+	n)
+	    format=$OPTARG
+	    ;;
+	c)
+	    column=$OPTARG
+	    ;;
+	p)
+	    pvalue=$OPTARG
+	    ;;
+	o)
+	    output_dir=$OPTARG
+	    ;;
+	d)
+	    database=$OPTARG
+	    ;;
+	\?)
+            echo -e $help >&2
+            exit
+	    ;;
+    esac
+done
+
+# Check file name and species are provided
+if [[ -z $file || -z $species ]]; then echo -e $help >&2; exit; fi
+
+# Check file exist and is not empty
+if [[ ! -s $file ]]; then echo ${file}" file does not exist or is empty" >&2; exit 1; fi
+
+# Check species is in the list
+if [[ $species != "hsa" && $species != "mmu" && $species != "bta" && $species != "cfa" && $species != "dre" && $species != "gga" && $species != "ssc" ]]; then echo ${species}" species is not supported" >&2; echo -e $help >&2; exit 1; fi
+
+# Assign species to DB file
+if [[ $database = "go_biological_process" ]]; then
+    DB=/data/genome/annotations/${species}_go_biological_process.txt
+elif [[ $database = "wikipathways" ]]; then
+    DB=/data/genome/annotations/${species}_wikipathways.txt
+elif [[ $database = "tf_dbd" ]]; then
+    DB=/data/genome/annotations/${species}_tf_dbd.txt
+else echo $database" database not available"; exit 1
+fi
+if [[ ! -s $DB ]]; then echo "Database file not available: "$DB; exit 1; fi
+						   
+
+# Check column exists in file
+if [[ ! $column =~ ^[0-9]+$ ]]; then echo "COLUMN "$column" is not a number"; exit 1; fi
+status=$(awk -vN=$column '(N>NF){print "KO"}' $file | uniq)
+if [[ $status = "KO" ]]; then echo $file" file does not contain column "$column" on all lines"; exit 1; fi
+
+# Check p-value is between 0 and 1
+status=$(awk -vP=$pvalue 'BEGIN{if(P<0||P>1){print "KO"}}')
+if [[ $pvalue = "KO" ]]; then echo "P-value threshold should be between 0 and 1"; exit 1; fi
+
+# TMP file containing gene names
+if [[ $format != "name" && $format != "id" ]]; then echo -e $help >&2; exit 1; fi
+TMP=$(mktemp -u -p /scratch/$USER/tmp/)
+if [[ $format = "name" ]]; then
+    cat $file | awk -vN=$column '{print $N}' | sort -u > $TMP
+# Convert ensembl IDs to gene names
+elif [[ $format = "id" ]]; then
+    if [[ $species = "hsa" ]]; then gene_file=/data/genome/annotations/hg38_genes.bed
+    elif [[ $species = "mmu" ]]; then gene_file=/data/genome/annotations/mm10_genes.bed
+    elif [[ $species = "bta" ]]; then gene_file=/data/genome/annotations/bosTau8_genes.bed
+    elif [[ $species = "cfa" ]]; then gene_file=/data/genome/annotations/canFam3_genes.bed
+    elif [[ $species = "dre" ]]; then gene_file=/data/genome/annotations/danRer10_genes.bed
+    elif [[ $species = "gga" ]]; then gene_file=/data/genome/annotations/galGal5_genes.bed
+    elif [[ $species = "ssc" ]]; then gene_file=/data/genome/annotations/susScr11_genes.bed
+    fi
+    cat $file | awk -vN=$column '{print $N}' | sort -u | awk -vF=$gene_file -vTMP=$TMP -vFS='\t' 'BEGIN{while(getline<F){G[$6]=$4}}{if(G[$1]){print G[$1]>TMP;c++}}END{print c" IDs could be converted to gene names ("int(c*100/NR)"%)"}'
+fi
+
+echo $(date)": gene_enrichment start processing "$file
+
+# Check gene names exist
+total=$(cat $TMP | sort -u | wc -l)
+count=$(cat $TMP | awk -vDB=$DB 'BEGIN{while(getline<DB){G[$1]=1}}{if($1 in G){c++}}END{print c+0}')
+if [[ $count -eq 0 ]]; then  echo "None of your genes are present in the current annotation database "$DB" (check gene name/id format)"; exit 1;
+else echo $count" genes are present in the current annotation database ("$(awk -vC=$count -vT=$total 'BEGIN{print int(C*100/T)}')"%)";fi
+
+# Output directory
+if [[ -n $output_dir ]]; then mkdir -p $output_dir
+else output_dir=$(echo $file | awk '{if($1!~"/"){print "."}else{split($1,X,"/");L=X[1];for(i=2;i<=length(X)-1;i++){L=L"/"X[i]};print L}}')
+fi
+
+# Output file
+output_file=$(echo $file | awk '{split($1,X,"/");split(X[length(X)],Y,".");print Y[1]}')
+
+# Run annotation enrichment
+(echo -e "#db_category\tgenes_in_category\tgenes\tdb_category\tdb\tp-value\tcategory_name\tgene_list"
+ cat $TMP | awk -vF=$DB -vOFS='\t' '{G[$1]=1}END{while(getline<F){DBt[$2]++;FUNC[$2]=$3;Gt[$1]=1;if($1 in G){Gg[$1]=1;DBg[$2]++;if(!Lg[$2]){Lg[$2]=$1}else{Lg[$2]=Lg[$2]","$1}}};for(db in DBt){if(!Lg[db]){Lg[db]="."};print db,DBg[db]+0,length(Gg)+0,DBt[db]+0,length(Gt)+0,FUNC[db],Lg[db]}}' | Rscript /data/software/dorsal/scripts/hyper.R -i - | awk -vOFS='\t' -vP=$pvalue '($8<=P){print $1,$2,$3,$4,$5,$8,$6,$7}' | sort -k6,6g -k2,2nr
+)> ${output_dir}/${output_file}"_"$database"_table.txt"
+
+# Number of categories enriched
+NB=$(awk '(NR>1)' ${output_dir}/${output_file}"_"$database"_table.txt" | wc -l)
+echo $NB" categories significantly enriched (p-value <= "$pvalue") (top ones below)"
+if [[ $NB -gt 0 ]]; then 
+    cat ${output_dir}/${output_file}"_"$database"_table.txt" | head | column -t
+else
+    rm ${output_dir}/${output_file}"_"$database"_table.txt"
+fi
+
+# Plot results
+if [[ $NB -ge 20 ]]; then NB=20; fi
+if [[ $NB -gt 0 ]]; then 
+    Rscript /data/bardeta/scripts/gene_enrichment_plot.R -i ${output_dir}/${output_file}"_"$database"_table.txt" -n $NB -o ${output_dir}/plots/${output_file}"_"$database"_barplot.pdf"
+    echo "Plot generated: display "${output_dir}/plots/${output_file}"_"$database"_barplot.pdf"
+fi
+rm $TMP
+
+echo $(date)": gene_enrichment processed "$file" successfully"
