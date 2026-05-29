@@ -67,13 +67,13 @@ min_n_per_group   <- 2
 # Minimum absolute methylation delta required for Plot 3.
 # meth_value is in percentage points, so 5 means 5 percentage points.
 # Set to 0 to disable this filter.
-min_abs_meth_delta <- 5
+min_abs_meth_delta <- 10
 
 # Minimum absolute expression log2FC required for Plot 3.
 # 1.0 = at least 2-fold change.
 # 0.2 = mild expression change threshold.
 # Set to 0 to disable this filter.
-min_abs_log2fc <- 0.2
+min_abs_log2fc <- 1
 
 # Used for classical raw-TPM log2FC:
 # log2((mean Tumor TPM + pseudocount) / (mean Healthy TPM + pseudocount))
@@ -826,7 +826,7 @@ make_three_plots <- function(corr_file, merged_file, label) {
     )
   )
 
-  pdf(out_pdf_3, width = 18, height = 10)
+  pdf(out_pdf_3, width = 14, height = 6)
 
   if (nrow(both_dt) == 0) {
 

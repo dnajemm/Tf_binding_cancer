@@ -583,6 +583,238 @@ p <- ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
 ggsave(out_pdf, plot = p, width = 7, height = 4.5, dpi = 300, bg = "white")
 cat("[DONE] Wrote:", out_pdf, "\n")
 '
+#############################################
+# One barplot with motifs overlapping probes 
+#############################################
+
+###############################################################################
+# ONE BARPLOT: all motifs vs mm0to2_noCGmm vs after chrX/Y/M filtering
+#              vs motifs containing at least one HM450 probe
+###############################################################################
+
+###############################################################################
+# ONE BARPLOT WITH BROKEN Y-AXIS
+###############################################################################
+# IM HERE 
+Rscript -e '
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(scales)
+  library(ggbreak)
+  library(data.table)
+})
+
+# ------------------------------------------------------------
+# Count functions
+# ------------------------------------------------------------
+
+count_gz_lines <- function(f) {
+  if (!file.exists(f)) stop("File not found: ", f)
+
+  as.numeric(system(
+    paste("zcat", shQuote(f), "| wc -l"),
+    intern = TRUE
+  ))
+}
+
+count_unique_bed_motifs <- function(f) {
+  if (!file.exists(f)) stop("File not found: ", f)
+
+  cmd <- paste(
+    "awk '\''BEGIN{OFS=\"\\t\"} {print $1,$2,$3,$6}'\''",
+    shQuote(f),
+    "| sort -u | wc -l"
+  )
+
+  as.numeric(system(cmd, intern = TRUE))
+}
+
+count_proximal_tss_motifs <- function(tf_label, tss_file) {
+  if (!file.exists(tss_file)) stop("File not found: ", tss_file)
+
+  dt <- fread(tss_file)
+
+  required_cols <- c("TF", "motif_instance_id", "is_proximal")
+  missing_cols <- setdiff(required_cols, names(dt))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing column(s) in TSS file: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  dt[, TF := as.character(TF)]
+  dt[, motif_instance_id := as.character(motif_instance_id)]
+
+  dt[, is_proximal_clean := as.character(is_proximal)]
+  dt[, is_proximal_clean := trimws(tolower(is_proximal_clean))]
+
+  dt_proximal <- dt[
+    TF == tf_label &
+      is_proximal_clean %in% c("true", "1", "yes")
+  ]
+
+  uniqueN(dt_proximal$motif_instance_id)
+}
+
+# ------------------------------------------------------------
+# Input files
+# ------------------------------------------------------------
+
+motifs <- c("BANP", "NRF1")
+
+files_map <- list(
+  BANP = c(
+    "./motifs/BANP.bed.gz",
+    "./motifs/BANP_mm0to2_noCGmm.bed.gz",
+    "./motifs/BANP_mm0to2_noCGmm_noXY.bed.gz"
+  ),
+
+  NRF1 = c(
+    "./motifs/NRF1.bed.gz",
+    "./motifs/NRF1_mm0to2_noCGmm.bed.gz",
+    "./motifs/NRF1_mm0to2_noCGmm_noXY.bed.gz"
+  )
+)
+
+probe_overlap_files <- list(
+  BANP = "./motifs/overlaps/intersected_motifs2mm_HM450/BANP_noCGmm_intersected_methylation.bed",
+  NRF1 = "./motifs/overlaps/intersected_motifs2mm_HM450/NRF1_noCGmm_intersected_methylation.bed"
+)
+
+# This file must contain:
+# TF, motif_instance_id, is_proximal
+tss_file <- "./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz"
+
+statuses <- c(
+  "All motifs",
+  "mm0to2_noCGmm",
+  "After chrX/Y/M filtering",
+  "With HM450 probe",
+  "With HM450 probe + proximal TSS"
+)
+
+# ------------------------------------------------------------
+# Count motif numbers
+# ------------------------------------------------------------
+
+banp_counts <- c(
+  sapply(files_map[["BANP"]], count_gz_lines),
+  count_unique_bed_motifs(probe_overlap_files[["BANP"]]),
+  count_proximal_tss_motifs("BANP_mm0to2_noCGmm", tss_file)
+)
+
+nrf1_counts <- c(
+  sapply(files_map[["NRF1"]], count_gz_lines),
+  count_unique_bed_motifs(probe_overlap_files[["NRF1"]]),
+  count_proximal_tss_motifs("NRF1_mm0to2_noCGmm", tss_file)
+)
+
+df <- data.frame(
+  Motif  = rep(motifs, each = length(statuses)),
+  Status = rep(statuses, times = length(motifs)),
+  Count  = c(banp_counts, nrf1_counts)
+)
+
+df$Motif <- factor(df$Motif, levels = c("BANP", "NRF1"))
+df$Status <- factor(df$Status, levels = statuses)
+
+print(df)
+
+# ------------------------------------------------------------
+# Output
+# ------------------------------------------------------------
+
+out_pdf <- "./results/motifs/motif_counts_combined_BANP_NRF1_broken_axis_with_TSS.pdf"
+dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+
+# ------------------------------------------------------------
+# Plot
+# ------------------------------------------------------------
+
+p <- ggplot(df, aes(x = Motif, y = Count, fill = Status)) +
+
+  geom_bar(
+    stat = "identity",
+    position = position_dodge(width = 0.9)
+  ) +
+
+  geom_text(
+    aes(label = comma(Count)),
+    position = position_dodge(width = 0.9),
+    vjust = -0.3,
+    size = 3,
+    family = "Times New Roman"
+  ) +
+
+  scale_y_continuous(
+    labels = comma,
+    expand = expansion(mult = c(0, 0.10))
+  ) +
+
+  scale_y_break(
+    c(40000, 350000),
+    scales = 0.35
+  ) +
+
+  theme_minimal(base_family = "Times New Roman") +
+
+  labs(
+    title = "Number of NRF1 and BANP motifs",
+    y = "Count",
+    x = "Motif",
+    fill = NULL
+  ) +
+
+  theme(
+    text = element_text(
+      family = "Times New Roman"
+    ),
+
+    plot.title = element_text(
+      hjust = 0.5,
+      size = 18,
+      face = "bold",
+      family = "Times New Roman"
+    ),
+
+    axis.title = element_text(
+      size = 14,
+      family = "Times New Roman"
+    ),
+
+    axis.text = element_text(
+      size = 12,
+      family = "Times New Roman"
+    ),
+
+    legend.title = element_text(
+      size = 11,
+      family = "Times New Roman"
+    ),
+
+    legend.text = element_text(
+      size = 10,
+      family = "Times New Roman"
+    ),
+
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  filename = out_pdf,
+  plot = p,
+  width = 9,
+  height = 5,
+  dpi = 300,
+  bg = "white",
+  device = cairo_pdf
+)
+
+cat("[DONE] Wrote:", out_pdf, "\n")
+'
+# conda install -c conda-forge r-ggbreak
 
 ###############################################################################
 # 2) MOTIF DISTANCE TO TSS
