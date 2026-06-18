@@ -37,7 +37,9 @@
 #     but it is NOT used for plotting.
 #
 #   - CSV-selected gene-cancer pairs are CIRCLED ONLY in Plot 3.
-#   - Only pairs in extra_label_pairs are LABELED in Plot 3.
+#   - Pairs in extra_label_pairs can be independently highlighted in Plots 1, 2, and 3.
+#   - In Plots 1 and 2, highlighted pairs are circled and labeled in red.
+#   - In Plot 3, highlighted pairs are labeled in black; CSV-selected pairs remain circled in black.
 #
 # Usage:
 #   Rscript ./scripts/three_change_plots.R BANP
@@ -83,14 +85,24 @@ pseudo_count <- 1
 # Keep FALSE if you want Plot 3 to show all pairs passing Wilcoxon + effect-size filters.
 require_anti_correlation_for_plot3 <- FALSE
 
-# If TRUE, manually selected pairs from extra_label_pairs are labeled with text.
-label_manual_pairs <- TRUE
+# Choose independently whether manually selected pairs from extra_label_pairs
+# are highlighted in Plot 1, Plot 2, and Plot 3.
+#
+# For Plot 1 and Plot 2, TRUE adds BOTH:
+#   - a red circle around the point
+#   - a red text label
+#
+# For Plot 3, TRUE adds the text label; CSV-selected pairs are circled separately.
+label_manual_pairs_plot1 <- TRUE
+label_manual_pairs_plot2 <- TRUE
+label_manual_pairs_plot3 <- TRUE
 
 # ------------------------------------------------------------
-# Manually chosen pairs to LABEL in Plot 3 only
+# Manually chosen pairs to HIGHLIGHT
 #
 # CSV pairs are only circled in Plot 3.
-# Only pairs written here are labeled with text in Plot 3.
+# Pairs written here can be circled and labeled in Plots 1 and 2,
+# and labeled in Plot 3, according to the three options above.
 # ------------------------------------------------------------
 
 extra_label_pairs <- list(
@@ -239,7 +251,7 @@ if (nrow(circle_pairs) > 0) {
 }
 
 # ------------------------------------------------------------
-# Load manually chosen gene-cancer pairs for TEXT LABELS ONLY, Plot 3
+# Load manually chosen gene-cancer pairs for highlighting
 # ------------------------------------------------------------
 
 if (length(extra_label_pairs) > 0) {
@@ -592,7 +604,7 @@ make_three_plots <- function(corr_file, merged_file, label) {
   }
 
   # ------------------------------------------------------------
-  # 9B. Manually selected pairs to LABEL ONLY in Plot 3
+  # 9B. Manually selected pairs to highlight
   # ------------------------------------------------------------
 
   if (nrow(manual_label_pairs) > 0) {
@@ -666,6 +678,46 @@ make_three_plots <- function(corr_file, merged_file, label) {
       size  = 1.2,
       alpha = 0.65
     ) +
+
+    {
+      if (label_manual_pairs_plot1 && nrow(label_dt) > 0) {
+        geom_point(
+          data        = label_dt,
+          aes(
+            x = meth_delta,
+            y = neglog10_meth_fdr
+          ),
+          inherit.aes = FALSE,
+          shape       = 21,
+          fill        = NA,
+          color       = "red",
+          size        = 5.5,
+          stroke      = 1.4
+        )
+      }
+    } +
+
+    {
+      if (label_manual_pairs_plot1 && nrow(label_dt) > 0) {
+        geom_text_repel(
+          data          = label_dt,
+          aes(
+            x     = meth_delta,
+            y     = neglog10_meth_fdr,
+            label = label_text
+          ),
+          inherit.aes   = FALSE,
+          size          = 3.7,
+          color         = "red",
+          fontface      = "bold",
+          max.overlaps  = Inf,
+          segment.color = "red",
+          segment.size  = 0.35,
+          box.padding   = 0.6,
+          point.padding = 0.5
+        )
+      }
+    } +
 
     scale_color_manual(
       values = c("TRUE" = "black", "FALSE" = "grey75"),
@@ -743,6 +795,46 @@ make_three_plots <- function(corr_file, merged_file, label) {
       size  = 1.2,
       alpha = 0.65
     ) +
+
+    {
+      if (label_manual_pairs_plot2 && nrow(label_dt) > 0) {
+        geom_point(
+          data        = label_dt,
+          aes(
+            x = expr_log2FC,
+            y = neglog10_expr_fdr
+          ),
+          inherit.aes = FALSE,
+          shape       = 21,
+          fill        = NA,
+          color       = "red",
+          size        = 5.5,
+          stroke      = 1.4
+        )
+      }
+    } +
+
+    {
+      if (label_manual_pairs_plot2 && nrow(label_dt) > 0) {
+        geom_text_repel(
+          data          = label_dt,
+          aes(
+            x     = expr_log2FC,
+            y     = neglog10_expr_fdr,
+            label = label_text
+          ),
+          inherit.aes   = FALSE,
+          size          = 3.7,
+          color         = "red",
+          fontface      = "bold",
+          max.overlaps  = Inf,
+          segment.color = "red",
+          segment.size  = 0.35,
+          box.padding   = 0.6,
+          point.padding = 0.5
+        )
+      }
+    } +
 
     scale_color_manual(
       values = c("TRUE" = "black", "FALSE" = "grey75"),
@@ -913,7 +1005,7 @@ make_three_plots <- function(corr_file, merged_file, label) {
       ) +
 
       {
-        if (label_manual_pairs && nrow(label_both_dt) > 0) {
+        if (label_manual_pairs_plot3 && nrow(label_both_dt) > 0) {
           geom_text_repel(
             data          = label_both_dt,
             aes(x = meth_delta, y = expr_log2FC, label = label_text),
@@ -1004,5 +1096,5 @@ make_three_plots(
 )
 
 # To run:
-# Rscript ./scripts/three_change_plots.R BANP
-# Rscript ./scripts/three_change_plots.R NRF1
+# Rscript ./scripts/all_corr_test2_FC.R BANP
+# Rscript ./scripts/all_corr_test2_FC.R NRF1
