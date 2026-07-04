@@ -8871,37 +8871,114 @@ ls "${VCF_DIR}"/SNV_TCGA-*.vcf.gz 2>/dev/null \
 echo "[DONE] Wrote: $OUT_FILE"
 
 # barplot 
+
 Rscript -e '
-data <- read.table("./snv/snv_sample_counts_per_cancer/samples_per_cancer.tsv",header=FALSE, sep="\t", stringsAsFactors=FALSE)
-colnames(data) <- c("cancer","sample_count")
-data <- data[order(data$sample_count, decreasing=FALSE), ]
+data <- read.table(
+  "./snv/snv_sample_counts_per_cancer/samples_per_cancer.tsv",
+  header = FALSE,
+  sep = "\t",
+  stringsAsFactors = FALSE
+)
 
-cols <- read.table("./results/multi_omics/cancer_color_order_with_defined_colours.tsv",header=FALSE, sep="\t", stringsAsFactors=FALSE, quote="", comment.char="")
-colnames(cols) <- c("cancer","color")
+colnames(data) <- c("cancer", "sample_count")
 
+# Ensure sample counts are numeric
+data$sample_count <- as.numeric(data$sample_count)
+
+# Remove rows with missing sample counts
+data <- data[!is.na(data$sample_count), ]
+
+# Order cancer types by increasing sample count
+data <- data[order(data$sample_count, decreasing = FALSE), ]
+
+cols <- read.table(
+  "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
+  header = FALSE,
+  sep = "\t",
+  stringsAsFactors = FALSE,
+  quote = "",
+  comment.char = ""
+)
+
+colnames(cols) <- c("cancer", "color")
+
+# Match each cancer type with its corresponding color
 palette <- setNames(cols$color, cols$cancer)
 bar_colors <- unname(palette[data$cancer])
 
-# validate colors (will error if any are not valid)
-bad <- which(!is.na(bar_colors) & tryCatch(is.na(col2rgb(bar_colors)), error=function(e) TRUE))
-if (length(bad) > 0) {
-  cat("[ERROR] These colors are invalid:\n")
-  print(unique(bar_colors[bad]))
-  quit(status=1)
+# Check for missing colors
+if (any(is.na(bar_colors))) {
+  cat("[ERROR] Missing colors for the following cancer types:\n")
+  print(data$cancer[is.na(bar_colors)])
+  quit(status = 1)
 }
 
-pdf("./results/snv/samples_with_snvs_per_cancer_barplot.pdf", width=9, height=9, bg="white")
-nice_max <- max(pretty(data$sample_count))
+# Validate color values
+valid_colors <- vapply(
+  bar_colors,
+  function(x) {
+    tryCatch({
+      col2rgb(x)
+      TRUE
+    }, error = function(e) FALSE)
+  },
+  logical(1)
+)
+
+if (any(!valid_colors)) {
+  cat("[ERROR] These colors are invalid:\n")
+  print(unique(bar_colors[!valid_colors]))
+  quit(status = 1)
+}
+
+# Calculate total number of samples
+total_samples <- sum(data$sample_count)
+
+pdf(
+  "./results/snv/samples_with_snvs_per_cancer_barplot.pdf",
+  width = 9,
+  height = 9,
+  bg = "white"
+)
+
 labels <- sub("^TCGA-", "", data$cancer)
 
-barplot(data$sample_count, names.arg=labels, horiz=TRUE, las=1,
-        col=bar_colors, border="black",
-        main="Samples per Cancer Type",
-        cex.main=3, cex.lab=1.5, xlab="Number of samples",
-        xlim=c(0, nice_max))
+# Add extra horizontal space for sample-count labels
+nice_max <- max(pretty(c(0, data$sample_count)))
+plot_max <- nice_max * 1.12
+
+# Save the bar midpoint positions
+bp <- barplot(
+  data$sample_count,
+  names.arg = labels,
+  horiz = TRUE,
+  las = 1,
+  col = bar_colors,
+  border = "black",
+  main = paste0(
+    "Samples per Cancer Type\n",
+    "Total samples: ", format(total_samples, big.mark = ",")
+  ),
+  cex.main = 2,
+  cex.lab = 1.5,
+  xlab = "Number of samples",
+  xlim = c(0, plot_max)
+)
+
+# Add the sample count next to each bar
+text(
+  x = data$sample_count,
+  y = bp,
+  labels = data$sample_count,
+  pos = 4,
+  offset = 0.4,
+  cex = 1
+)
 
 dev.off()
 '
+
+
 
 
 ###############################################################################

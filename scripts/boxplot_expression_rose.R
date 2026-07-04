@@ -18,7 +18,7 @@ suppressPackageStartupMessages({
 # USER PARAMETERS
 # ============================================================
 
-tf_list <- c("FOSL2", "JDP2", "ATF3", "RUNX1", "LEF1")
+tf_list <- c("TERT")
 
 rnaseq_dir <- "./expression/"
 
@@ -27,7 +27,7 @@ rnaseq_pattern <- "augmented_star_gene_counts_filtered\\.tsv$"
 gene_col <- 2
 tpm_col  <- 7
 
-out_dir <- "./results/expression/rose_plots/"
+out_dir <- "./results/"
 
 # ============================================================
 # Read mapping file
@@ -331,7 +331,6 @@ make_plot <- function(d, gene) {
 
       legend.key.size = unit(0.7, "cm")
     ) +
-
     labs(
       title = paste0(gene, " TPM across all available RNA-seq samples"),
       subtitle = "Healthy vs Tumor | all available RNA-seq samples",
