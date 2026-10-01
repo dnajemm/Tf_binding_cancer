@@ -12834,3 +12834,79 @@ fi
 rm $TMP
 
 echo $(date)": gene_enrichment processed "$file" successfully"
+
+
+##################################
+# Prepare Deseq2 files
+##################################
+############################################
+# Create the design file for DESeq2 analysis only takes the 01A and 11A samples (tumor and healthy)
+############################################
+mkdir -p ./expression/deseq2
+echo -e "sample\tcondition\treplicate" > ./expression/deseq2/design_file.txt
+
+total=$(ls ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv | wc -l)
+count=0
+
+for f in ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv; do 
+    count=$((count + 1))
+    echo "Processing $count/$total: $(basename $f)"
+    
+    sample=$(basename $f | cut -d'.' -f1)
+    condition=$(echo $sample | cut -d'-' -f6 | cut -d'_' -f1)
+    replicate=$(echo $sample | cut -d'-' -f6 | cut -d'_' -f2 | cut -d'.' -f1)
+    echo -e "$sample\t$condition\t$replicate" >> ./expression/deseq2/design_file.txt
+
+done
+
+echo "Done! $total samples processed."
+
+# Transform the condition replicate into cancer 01A or healthy 11A
+awk 'BEGIN{OFS="\t"}
+NR==1{print; next}
+$2=="01A"{$2="tumor"; print}
+$2=="11A"{$2="healthy"; print}' ./expression/deseq2/design_file.txt > ./expression/deseq2/design_file_annotated.txt
+
+#############################################
+# Transform the count files to the expected format for DESeq2 analysis 
+# IMPORTANT Deseq2 expects a gene length column, but the STAR gene counts do not provide this information. Therefore, a dummy value of 1000 is added to the gene length column. It is not used in the DESeq2 analysis, but it is required for the input format.
+#############################################
+mkdir -p ./expression/deseq2/counts
+for f in ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv; do
+    sample=$(basename $f | cut -d'.' -f1)
+    
+    # Check if this sample is in the design file (01A or 11A only)
+    if grep -q "^$sample" ./expression/deseq2/design_file_annotated.txt; then
+        # Extract gene_id (col1), gene_name (col2), unstranded count (col4), and add dummy gene length (col3 is gene_type, not length)
+        awk 'BEGIN{OFS="\t"} {print $1, $2, $4, 1000}' "$f" \
+        > ./expression/deseq2/counts/${sample}_genes_count.txt
+        
+        echo "Processed: $sample"
+    fi
+done
+
+#############################################
+# Create one design file per cancer type
+#############################################
+for cancer in $(tail -n +2 ./expression/deseq2/design_file_annotated.txt | cut -d'-' -f2 | sort -u); do
+    head -1 ./expression/deseq2/design_file_annotated.txt > ./expression/deseq2/design_${cancer}.txt
+    grep "\-${cancer}\-" ./expression/deseq2/design_file_annotated.txt >> ./expression/deseq2/design_${cancer}.txt
+    echo "Created: design_${cancer}.txt"
+done
+conda install -c conda-forge r-cluster
+
+# Run the Deseq2 pipeline for each cancer type 
+#!/bin/bash
+conda activate /data/najemd/TF_binding_cancer/conda_envs/TF_binding_cancer_env
+
+for cancer in BLCA BRCA CESC CHOL COAD ESCA GBM HNSC KICH KIRC KIRP LIHC LUAD LUSC PAAD PCPG PRAD READ SARC SKCM STAD THCA THYM UCEC; do
+    echo "=============================="
+    echo "=== Running DESeq2 for $cancer ==="
+    echo "=============================="
+    Rscript --vanilla ./scripts/Deseq2.R \
+        -n ${cancer} \
+        -d ./expression/deseq2/design_${cancer}.txt
+    echo "=== Done with $cancer ==="
+done
+
+echo "All cancers done!"
