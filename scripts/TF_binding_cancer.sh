@@ -12868,19 +12868,36 @@ $2=="01A"{$2="tumor"; print}
 $2=="11A"{$2="healthy"; print}' ./expression/deseq2/design_file.txt > ./expression/deseq2/design_file_annotated.txt
 
 #############################################
-# Transform the count files to the expected format for DESeq2 analysis 
-# IMPORTANT Deseq2 expects a gene length column, but the STAR gene counts do not provide this information. Therefore, a dummy value of 1000 is added to the gene length column. It is not used in the DESeq2 analysis, but it is required for the input format.
+# Transform and filter count files for DESeq2
+# Only keeps genes associated with NRF1 or BANP motifs (from probe_gene_pairs_in_motifs.tsv)
+# Creates two separate count directories: counts_NRF1/ and counts_BANP/
 #############################################
-mkdir -p ./expression/deseq2/counts
+
+mkdir -p ./expression/deseq2/counts_NRF1
+mkdir -p ./expression/deseq2/counts_BANP
+
+# Build gene lists from the motif-probe-gene pairs file (col3 = gene name)
+awk -F'\t' '$1 =="NRF1_mm0to2_noCGmm" {print $3}' ./methylation/probe_gene_pairs_in_motifs.tsv | sort -u > /tmp/NRF1_genes.txt
+awk -F'\t' '$1 =="BANP_mm0to2_noCGmm" {print $3}' ./methylation/probe_gene_pairs_in_motifs.tsv | sort -u > /tmp/BANP_genes.txt
+
+echo "NRF1 genes: $(wc -l < /tmp/NRF1_genes.txt)"
+echo "BANP genes: $(wc -l < /tmp/BANP_genes.txt)"
+
 for f in ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv; do
     sample=$(basename $f | cut -d'.' -f1)
     
-    # Check if this sample is in the design file (01A or 11A only)
     if grep -q "^$sample" ./expression/deseq2/design_file_annotated.txt; then
-        # Extract gene_id (col1), gene_name (col2), unstranded count (col4), and add dummy gene length (col3 is gene_type, not length)
-        awk 'BEGIN{OFS="\t"} {print $1, $2, $4, 1000}' "$f" \
-        > ./expression/deseq2/counts/${sample}_genes_count.txt
-        
+
+        # NRF1: keep rows where gene_name (col2) is in NRF1 gene list
+        awk -F'\t' 'BEGIN{OFS="\t"} NR==FNR{g[$1]=1; next} $2 in g {print $1,$2,$4,1000}' \
+            /tmp/NRF1_genes.txt "$f" \
+            > ./expression/deseq2/counts_NRF1/${sample}_genes_count.txt
+
+        # BANP: keep rows where gene_name (col2) is in BANP gene list
+        awk -F'\t' 'BEGIN{OFS="\t"} NR==FNR{g[$1]=1; next} $2 in g {print $1,$2,$4,1000}' \
+            /tmp/BANP_genes.txt "$f" \
+            > ./expression/deseq2/counts_BANP/${sample}_genes_count.txt
+
         echo "Processed: $sample"
     fi
 done
@@ -12895,18 +12912,594 @@ for cancer in $(tail -n +2 ./expression/deseq2/design_file_annotated.txt | cut -
 done
 conda install -c conda-forge r-cluster
 
-# Run the Deseq2 pipeline for each cancer type 
+# Run the Deseq2 pipeline for each cancer type that has at least one tumor and one healthy sample (01A and 11A)
 #!/bin/bash
+cd /data/najemd/TF_binding_cancer
 conda activate /data/najemd/TF_binding_cancer/conda_envs/TF_binding_cancer_env
 
-for cancer in BLCA BRCA CESC CHOL COAD ESCA GBM HNSC KICH KIRC KIRP LIHC LUAD LUSC PAAD PCPG PRAD READ SARC SKCM STAD THCA THYM UCEC; do
-    echo "=============================="
-    echo "=== Running DESeq2 for $cancer ==="
-    echo "=============================="
-    Rscript --vanilla ./scripts/Deseq2.R \
-        -n ${cancer} \
-        -d ./expression/deseq2/design_${cancer}.txt
-    echo "=== Done with $cancer ==="
+# For NRF1
+Rscript --vanilla ./scripts/Deseq2.R \
+    -n CHOL \
+    -d ./expression/deseq2/design_CHOL.txt \
+    -c ./expression/deseq2/counts_NRF1 \
+    -o ./results/expression/deseq2/NRF1
+
+# For BANP
+Rscript --vanilla ./scripts/Deseq2.R \
+    -n CHOL \
+    -d ./expression/deseq2/design_CHOL.txt \
+    -c ./expression/deseq2/counts_BANP \
+    -o ./results/expression/deseq2/BANP
+
+conda activate /data/najemd/TF_binding_cancer/conda_envs/TF_binding_cancer_env
+
+for TF in NRF1 BANP; do
+    mkdir -p ./results/expression/deseq2/${TF}
+    
+    # Run in batches of 4
+    batch=0
+    for cancer in BLCA BRCA CESC CHOL COAD ESCA GBM HNSC KICH KIRC KIRP LIHC LUAD LUSC PAAD PCPG PRAD READ SARC SKCM STAD THCA THYM UCEC; do
+        Rscript --vanilla ./scripts/Deseq2.R \
+            -n ${cancer} \
+            -d ./expression/deseq2/design_${cancer}.txt \
+            -c ./expression/deseq2/counts_${TF} \
+            -o ./results/expression/deseq2/${TF} \
+            > ./results/expression/deseq2/${TF}/${cancer}.log 2>&1 &
+        
+        batch=$((batch+1))
+        if [ $batch -eq 4 ]; then
+            wait   # wait for the 4 running jobs to finish
+            batch=0
+        fi
+    done
+    wait  # wait for any remaining jobs
 done
 
-echo "All cancers done!"
+echo "All done!"
+
+######################################
+# Combine DESeq2 results for all cancers into one file per TF
+######################################
+Rscript --vanilla - << 'EOF'
+suppressMessages(library(ggplot2))
+suppressMessages(library(ggrepel))
+suppressMessages(library(cowplot))
+
+cancers <- c("BLCA","BRCA","CESC","CHOL","COAD","ESCA","GBM","HNSC",
+             "KICH","KIRC","KIRP","LIHC","LUAD","LUSC","PAAD","PCPG",
+             "PRAD","READ","SARC","SKCM","STAD","THCA","THYM","UCEC")
+
+for (TF in c("NRF1","BANP")) {
+    outdir <- paste0("./results/expression/deseq2/", TF)
+    pdf_out <- paste0(outdir, "/", TF, "_all_cancers_volcano.pdf")
+
+    all_res <- list()
+    for (cancer in cancers) {
+        files <- list.files(outdir, pattern=paste0("^",cancer,"_.*_deseq2_diff_table\\.txt$"), full.names=TRUE)
+        if (length(files) == 0) next
+        for (f in files) {
+            key <- paste0(cancer,"__",basename(f))
+            df <- tryCatch(read.table(f, header=TRUE, sep="\t", stringsAsFactors=FALSE), error=function(e) NULL)
+            if (!is.null(df) && nrow(df) > 0) all_res[[key]] <- list(file=f, cancer=cancer, df=df)
+        }
+    }
+
+    if (length(all_res) == 0) { cat(TF, ": no diff tables found\n"); next }
+
+    max_fc   <- ceiling(max(abs(unlist(lapply(all_res, function(x) x$df$log2FoldChange))), na.rm=TRUE))
+    max_pval <- min(ceiling(max(-log10(unlist(lapply(all_res, function(x) x$df$padj))), na.rm=TRUE)), 35)
+
+    # Total genes is the same across cancers — take from first result
+    n_total <- nrow(all_res[[1]]$df)
+
+    plots <- list()
+    for (key in names(all_res)) {
+        cancer <- all_res[[key]]$cancer
+        df     <- all_res[[key]]$df
+
+        df$padj[is.na(df$padj)] <- 1
+        df$padj_plot <- pmin(-log10(df$padj), max_pval)
+        n_up   <- sum(df$log2FoldChange >  1 & df$padj < 0.05, na.rm=TRUE)
+        n_down <- sum(df$log2FoldChange < -1 & df$padj < 0.05, na.rm=TRUE)
+
+        top_idx <- head(order(df$padj), 5)
+        df$label <- NA; df$label[top_idx] <- df$gene[top_idx]
+        df$sig <- "ns"
+        df$sig[df$log2FoldChange >  1 & df$padj < 0.05] <- "up"
+        df$sig[df$log2FoldChange < -1 & df$padj < 0.05] <- "down"
+
+        p <- ggplot(df, aes(x=log2FoldChange, y=padj_plot, label=label, color=sig)) +
+            ggtitle(cancer) +
+            geom_point(size=0.4, alpha=0.6) +
+            scale_color_manual(values=c(up="firebrick", down="steelblue", ns="grey70"), guide="none") +
+            geom_hline(yintercept=-log10(0.05), linetype="dashed", size=0.3, color="grey40") +
+            geom_vline(xintercept=c(-1,1), linetype="dashed", size=0.3, color="grey40") +
+            geom_text_repel(size=1.8, max.overlaps=10, color="black") +
+            annotate("text", x= max_fc*0.9, y=max_pval*0.92, label=paste0("up ",n_up),   color="firebrick", size=2.5, hjust=1) +
+            annotate("text", x=-max_fc*0.9, y=max_pval*0.92, label=paste0("down ",n_down), color="steelblue", size=2.5, hjust=0) +
+            xlab("log2FC") + ylab("-log10(padj)") +
+            xlim(-max_fc, max_fc) + ylim(0, max_pval) +
+            theme_classic(base_size=7)
+
+        plots[[cancer]] <- p
+        cat(TF, cancer, "done\n")
+    }
+
+    # Title + n= centered above the grid
+    title_row <- ggdraw() +
+        draw_label(TF, fontface="bold", size=20, hjust=0.5, x=0.5, y=0.7) +
+        draw_label(paste0("n = ", n_total, " genes"), size=12, hjust=0.5, x=0.5, y=0.25,
+                   color="grey40", fontface="italic")
+
+    grid <- plot_grid(plotlist=plots, ncol=6)
+
+    pdf(pdf_out, width=24, height=17, useDingbats=FALSE)
+    print(plot_grid(title_row, grid, ncol=1, rel_heights=c(0.05, 0.95)))
+    dev.off()
+    cat("=>", pdf_out, "\n")
+}
+cat("All done.\n")
+EOF
+
+##################
+# Combine methylation beta values for all samples into one file per cancer type and put them in a beta_matrices directory
+##################
+
+Rscript -e '
+library(data.table)
+
+tf_files <- list(
+  BANP = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probes.txt",
+  NRF1 = "./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_probes.txt"
+)
+tf_probes <- lapply(tf_files, function(f) fread(f, header = FALSE)$V1)
+
+files <- list.files("./methylation/filtered_methylation",
+                    pattern = "annotated_methylation_filtered[.]bed[.]gz$",
+                    full.names = TRUE)
+
+parse_filename <- function(f) {
+  bn    <- basename(f)
+  parts <- strsplit(strsplit(bn, "_")[[1]][2], "-")[[1]]
+  list(cancer  = parts[2],
+       patient = paste(parts[3:5], collapse = "-"),
+       type    = ifelse(parts[6] == "01A", "tumor", "healthy"))
+}
+
+meta <- rbindlist(lapply(files, function(f) {
+  p <- parse_filename(f)
+  data.table(file = f, cancer = p$cancer, patient = p$patient, type = p$type)
+}))
+
+for (tf in names(tf_probes)) {
+  probes_keep <- tf_probes[[tf]]
+  outdir <- paste0("./methylation/beta_matrices_", tf)
+  dir.create(outdir, showWarnings = FALSE)
+  message("\n=== TF: ", tf, " (", length(probes_keep), " probes) ===")
+
+  for (cx in sort(unique(meta$cancer))) {
+    outfile <- file.path(outdir, paste0(cx, "_", tf, "_beta_matrix.tsv.gz"))
+    message("Processing: ", cx)
+    idx <- which(meta$cancer == cx)
+
+    dt <- rbindlist(lapply(idx, function(i) {
+      d <- fread(cmd = paste("zcat", shQuote(meta$file[i])),
+                 select = c(4, 5), col.names = c("probe", "beta"), header = FALSE)
+      d[, beta := as.numeric(beta)]
+      d <- d[!is.na(beta) & probe %in% probes_keep]
+      if (nrow(d) == 0) return(NULL)
+      d <- d[, .(beta = mean(beta)), by = probe]
+      d[, sample := paste0(meta$patient[i], "_", meta$type[i])]
+      d
+    }))
+
+    if (nrow(dt) == 0) {
+      message("  Skipping ", cx, " — no data"); next
+    }
+    mat <- dcast(dt, probe ~ sample, value.var = "beta", fun.aggregate = mean)
+    vals <- unlist(mat[, -1])
+    vals <- vals[!is.na(vals)]
+    message("  Saved: ", nrow(mat), " probes x ", ncol(mat)-1, " samples",
+            " | beta range: ", round(min(vals), 2), " – ", round(max(vals), 2),
+            " | median: ", round(median(vals), 2))
+    fwrite(mat, outfile, sep = "\t", na = "NA")
+    rm(dt, mat); gc()
+  }
+}
+message("All done.")
+'
+
+####################################
+# Do a differential methylation analysis using limma
+####################################
+mkdir -p ./results/methylation/limma
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(limma)
+  library(ggplot2)
+  library(ggrepel)
+})
+
+out_dir <- "./results/methylation/limma"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+probe_gene <- fread("./methylation/probe_gene_pairs_in_motifs.tsv")
+setnames(probe_gene, tolower(colnames(probe_gene)))
+probe_gene <- unique(probe_gene[, .(tf, probe, gene)])
+
+tfs <- c("BANP", "NRF1")
+
+run_limma <- function(mat, probes, tumor_cols, healthy_cols) {
+  beta_mat <- as.matrix(mat[, c(tumor_cols, healthy_cols), with = FALSE])
+  rownames(beta_mat) <- probes
+  beta_clipped <- beta_mat
+  beta_clipped[!is.na(beta_clipped) & beta_clipped < 1]  <- 1
+  beta_clipped[!is.na(beta_clipped) & beta_clipped > 99] <- 99
+  M_mat  <- log2(beta_clipped / (100 - beta_clipped))
+  group  <- factor(c(rep("tumor", length(tumor_cols)), rep("healthy", length(healthy_cols))))
+  design <- model.matrix(~0 + group)
+  colnames(design) <- c("healthy", "tumor")
+  fit  <- lmFit(M_mat, design)
+  cont <- makeContrasts(tumor - healthy, levels = design)
+  fit2 <- eBayes(contrasts.fit(fit, cont))
+  res  <- as.data.table(topTable(fit2, number = Inf, sort.by = "none"))
+  res[, probe := probes]
+  res[, mean_delta_beta := rowMeans(beta_mat[, tumor_cols, drop = FALSE], na.rm = TRUE) -
+                           rowMeans(beta_mat[, healthy_cols, drop = FALSE], na.rm = TRUE)]
+  res
+}
+
+for (tf in tfs) {
+  mat_dir   <- paste0("./methylation/beta_matrices_", tf)
+  mat_files <- list.files(mat_dir, pattern = "\\.tsv\\.gz$", full.names = TRUE)
+  cancers   <- sub(paste0("_", tf, "_beta_matrix\\.tsv\\.gz$"), "", basename(mat_files))
+
+  all_res <- list()
+
+  for (cancer in cancers) {
+    mat_file <- file.path(mat_dir, paste0(cancer, "_", tf, "_beta_matrix.tsv.gz"))
+    if (!file.exists(mat_file)) next
+
+    cat("Processing:", tf, cancer, "\n")
+    mat <- fread(mat_file)
+    probes <- mat$probe
+    mat[, probe := NULL]
+
+    all_cols     <- colnames(mat)
+    tumor_cols   <- grep("_tumor$",   all_cols, value = TRUE)
+    healthy_cols <- grep("_healthy$", all_cols, value = TRUE)
+
+    if (length(tumor_cols) == 0 || length(healthy_cols) == 0) {
+      cat("  Skipping", cancer, "— missing tumor or healthy samples\n")
+      next
+    }
+
+    res <- tryCatch(
+      run_limma(mat, probes, tumor_cols, healthy_cols),
+      error = function(e) { cat("  ERROR:", conditionMessage(e), "\n"); NULL }
+    )
+    if (is.null(res)) next
+
+    res[, cancer := cancer]
+    res[, TF     := tf]
+
+    tsv_out <- file.path(out_dir, paste0(tf, "_", cancer, "_limma_results.tsv"))
+    fwrite(res, tsv_out, sep = "\t")
+    cat("  Saved:", tsv_out, "\n")
+
+    all_res[[cancer]] <- res
+  }
+
+  if (length(all_res) == 0) next
+
+  # ── per-cancer PDF (one page each) ────────────────────────────────────────
+  pdf_out <- file.path(out_dir, paste0(tf, "_limma_volcanos.pdf"))
+  pdf(pdf_out, width = 8, height = 6)
+
+  for (cancer in names(all_res)) {
+    res <- all_res[[cancer]]
+    res[, sig := "NS"]
+    res[adj.P.Val < 0.05 & mean_delta_beta >  10, sig := "Hyper"]
+    res[adj.P.Val < 0.05 & mean_delta_beta < -10, sig := "Hypo"]
+
+    top_label <- res[sig != "NS"][order(adj.P.Val)][seq_len(min(15, .N))]
+
+    p <- ggplot(res, aes(mean_delta_beta, -log10(adj.P.Val), colour = sig)) +
+      geom_point(size = 0.8, alpha = 0.6) +
+      scale_colour_manual(values = c(NS = "grey70", Hyper = "#d73027", Hypo = "#4575b4")) +
+      geom_text_repel(data = top_label, aes(label = probe), size = 2.5,
+                      max.overlaps = 20, show.legend = FALSE) +
+      geom_vline(xintercept = c(-10, 10), linetype = "dashed", colour = "grey40") +
+      geom_hline(yintercept = -log10(0.05),  linetype = "dashed", colour = "grey40") +
+      labs(title = paste(tf, cancer),
+           x = "Mean delta-beta (tumor - healthy)",
+           y = "-log10(adj. p-value)",
+           colour = NULL) +
+      theme_bw(base_size = 11)
+
+    print(p)
+    cat("  Plotted", cancer, "| Hyper:", sum(res$sig == "Hyper"),
+        "| Hypo:", sum(res$sig == "Hypo"), "\n")
+  }
+
+  dev.off()
+  cat("PDF saved:", pdf_out, "\n")
+
+  # ── combined PDF: all cancers on one page ──────────────────────────────────
+  combined <- rbindlist(all_res)
+  combined[, sig := "NS"]
+  combined[adj.P.Val < 0.05 & mean_delta_beta >  10, sig := "Hyper"]
+  combined[adj.P.Val < 0.05 & mean_delta_beta < -10, sig := "Hypo"]
+
+  top_combined <- combined[sig != "NS"][order(adj.P.Val)][
+    , .SD[seq_len(min(3, .N))], by = cancer]
+
+  counts <- combined[, .(
+    Hyper = sum(sig == "Hyper"),
+    Hypo  = sum(sig == "Hypo")
+  ), by = cancer]
+  counts[, label := paste0("Hyper: ", Hyper, "\nHypo: ", Hypo)]
+
+  x_pos <- combined[, min(mean_delta_beta, na.rm = TRUE)]
+  y_pos <- combined[, max(-log10(adj.P.Val), na.rm = TRUE)]
+  counts[, x := x_pos]
+  counts[, y := y_pos]
+
+  n_cancers <- length(all_res)
+  nc <- ceiling(sqrt(n_cancers))
+  nr <- ceiling(n_cancers / nc)
+
+  p_all <- ggplot(combined, aes(mean_delta_beta, -log10(adj.P.Val), colour = sig)) +
+    geom_point(size = 0.5, alpha = 0.5) +
+    scale_colour_manual(values = c(NS = "grey70", Hyper = "#d73027", Hypo = "#4575b4")) +
+    geom_text_repel(data = top_combined, aes(label = probe), size = 2,
+                    max.overlaps = 10, show.legend = FALSE) +
+    geom_text(data = counts, aes(x = x, y = y, label = label),
+              colour = "black", size = 2.2, hjust = 0, vjust = 1, inherit.aes = FALSE) +
+    geom_vline(xintercept = c(-10, 10), linetype = "dashed", colour = "grey40", linewidth = 0.3) +
+    geom_hline(yintercept = -log10(0.05),  linetype = "dashed", colour = "grey40", linewidth = 0.3) +
+    facet_wrap(~cancer, ncol = nc) +
+    labs(title = paste(tf, "— all cancers"),
+         x = "Mean delta-beta (tumor - healthy)",
+         y = "-log10(adj. p-value)",
+         colour = NULL) +
+    theme_bw(base_size = 8) +
+    theme(legend.position = "bottom")
+
+  combined_pdf <- file.path(out_dir, paste0(tf, "_limma_all_cancers.pdf"))
+  ggsave(combined_pdf, p_all, width = nc * 3.5 + 1, height = nr * 3 + 1, limitsize = FALSE)
+  cat("Combined PDF saved:", combined_pdf, "\n")
+}
+
+cat("\nDone.\n")
+EOF
+
+
+###########################
+# Combine the limma results with the DESeq2 results for each TF and cancer type
+###########################
+Rscript - <<'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+  library(ggrepel)
+})
+
+DELTA_BETA_THRESH <- 10
+METH_PADJ         <- 0.05
+LOG2FC_THRESH     <- 1
+EXPR_PADJ         <- 0.05
+
+limma_dir  <- "./results/methylation/limma"
+deseq_dir  <- "./results/expression/deseq2"
+pg_file    <- "./methylation/probe_gene_pairs_in_motifs.tsv"
+out_dir    <- "./results/integration"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+cat("Loading probe-gene pairs ...\n")
+probe_gene <- fread(pg_file)
+setnames(probe_gene, tolower(colnames(probe_gene)))
+probe_gene <- unique(probe_gene[, .(tf, probe, gene)])
+
+tfs <- c("BANP", "NRF1")
+
+all_integrated <- list()
+
+for (tf in tfs) {
+  cat("\n========", tf, "========\n")
+  pg_tf <- probe_gene[tf == tf]
+
+  limma_files <- list.files(limma_dir,
+                             pattern    = paste0("^", tf, "_.*_limma_results\\.tsv$"),
+                             full.names = TRUE)
+  if (length(limma_files) == 0) { cat("  No limma TSVs found for", tf, "\n"); next }
+
+  cancers <- sub(paste0("^", tf, "_"), "",
+                 sub("_limma_results\\.tsv$", "", basename(limma_files)))
+
+  for (cancer in cancers) {
+    cat(" ", cancer, "...")
+
+    lf <- file.path(limma_dir, paste0(tf, "_", cancer, "_limma_results.tsv"))
+    if (!file.exists(lf)) { cat(" no limma file\n"); next }
+    limma_res <- fread(lf)
+
+    limma_res[, meth_class := "NS"]
+    limma_res[adj.P.Val < METH_PADJ & mean_delta_beta >  DELTA_BETA_THRESH, meth_class := "Hyper"]
+    limma_res[adj.P.Val < METH_PADJ & mean_delta_beta < -DELTA_BETA_THRESH, meth_class := "Hypo"]
+
+    deseq_pattern <- paste0(cancer, "_.*_deseq2_diff_table\\.txt$")
+    deseq_files   <- list.files(file.path(deseq_dir, tf),
+                                 pattern    = deseq_pattern,
+                                 full.names = TRUE)
+    if (length(deseq_files) == 0) { cat(" no DESeq2 file\n"); next }
+    deseq_res <- fread(deseq_files[1])
+    setnames(deseq_res, tolower(colnames(deseq_res)))
+    if (!"gene" %in% colnames(deseq_res)) setnames(deseq_res, 1, "gene")
+
+    deseq_res[, expr_class := "NS"]
+    deseq_res[padj < EXPR_PADJ & log2foldchange >  LOG2FC_THRESH, expr_class := "Up"]
+    deseq_res[padj < EXPR_PADJ & log2foldchange < -LOG2FC_THRESH, expr_class := "Down"]
+
+    merged <- merge(
+      limma_res[, .(probe, adj.P.Val, mean_delta_beta, meth_class)],
+      pg_tf[, .(probe, gene)],
+      by = "probe"
+    )
+    merged <- merge(
+      merged,
+      deseq_res[, .(gene, log2foldchange, padj, expr_class)],
+      by = "gene"
+    )
+
+    if (nrow(merged) == 0) { cat(" no overlapping probe-gene pairs\n"); next }
+
+    merged[, concordance := "Other"]
+    merged[meth_class == "Hypo"  & expr_class == "Up",   concordance := "Hypo + Up"]
+    merged[meth_class == "Hyper" & expr_class == "Down", concordance := "Hyper + Down"]
+    merged[meth_class == "Hypo"  & expr_class == "Down", concordance := "Hypo + Down"]
+    merged[meth_class == "Hyper" & expr_class == "Up",   concordance := "Hyper + Up"]
+
+    merged[, cancer := cancer]
+    merged[, TF     := tf]
+
+    n_conc <- sum(merged$concordance != "Other")
+    cat(sprintf(" %d probe-gene pairs | %d concordant\n", nrow(merged), n_conc))
+
+    all_integrated[[paste(tf, cancer, sep = "_")]] <- merged
+  }
+}
+
+if (length(all_integrated) == 0) stop("No integrated results found.")
+
+full_dt <- rbindlist(all_integrated, fill = TRUE)
+fwrite(full_dt, file.path(out_dir, "all_integrated_meth_expr.tsv"), sep = "\t")
+
+conc_dt <- full_dt[concordance != "Other"]
+fwrite(conc_dt, file.path(out_dir, "concordant_meth_expr.tsv"), sep = "\t")
+
+summary_dt <- full_dt[concordance != "Other", .N, by = .(TF, cancer, concordance)]
+fwrite(summary_dt, file.path(out_dir, "concordance_summary.tsv"), sep = "\t")
+print(summary_dt[order(TF, cancer, concordance)])
+
+conc_colours <- c(
+  "Hypo + Up"    = "#4575b4",
+  "Hyper + Down" = "#d73027",
+  "Hypo + Down"  = "#74add1",
+  "Hyper + Up"   = "#e91e8c",
+  "Other"        = "grey70"
+)
+
+for (tf in tfs) {
+  sc_dt <- full_dt[TF == tf]
+  if (nrow(sc_dt) == 0) next
+
+  quad_counts <- sc_dt[concordance != "Other", .N, by = .(cancer, concordance)]
+
+  x_range <- sc_dt[, range(mean_delta_beta, na.rm = TRUE)]
+  y_range <- sc_dt[, range(log2foldchange,  na.rm = TRUE)]
+  x_pad   <- diff(x_range) * 0.03
+  y_pad   <- diff(y_range) * 0.03
+
+  quad_pos <- data.table(
+    concordance = c("Hypo + Up", "Hyper + Up", "Hypo + Down", "Hyper + Down"),
+    x           = c(x_range[1] + x_pad, x_range[2] - x_pad,
+                    x_range[1] + x_pad, x_range[2] - x_pad),
+    y           = c(y_range[2] - y_pad, y_range[2] - y_pad,
+                    y_range[1] + y_pad, y_range[1] + y_pad),
+    hjust       = c(0, 1, 0, 1),
+    vjust       = c(1, 1, 0, 0)
+  )
+
+  quad_labels <- merge(quad_counts, quad_pos, by = "concordance")
+  quad_labels[, label := paste0(concordance, ": ", N)]
+
+  # Select top genes for labeling in the scatter plot (one per cancer)
+  gene_labels <- sc_dt[concordance != "Other"][
+    order(-abs(log2foldchange)), .SD[seq_len(min(0, .N))], by = cancer]
+
+  n_cancers <- length(unique(sc_dt$cancer))
+  nc <- ceiling(sqrt(n_cancers))
+  nr <- ceiling(n_cancers / nc)
+
+  # ── all-cancers overview PDF ───────────────────────────────────────────────
+  p <- ggplot(sc_dt, aes(mean_delta_beta, log2foldchange, colour = concordance)) +
+    geom_point(alpha = 0.7, size = 1.5) +
+    geom_text_repel(data = gene_labels, aes(label = gene),
+                    size = 2.2, max.overlaps = Inf, show.legend = FALSE) +
+    geom_text(data = quad_labels,
+              aes(x = x, y = y, label = label, hjust = hjust, vjust = vjust,
+                  colour = concordance),
+              size = 2.5, fontface = "bold", inherit.aes = FALSE) +
+    scale_colour_manual(values = conc_colours) +
+    facet_wrap(~cancer, scales = "free") +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+    labs(title  = paste(tf, "— delta-beta vs log2FC"),
+         x      = "Mean delta-beta (tumor - healthy)",
+         y      = "log2 Fold Change (expression)",
+         colour = NULL) +
+    theme_bw(base_size = 9) +
+    theme(legend.position = "bottom")
+
+  ggsave(file.path(out_dir, paste0(tf, "_concordance_scatter.pdf")),
+         p, width = nc * 4 + 1, height = nr * 3.5 + 1, limitsize = FALSE)
+  cat("Overview scatter saved for", tf, "\n")
+
+  # ── per-cancer PDF (one page per cancer) ──────────────────────────────────
+  per_cancer_pdf <- file.path(out_dir, paste0(tf, "_concordance_per_cancer.pdf"))
+  pdf(per_cancer_pdf, width = 8, height = 7)
+
+  for (cn in unique(sc_dt$cancer)) {
+    ct <- sc_dt[cancer == cn]
+    if (nrow(ct) == 0) next
+
+    qc <- quad_counts[cancer == cn]
+    if (nrow(qc) == 0) {
+      ql <- data.table()
+    } else {
+      ql <- merge(qc, quad_pos, by = "concordance")
+      ql[, label := paste0(concordance, ": ", N)]
+      x_range_c <- ct[, range(mean_delta_beta, na.rm = TRUE)]
+      y_range_c <- ct[, range(log2foldchange,  na.rm = TRUE)]
+      x_pad_c   <- diff(x_range_c) * 0.03
+      y_pad_c   <- diff(y_range_c) * 0.03
+      ql[concordance %in% c("Hypo + Up",   "Hypo + Down"),  x := x_range_c[1] + x_pad_c]
+      ql[concordance %in% c("Hyper + Up",  "Hyper + Down"), x := x_range_c[2] - x_pad_c]
+      ql[concordance %in% c("Hypo + Up",   "Hyper + Up"),   y := y_range_c[2] - y_pad_c]
+      ql[concordance %in% c("Hypo + Down", "Hyper + Down"), y := y_range_c[1] + y_pad_c]
+    }
+
+    gl <- ct[concordance != "Other"][order(-abs(log2foldchange))][seq_len(min(0, .N))]
+
+    p_c <- ggplot(ct, aes(mean_delta_beta, log2foldchange, colour = concordance)) +
+      geom_point(alpha = 0.7, size = 2) +
+      geom_text_repel(data = gl, aes(label = gene),
+                      size = 3, max.overlaps = Inf, show.legend = FALSE) +
+      scale_colour_manual(values = conc_colours) +
+      geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+      geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+      labs(title  = paste(tf, "—", cn),
+           x      = "Mean delta-beta (tumor - healthy)",
+           y      = "log2 Fold Change (expression)",
+           colour = NULL) +
+      theme_bw(base_size = 12) +
+      theme(legend.position = "bottom")
+
+    if (nrow(ql) > 0) {
+      p_c <- p_c + geom_text(data = ql,
+                aes(x = x, y = y, label = label, hjust = hjust, vjust = vjust,
+                    colour = concordance),
+                size = 3, fontface = "bold", inherit.aes = FALSE)
+    }
+
+    print(p_c)
+  }
+
+  dev.off()
+  cat("Per-cancer PDF saved:", per_cancer_pdf, "\n")
+}
+
+cat("\nAll done.\n")
+EOF

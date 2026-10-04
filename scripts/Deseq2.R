@@ -1,6 +1,4 @@
 #!/usr/bin/Rscript --vanilla
-outdir <- "./results/expression/deseq2"
-dir.create(outdir, recursive=TRUE, showWarnings=FALSE)
 ######
 # Code written by Anais Bardet (2023)
 ######
@@ -11,9 +9,11 @@ args=commandArgs(TRUE)
 ## Help
 help <- function(){
     cat("\nDESeq2 pipeline \n")
-    cat("Usage: DESeq2_pipeline.R -n STUDY_DESIGN_NAME -d STUDY_DESIGN_FILE\n")
-    cat("-n : Study design name used in ouput files\n")
+    cat("Usage: DESeq2_pipeline.R -n STUDY_DESIGN_NAME -d STUDY_DESIGN_FILE [-c COUNTS_DIR] [-o OUTPUT_DIR]\n")
+    cat("-n : Study design name used in output files\n")
     cat("-d : Study design file: sample / condition / replicate (column after sample is used for design) (at least 3 columns required)\n")
+    cat("-c : Directory containing count files (default: ./expression/deseq2/counts)\n")
+    cat("-o : Output directory (default: ./results/expression/deseq2)\n")
     cat("\n")
     q()
 }
@@ -29,6 +29,12 @@ if(length(args)==0 || !is.na(charmatch("-help",args))){
 	    } else { assign(gsub("-","",args[ii]),1) }
 	}
 }}
+
+## Set defaults for optional arguments
+if(exists("c")) { countsdir <- c; rm("c") } else countsdir <- "./expression/deseq2/counts"
+if(!exists("o")) o <- "./results/expression/deseq2"
+outdir <- o
+dir.create(outdir, recursive=TRUE, showWarnings=FALSE)
 
 ## Load data from input into a table
 if(exists("d")){
@@ -48,7 +54,7 @@ suppressMessages(library(ggrepel))
 # CountData
 d=vector()
 for(sample in samples){
-    x=read.table(paste("expression/deseq2/counts/",sample,"_genes_count.txt",sep=""))
+    x=read.table(paste0(countsdir,"/",sample,"_genes_count.txt"))
     d=cbind(d,x[,3])
     colnames(d)[ncol(d)]=sample
     rownames(d)=x[,1]
@@ -57,8 +63,6 @@ for(sample in samples){
 }
 
 ## DESeq matrix
-# The design formula is used to estimate the dispersions and to estimate the log2 fold changes of the model
-#dds=DESeqDataSetFromMatrix(countData=d,colData=colData,design=~condition+cell)
 dds=suppressMessages(DESeqDataSetFromMatrix(countData=d,colData=colData,design=as.formula(paste0("~",colnames(colData)[[1]]))))
 # Filter out genes with no counts
 dds=dds[rowSums(counts(dds))>1,]
@@ -66,17 +70,13 @@ dds=dds[rowSums(counts(dds))>1,]
 cat("Data loaded\n")
 
 ## Transform data for variance analysis
-# blind = FALSE, which means that differences between cell lines and treatment will not contribute to the expected variance-mean trend
-# 1. regularized-logarithm transformation (rlog) - takes a while - works well for n<30
-rld=suppressMessages(rlog(dds,blind=F))
-# 2. variance stabilizing transformation (VST) for negative binomial data with a dispersion-mean trend
-#vsd=vst(dds,blind=F)
+# changed to use varianceStabilizingTransformation for small datasets (less than 1000 genes) to avoid errors
+rld=suppressMessages(
+  if(nrow(dds) >= 1000) vst(dds, blind=FALSE)
+  else varianceStabilizingTransformation(dds, blind=FALSE)
+)
 
 ## Principal components analysis (PCA)
-
-# One condition
-# plotPCA(rld,intgroup=c("condition","cell"))
-# Several conditions
 pcaData=plotPCA(rld,intgroup=colnames(colData),returnData=T)
 percentVar=round(100*attr(pcaData,"percentVar"))
 pdf(paste0(outdir,"/",design,"_deseq2_pca.pdf"))
@@ -94,17 +94,6 @@ null=dev.off()
 
 cat("PCA plot generated\n")
 cat(paste0("=> ",outdir,"/",design,"_deseq2_pca.pdf\n"))
-
-## Sample distances (euclidean distance)
-sampleDists=dist(t(assay(rld)))
-pdf(paste0(outdir,"/",design,"_deseq2_dist_heatmap.pdf"),onefile=FALSE)
-par(bg="white")
-#aheatmap(as.matrix(sampleDists))
-aheatmap(as.matrix(sampleDists),annRow=colData)
-null=dev.off()
-
-cat("Heatmap plot generated\n")
-cat(paste0("=> ",outdir,"/",design,"_deseq2_dist_heatmap.pdf\n"))
 
 ## Differential expression (on non transformed data)
 
@@ -157,11 +146,20 @@ p=ggplot(as.data.frame(res[[contrast]]),aes(x=log2FoldChange,y=-log10(padj),labe
     geom_point(size=1) +
     xlab("Fold Change (log2)") +
     ylab("P-value (-log10)") +
-    geom_hline(yintercept=-log10(0.001), linetype="dashed") +
+    geom_hline(yintercept=-log10(0.05), linetype="dashed") +
     geom_vline(xintercept=c(-1, 1), color="red", linetype="dashed") +
     geom_text_repel(size=3)
+    n_up   <- sum(res[[contrast]]$log2FoldChange >  1 & res[[contrast]]$padj < 0.05, na.rm=T)
+    n_down <- sum(res[[contrast]]$log2FoldChange < -1 & res[[contrast]]$padj < 0.05, na.rm=T)
+
+    p = p + annotate("text", x =  max_fc * 0.8, y = max_pval * 0.95, 
+                    label = paste0("Up: ", n_up), color = "red", size = 4, hjust = 1) +
+            annotate("text", x = -max_fc * 0.8, y = max_pval * 0.95, 
+                    label = paste0("Down: ", n_down), color = "blue", size = 4, hjust = 0)
     suppressWarnings(print(p))
     null=dev.off()
     cat("Volcano plot generated\n")
     cat(paste0("=> ",outdir,"/",design,"_",contrast,"_deseq2_diff_volcano.pdf\n"))
    }
+
+
