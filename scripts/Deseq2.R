@@ -12,7 +12,6 @@ help <- function(){
     cat("Usage: DESeq2_pipeline.R -n STUDY_DESIGN_NAME -d STUDY_DESIGN_FILE [-c COUNTS_DIR] [-o OUTPUT_DIR]\n")
     cat("-n : Study design name used in output files\n")
     cat("-d : Study design file: sample / condition / replicate (column after sample is used for design) (at least 3 columns required)\n")
-    cat("-c : Directory containing count files (default: ./expression/deseq2/counts)\n")
     cat("-o : Output directory (default: ./results/expression/deseq2)\n")
     cat("\n")
     q()
@@ -31,7 +30,6 @@ if(length(args)==0 || !is.na(charmatch("-help",args))){
 }}
 
 ## Set defaults for optional arguments
-if(exists("c")) { countsdir <- c; rm("c") } else countsdir <- "./expression/deseq2/counts"
 if(!exists("o")) o <- "./results/expression/deseq2"
 outdir <- o
 dir.create(outdir, recursive=TRUE, showWarnings=FALSE)
