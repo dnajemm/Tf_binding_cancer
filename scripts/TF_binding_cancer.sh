@@ -13042,7 +13042,7 @@ cat("All done.\n")
 EOF
 
 ####################################
-# Deseq2 analysis for all genes (not just NRF1 or BANP) for each cancer type
+# Deseq2 analysis for all genes (not just NRF1 or BANP) for each cancer type USED A PVALUE OF 1e-10
 ####################################
 mkdir -p ./expression/deseq2/counts_all
 
@@ -13310,7 +13310,7 @@ for (tf in tfs) {
 cat("\nDone.\n")
 EOF
 
-
+#!! REDO THIS 
 ###########################
 # Combine the limma results with the DESeq2 results for each TF and cancer type and plot the correlation between delta-beta and log2FC 
 ###########################
@@ -13325,7 +13325,7 @@ suppressPackageStartupMessages({
 DELTA_BETA_THRESH <- 10
 METH_PADJ         <- 0.05
 LOG2FC_THRESH     <- 1
-EXPR_PADJ         <- 0.05
+EXPR_PADJ         <- 1e-10
 PROX_THRESH       <- 2000
 MIN_SAMPLES       <- 10
 
@@ -13591,12 +13591,12 @@ suppressPackageStartupMessages({
 
 # ── Config ────────────────────────────────────────────────────────────────────
 N_CORES    <- max(1L, detectCores() - 2L)   # or set e.g. 6L
-tf_name    <- "BANP"
+tf_name    <- "NRF1"
 pairs_tsv  <- "./results/integration/meth_expr_filtered_pairs.tsv"
 beta_dir   <- paste0("./methylation/beta_matrices_", tf_name)
-counts_dir <- "./expression/deseq2/counts_all"
+tpm_file <- "./expression/gene_expression_matrix_protein_coding.tsv"
 out_dir    <- file.path("./results/integration/gene_cancer_plots", tf_name)
-stats_out  <- "./results/integration/meth_expr_wilcoxon_BANP_stats.tsv"
+stats_out  <- "./results/integration/meth_expr_wilcoxon_NRF1_stats.tsv"
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -13656,6 +13656,19 @@ pairs <- pairs[TF == tf_name]
 todo <- pairs[!is.na(pearson_r)][order(-abs(pearson_r))][, .SD[1], by = .(TF, gene, cancer)]
 cat(sprintf("Processing %d gene-cancer pairs\n", nrow(todo)))
 
+# ── Load TPM matrix once (shared across all workers via fork) ─────────────────
+cat("Loading TPM matrix...\n")
+tpm_mat <- fread(tpm_file, header = TRUE, check.names = FALSE)
+setnames(tpm_mat, 1L, "tpm_sample_id")
+tpm_mat[, patient    := sub("^TCGA-[A-Z]+-TCGA-([A-Z0-9]+-[A-Z0-9]+)-[0-9]+[A-Z]_.*", "\\1", tpm_sample_id)]
+tpm_mat[, cancer_col := sub("^TCGA-([A-Z]+)-.*", "\\1", tpm_sample_id)]
+tpm_mat[, st         := fifelse(grepl("-01[A-Z]_", tpm_sample_id), "Tumor",
+                        fifelse(grepl("-11[A-Z]_", tpm_sample_id), "Healthy", "other"))]
+tpm_mat[, sample_key := paste(patient, st, sep = "_")]
+tpm_mat <- tpm_mat[st != "other"]
+cat(sprintf("TPM matrix loaded: %d samples, %d genes\n",
+            nrow(tpm_mat), ncol(tpm_mat) - 5L))
+
 # ── Worker: one pair → stats data.table (or NULL) ────────────────────────────
 process_pair <- function(i) {
   row           <- todo[i]
@@ -13687,33 +13700,12 @@ process_pair <- function(i) {
     beta_long[, meth_percent := meth_beta * 100] else
     beta_long[, meth_percent := meth_beta]
 
-  # Load expression
-  cnt_files <- list.files(counts_dir,
-    pattern    = paste0("^RNA_TCGA-", target_cancer, "-.*_genes_count\\.txt$"),
-    full.names = TRUE)
-  if (length(cnt_files) == 0) { cat(tag, "– no count files\n"); return(NULL) }
-
-  bn   <- basename(cnt_files)
-  pt   <- sub("^RNA_TCGA-[A-Z]+-TCGA-([A-Z0-9]+-[A-Z0-9]+)-[0-9]+[A-Z]_.*", "\\1", bn)
-  st   <- fifelse(grepl("-01[A-Z]_", bn), "Tumor",
-          fifelse(grepl("-11[A-Z]_", bn), "Healthy", "other"))
-  fkey <- paste(pt, st, sep = "_")
-
+  # Load expression from TPM matrix
   .gene <- target_gene
-  expr_list <- lapply(seq_along(cnt_files), function(k) {
-    if (st[k] == "other") return(NULL)
-    dt <- tryCatch(
-      fread(cnt_files[k], header = FALSE, select = c(2L, 3L),
-            col.names = c("gene", "count"), showProgress = FALSE),
-      error = function(e) NULL)
-    if (is.null(dt)) return(NULL)
-    dt <- dt[gene == .gene]
-    if (nrow(dt) == 0) return(NULL)
-    dt[, sample_key := fkey[k]]
-    dt
-  })
-  expr_dt <- rbindlist(Filter(Negate(is.null), expr_list))
-  if (nrow(expr_dt) == 0) { cat(tag, "– gene not in counts\n"); return(NULL) }
+  if (!(.gene %in% names(tpm_mat))) { cat(tag, "– gene not in TPM matrix\n"); return(NULL) }
+
+  expr_dt <- tpm_mat[cancer_col == target_cancer, .(sample_key, count = get(.gene))]
+  if (nrow(expr_dt) == 0) { cat(tag, "– no TPM samples for this cancer\n"); return(NULL) }
 
   # Merge
   d <- merge(
@@ -13845,7 +13837,7 @@ process_pair <- function(i) {
     grid.text(main_subtitle, x = 0.5, y = 0.5, just = "center",
               gp = gpar(fontsize = 14),
               vp = viewport(layout.pos.row = 3, layout.pos.col = 1:3))
-    grid.text("Gene expression (log2(count + 1))", x = 0.5, y = 0.5, rot = 90, just = "center",
+    grid.text("Gene expression (log2(TPM + 1))", x = 0.5, y = 0.5, rot = 90, just = "center",
               gp = gpar(fontsize = 15),
               vp = viewport(layout.pos.row = 4, layout.pos.col = 1))
     grid.draw(editGrob(expr_grob,
@@ -13914,7 +13906,7 @@ Rscript - << 'EOF'
 suppressPackageStartupMessages(library(data.table))
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-tf_name    <- "NRF1"   # change to NRF1 or loop
+tf_name    <- "BANP"   # change to NRF1 or loop
 pairs_tsv  <- "./results/integration/meth_expr_filtered_pairs.tsv"
 wilcox_tsv <- paste0("./results/integration/meth_expr_wilcoxon_", tf_name, "_stats.tsv")
 out_tsv    <- paste0("./results/integration/gene_ranking_", tf_name, ".tsv")
@@ -14144,5 +14136,4 @@ echo $(date)": gene_enrichment processed "$file" successfully"
 ########################################
 # download it from this https://gdc.cancer.gov/about-data/publications/brca_2012 and fixed the format 
 tr '\r' '\n' < BRCA_subtypes.txt > BRCA_subtypes_fixed.txt
-
 

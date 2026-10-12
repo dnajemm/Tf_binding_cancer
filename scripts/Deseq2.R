@@ -31,7 +31,10 @@ if(length(args)==0 || !is.na(charmatch("-help",args))){
 
 ## Set defaults for optional arguments
 if(!exists("o")) o <- "./results/expression/deseq2"
-outdir <- o
+outdir    <- o
+if(!exists("c")) c <- "./expression/deseq2/counts_all"
+countsdir <- c
+rm(list = "c")   # <-- restore R's built-in c() function                               
 dir.create(outdir, recursive=TRUE, showWarnings=FALSE)
 
 ## Load data from input into a table
@@ -144,11 +147,12 @@ p=ggplot(as.data.frame(res[[contrast]]),aes(x=log2FoldChange,y=-log10(padj),labe
     geom_point(size=1) +
     xlab("Fold Change (log2)") +
     ylab("P-value (-log10)") +
-    geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+    geom_hline(yintercept=-log10(1e-10), linetype="dashed") +
     geom_vline(xintercept=c(-1, 1), color="red", linetype="dashed") +
-    geom_text_repel(size=3)
-    n_up   <- sum(res[[contrast]]$log2FoldChange >  1 & res[[contrast]]$padj < 0.05, na.rm=T)
-    n_down <- sum(res[[contrast]]$log2FoldChange < -1 & res[[contrast]]$padj < 0.05, na.rm=T)
+    geom_text_repel(size=3)+
+    theme_bw()
+    n_up   <- sum(res[[contrast]]$log2FoldChange >  1 & res[[contrast]]$padj < 1e-10, na.rm=T)
+    n_down <- sum(res[[contrast]]$log2FoldChange < -1 & res[[contrast]]$padj < 1e-10, na.rm=T)
 
     p = p + annotate("text", x =  max_fc * 0.8, y = max_pval * 0.95, 
                     label = paste0("Up: ", n_up), color = "red", size = 4, hjust = 1) +
