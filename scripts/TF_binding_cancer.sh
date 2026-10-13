@@ -595,7 +595,7 @@ cat("[DONE] Wrote:", out_pdf, "\n")
 ###############################################################################
 # ONE BARPLOT WITH BROKEN Y-AXIS
 ###############################################################################
-# IM HERE 
+
 Rscript -e '
 suppressPackageStartupMessages({
   library(ggplot2)
@@ -1501,7 +1501,7 @@ for(motif in motifs){
   cat("  motifs not overlapping HM450:", n_no_hm450, "\n\n")
 }
 '
-# IM HERE NOT CORRECT YET 
+
 
 
 
@@ -13044,21 +13044,39 @@ EOF
 ####################################
 # Deseq2 analysis for all genes (not just NRF1 or BANP) for each cancer type USED A PVALUE OF 1e-10
 ####################################
+
+# build set of valid patient IDs from column 1 only for samples that have methylation expression and mutation data (3d+4d cohort)
 mkdir -p ./expression/deseq2/counts_all
 
+declare -A valid_patients
+while IFS=$'\t' read -r patient rest; do
+    valid_patients["$patient"]=1
+done < results/multi_omics/samples_3d+4d.tsv
+
 for f in ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv; do
-    sample=$(basename $f | cut -d'.' -f1)
-    
-    if grep -q "^$sample" ./expression/deseq2/design_file_annotated.txt; then
+    sample=$(basename "$f" | cut -d'.' -f1)
+    patient=$(basename "$f" | sed 's/.*TCGA-[A-Z]*-\(TCGA-[A-Z0-9]*-[A-Z0-9]*\)-.*/\1/')
+
+    if [[ -n "${valid_patients[$patient]}" ]] && \
+       grep -q "^$sample" ./expression/deseq2/design_file_annotated.txt; then
         awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,$4,1000}' "$f" \
             > ./expression/deseq2/counts_all/${sample}_genes_count.txt
-        echo "Processed: $sample"
+        echo "Processed: $sample (patient: $patient)"
     fi
 done
 
+echo "Done. $(ls ./expression/deseq2/counts_all | wc -l) files created."
+#!IM HERE!
 # Run the Deseq2 pipeline for each cancer type that has at least one tumor and one healthy sample (01A and 11A)
 mkdir -p ./results/expression/deseq2/all_genes
 
+# load valid patients once
+declare -A valid_patients
+while IFS=$'\t' read -r patient rest; do
+    valid_patients["$patient"]=1
+done < results/multi_omics/samples_3d+4d.tsv
+
+batch=0
 for cancer in BLCA BRCA CESC CHOL COAD ESCA GBM HNSC KICH KIRC KIRP LIHC LUAD LUSC PAAD PCPG PRAD READ SARC SKCM STAD THCA THYM UCEC; do
     Rscript --vanilla ./scripts/Deseq2.R \
         -n ${cancer} \
@@ -13066,7 +13084,7 @@ for cancer in BLCA BRCA CESC CHOL COAD ESCA GBM HNSC KICH KIRC KIRP LIHC LUAD LU
         -c ./expression/deseq2/counts_all \
         -o ./results/expression/deseq2/all_genes \
         > ./results/expression/deseq2/all_genes/${cancer}.log 2>&1 &
-    
+
     batch=$((batch+1))
     if [ $batch -eq 2 ]; then
         wait
@@ -13310,7 +13328,7 @@ for (tf in tfs) {
 cat("\nDone.\n")
 EOF
 
-#!! REDO THIS 
+#IM HERE NOT LAUNCHED YET WAITING FOR THE DESEQ2 TO FINISH
 ###########################
 # Combine the limma results with the DESeq2 results for each TF and cancer type and plot the correlation between delta-beta and log2FC 
 ###########################
@@ -13983,6 +14001,357 @@ fwrite(gene_scores, out_tsv, sep = "\t")
 cat(sprintf("\nFull ranking written to: %s\n", out_tsv))
 EOF
 
+
+##################################################################################################################################################################################################################
+# Same integration methylation_expression pipeline as before just here this is to get one pdf page per gene-cancer pair with the scatter plot and the boxplots for methylation and expression
+# to have the gene with multiple cancer type detected in the same page in the same pdf for the report file
+##################################################################################################################################################################################################################
+Rscript - << 'EOF'
+suppressPackageStartupMessages({
+  library(data.table)
+  library(ggplot2)
+  library(grid)
+  library(gtable)
+  library(parallel)
+})
+
+# ── USER CONFIG ───────────────────────────────────────────────────────────────
+target_gene    <- "SLITRK3"      # gene you want to plot
+target_probe   <- NULL        # NULL = auto-pick best from pairs_tsv, or "cg12345678"
+target_cancers <- c("COAD", "KIRC", "KIRP", "PRAD", "UCEC")        # NULL = all cancers with a beta matrix, or c("ACC","BRCA")
+
+tf_name  <- "BANP"
+N_COL    <- 3L
+PDF_W    <- 80
+PDF_H    <- 80
+N_CORES  <- max(1L, detectCores() - 2L)
+
+pairs_tsv <- "./results/integration/meth_expr_filtered_pairs.tsv"
+beta_dir  <- paste0("./methylation/beta_matrices_", tf_name)
+tpm_file  <- "./expression/gene_expression_matrix_protein_coding.tsv"
+out_dir   <- file.path("./results/integration/gene_cancer_plots_BANP/")
+stats_out <- paste0("./results/integration//gene_cancer_plots_BANP/meth_expr_wilcoxon_", tf_name,
+                    "_", target_gene, "_grid_stats.tsv")
+
+min_n_cor            <- 3L
+min_n_wilcox         <- 2L
+expression_threshold <- 1
+side_box_size        <- unit(6, "cm")
+top_margin_size      <- unit(1.5, "cm")
+# ─────────────────────────────────────────────────────────────────────────────
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+fmt_p <- function(x) {
+  if (is.na(x)) return("NA")
+  if (x < 2.2e-16) return("<2.2e-16")
+  formatC(x, format = "e", digits = 2)
+}
+p_to_stars <- function(p) {
+  if (is.na(p)) return("NA")
+  if (p < 0.001) return("***")
+  if (p < 0.01)  return("**")
+  if (p < 0.05)  return("*")
+  "ns"
+}
+p_label <- function(p) paste0("p = ", fmt_p(p), "\n", p_to_stars(p))
+
+safe_pearson <- function(x, y, min_n = 3L) {
+  ok <- is.finite(x) & is.finite(y)
+  x <- x[ok]; y <- y[ok]; n <- length(x)
+  if (n < min_n || length(unique(x)) < 2 || length(unique(y)) < 2)
+    return(list(n = n, r = NA_real_, p = NA_real_))
+  ct <- tryCatch(cor.test(x, y, method = "pearson"), error = function(e) NULL)
+  if (is.null(ct)) return(list(n = n, r = NA_real_, p = NA_real_))
+  list(n = n, r = unname(ct$estimate), p = ct$p.value)
+}
+
+safe_wilcox <- function(values, groups, min_n = 2L) {
+  keep   <- is.finite(values) & groups %in% c("Healthy", "Tumor")
+  values <- values[keep]; groups <- groups[keep]
+  n_h <- sum(groups == "Healthy"); n_t <- sum(groups == "Tumor")
+  if (n_h < min_n || n_t < min_n) return(list(p = NA_real_, n_h = n_h, n_t = n_t))
+  wt <- tryCatch(suppressWarnings(wilcox.test(values ~ groups, exact = FALSE)),
+                 error = function(e) NULL)
+  list(p = if (is.null(wt)) NA_real_ else wt$p.value, n_h = n_h, n_t = n_t)
+}
+
+# ── Resolve probe ─────────────────────────────────────────────────────────────
+if (is.null(target_probe)) {
+  if (file.exists(pairs_tsv)) {
+    pairs <- fread(pairs_tsv)
+    pairs <- pairs[TF == tf_name & gene == target_gene & !is.na(pearson_r)]
+    if (nrow(pairs) > 0) {
+      target_probe <- pairs[order(-abs(pearson_r)), probe][1]
+      cat("Auto-selected probe:", target_probe, "\n")
+    } else {
+      stop("No pairs found for gene ", target_gene, " in ", pairs_tsv,
+           ". Set target_probe manually.")
+    }
+  } else {
+    stop("pairs_tsv not found and target_probe is NULL. Set target_probe manually.")
+  }
+} else {
+  cat("Using probe:", target_probe, "\n")
+}
+
+# ── Resolve cancers ───────────────────────────────────────────────────────────
+if (is.null(target_cancers)) {
+  beta_files     <- list.files(beta_dir, pattern = "\\.tsv\\.gz$")
+  target_cancers <- sort(sub(paste0("_", tf_name, "_beta_matrix\\.tsv\\.gz$"), "", beta_files))
+  target_cancers <- target_cancers[nchar(target_cancers) > 0]
+  cat("Auto-detected cancers:", paste(target_cancers, collapse = ", "), "\n")
+} else {
+  cat("Using cancers:", paste(target_cancers, collapse = ", "), "\n")
+}
+if (length(target_cancers) == 0) stop("No cancer types found.")
+
+# ── Load TPM matrix ───────────────────────────────────────────────────────────
+cat("Loading TPM matrix…\n")
+tpm_mat <- fread(tpm_file, header = TRUE, check.names = FALSE)
+setnames(tpm_mat, 1L, "tpm_sample_id")
+tpm_mat[, patient    := sub("^TCGA-[A-Z]+-TCGA-([A-Z0-9]+-[A-Z0-9]+)-[0-9]+[A-Z]_.*", "\\1", tpm_sample_id)]
+tpm_mat[, cancer_col := sub("^TCGA-([A-Z]+)-.*", "\\1", tpm_sample_id)]
+tpm_mat[, st         := fifelse(grepl("-01[A-Z]_", tpm_sample_id), "Tumor",
+                        fifelse(grepl("-11[A-Z]_", tpm_sample_id), "Healthy", "other"))]
+tpm_mat[, sample_key := paste(patient, st, sep = "_")]
+tpm_mat <- tpm_mat[st != "other"]
+cat(sprintf("TPM matrix: %d samples\n", nrow(tpm_mat)))
+if (!target_gene %in% names(tpm_mat))
+  stop("Gene '", target_gene, "' not found in TPM matrix.")
+
+# ── Load data for one cancer ──────────────────────────────────────────────────
+load_cancer <- function(cancer) {
+  tag <- sprintf("[%s | %s]", cancer, target_gene)
+  bf  <- list.files(beta_dir, pattern = paste0(cancer, ".*\\.tsv\\.gz$"), full.names = TRUE)
+  if (length(bf) == 0) { cat(tag, "– no beta matrix\n"); return(NULL) }
+  beta_mat <- tryCatch(fread(bf[1]), error = function(e) NULL)
+  if (is.null(beta_mat)) { cat(tag, "– fread failed\n"); return(NULL) }
+  if (!"probe" %in% colnames(beta_mat)) setnames(beta_mat, 1, "probe")
+  beta_mat <- beta_mat[probe == target_probe]
+  if (nrow(beta_mat) == 0) { cat(tag, "– probe not in matrix\n"); return(NULL) }
+  beta_long <- melt(beta_mat, id.vars = "probe",
+                    variable.name = "col_name", value.name = "meth_beta")
+  beta_long[, patient     := sub("^TCGA-([^_]+)_.*$", "\\1", as.character(col_name))]
+  beta_long[, sample_type := sub("^TCGA-[^_]+_(.*)$", "\\1", as.character(col_name))]
+  beta_long[, sample_type := fifelse(sample_type == "tumor",   "Tumor",
+                              fifelse(sample_type == "healthy", "Healthy", sample_type))]
+  beta_long[, sample_key  := paste(patient, sample_type, sep = "_")]
+  if (max(beta_long$meth_beta, na.rm = TRUE) <= 1.5)
+    beta_long[, meth_percent := meth_beta * 100] else
+    beta_long[, meth_percent := meth_beta]
+  expr_dt <- tpm_mat[cancer_col == cancer, .(sample_key, count = get(target_gene))]
+  if (nrow(expr_dt) == 0) { cat(tag, "– no TPM rows\n"); return(NULL) }
+  d <- merge(
+    beta_long[, .(sample_key, patient, sample_type, meth_percent)],
+    expr_dt[,   .(sample_key, count)],
+    by = "sample_key"
+  )
+  d <- d[sample_type %in% c("Tumor","Healthy") & is.finite(meth_percent) & is.finite(count)]
+  if (nrow(d) == 0) { cat(tag, "– no matched samples\n"); return(NULL) }
+  d[, log2_expr   := log2(count + 1)]
+  d[, sample_type := factor(sample_type, levels = c("Healthy","Tumor"))]
+  d[, cancer      := cancer]
+  cat(tag, sprintf("– %d rows (T=%d H=%d)\n",
+        nrow(d), sum(d$sample_type=="Tumor"), sum(d$sample_type=="Healthy")))
+  d
+}
+
+# ── draw_cell(): draws one cancer cell into the current active viewport ───────
+draw_cell <- function(d, cancer, expr_ylim, expr_breaks) {
+  x_lim    <- c(0, 100)
+  x_breaks <- c(0, 25, 50, 75, 100)
+  n_tumor   <- sum(d$sample_type == "Tumor")
+  n_healthy <- sum(d$sample_type == "Healthy")
+  cor_res     <- safe_pearson(d$meth_percent, d$log2_expr, min_n_cor)
+  expr_wilcox <- safe_wilcox(d$log2_expr,    as.character(d$sample_type), min_n_wilcox)
+  meth_wilcox <- safe_wilcox(d$meth_percent, as.character(d$sample_type), min_n_wilcox)
+  stat_label    <- paste0("n = ", cor_res$n,
+                           "\nr = ", ifelse(is.na(cor_res$r), "NA", sprintf("%.2f", cor_res$r)),
+                           "\np = ", fmt_p(cor_res$p))
+  main_title    <- paste0(cancer, " | ", target_gene, " | ", target_probe)
+  main_subtitle <- paste0("Tumor n = ", n_tumor, " ; Healthy n = ", n_healthy)
+
+  scatter_plot <- ggplot() +
+    geom_point(data = d[sample_type == "Tumor"],
+               aes(x = meth_percent, y = log2_expr),
+               color = "red", shape = 16, size = 2.2, alpha = 0.65) +
+    geom_point(data = d[sample_type == "Healthy"],
+               aes(x = meth_percent, y = log2_expr),
+               color = "black", fill = "white", shape = 24, size = 3.4, stroke = 1.1, alpha = 1) +
+    geom_hline(yintercept = expression_threshold, color = "red",
+               linewidth = 0.7, linetype = "dashed") +
+    annotate("text", x = 98, y = expression_threshold,
+             label = paste0("expression = ", expression_threshold),
+             color = "red", hjust = 1, vjust = -0.5, size = 14) +
+    annotate("text", x = Inf, y = Inf, label = stat_label,
+             hjust = 1.05, vjust = 1.1, size = 14) +
+    scale_x_continuous(limits = x_lim, breaks = x_breaks, expand = c(0.01, 0.01)) +
+    scale_y_continuous(limits = expr_ylim, breaks = expr_breaks, expand = c(0.01, 0.01)) +
+    labs(x = NULL, y = NULL) +
+    theme_bw(base_size = 40) +
+    theme(legend.position = "none", plot.margin = margin(0, 10, 0, 0))
+
+  expr_boxplot <- ggplot() +
+    geom_boxplot(data = d, aes(x = sample_type, y = log2_expr),
+                 width = 0.55, outlier.shape = NA, color = "#0b3c5d", fill = NA) +
+    geom_jitter(data = d[sample_type == "Tumor"],
+                aes(x = sample_type, y = log2_expr),
+                color = "red", width = 0.12, height = 0, size = 1.8, alpha = 0.65) +
+    geom_jitter(data = d[sample_type == "Healthy"],
+                aes(x = sample_type, y = log2_expr),
+                color = "black", fill = "white", shape = 24,
+                width = 0.12, height = 0, size = 2.8, stroke = 1.0, alpha = 1) +
+    annotate("segment", x = 1, xend = 2,
+             y = expr_ylim[2] - 0.045 * diff(expr_ylim),
+             yend = expr_ylim[2] - 0.045 * diff(expr_ylim), linewidth = 0.6) +
+    annotate("text", x = 1.5, y = expr_ylim[2] - 0.005 * diff(expr_ylim),
+             label = p_label(expr_wilcox$p), size = 7, lineheight = 0.9) +
+    scale_x_discrete(labels = c("Healthy" = "H", "Tumor" = "T")) +
+    scale_y_continuous(limits = expr_ylim, breaks = expr_breaks, expand = c(0.01, 0.01)) +
+    labs(x = NULL, y = NULL) +
+    theme_bw(base_size = 35) +
+    theme(legend.position = "none", plot.margin = margin(0, 5, 0, 0))
+
+  meth_boxplot <- ggplot() +
+    geom_boxplot(data = d, aes(x = meth_percent, y = sample_type),
+                 width = 0.55, outlier.shape = NA, color = "#0b3c5d", fill = NA) +
+    geom_jitter(data = d[sample_type == "Tumor"],
+                aes(x = meth_percent, y = sample_type),
+                color = "red", width = 0, height = 0.12, size = 1.8, alpha = 0.65) +
+    geom_jitter(data = d[sample_type == "Healthy"],
+                aes(x = meth_percent, y = sample_type),
+                color = "black", fill = "white", shape = 24,
+                width = 0, height = 0.12, size = 2.8, stroke = 1.0, alpha = 1) +
+    annotate("segment", x = 88, xend = 98, y = 1.35, yend = 1.35, linewidth = 0.6) +
+    annotate("text", x = 93, y = 1.60,
+             label = p_label(meth_wilcox$p), size = 9, lineheight = 0.9) +
+    scale_x_continuous(limits = x_lim, breaks = x_breaks, expand = c(0.01, 0.01)) +
+    scale_y_discrete(labels = c("Healthy" = "H", "Tumor" = "T")) +
+    labs(x = NULL, y = NULL) +
+    theme_bw(base_size = 35) +
+    theme(legend.position = "none", plot.margin = margin(5, 10, 0, 0))
+
+  expr_grob    <- ggplotGrob(expr_boxplot)
+  scatter_grob <- ggplotGrob(scatter_plot)
+  meth_grob    <- ggplotGrob(meth_boxplot)
+  common_x_widths      <- unit.pmax(scatter_grob$widths, meth_grob$widths)
+  scatter_grob$widths  <- common_x_widths
+  meth_grob$widths     <- common_x_widths
+  common_y_heights     <- unit.pmax(expr_grob$heights, scatter_grob$heights)
+  expr_grob$heights    <- common_y_heights
+  scatter_grob$heights <- common_y_heights
+
+  pushViewport(viewport(layout = grid.layout(
+    nrow = 6, ncol = 3,
+    widths  = unit.c(unit(0.8, "cm"), side_box_size, unit(1, "null")),
+    heights = unit.c(unit(0.6, "cm"), unit(1.8, "cm"), unit(1.3, "cm"),
+                     unit(1, "null"), side_box_size, unit(0.65, "cm"))
+  )))
+  grid.text(main_title, x = 0.5, y = 0.5, just = "center",
+            gp = gpar(fontsize = 40, fontface = "bold"),
+            vp = viewport(layout.pos.row = 2, layout.pos.col = 1:3))
+  grid.text(main_subtitle, x = 0.5, y = 0.5, just = "center",
+            gp = gpar(fontsize = 32),
+            vp = viewport(layout.pos.row = 3, layout.pos.col = 1:3))
+  grid.text("Gene expression (log2(TPM+1))", x = 0.5, y = 0.5, rot = 90, just = "center",
+            gp = gpar(fontsize = 30),
+            vp = viewport(layout.pos.row = 4, layout.pos.col = 1))
+  grid.draw(editGrob(expr_grob,
+            vp = viewport(layout.pos.row = 4, layout.pos.col = 2)))
+  grid.draw(editGrob(scatter_grob,
+            vp = viewport(layout.pos.row = 4, layout.pos.col = 3)))
+  grid.draw(editGrob(meth_grob,
+            vp = viewport(layout.pos.row = 5, layout.pos.col = 3)))
+  grid.text("Probe methylation (%)", x = 0.5, y = 0.5, just = "center",
+            gp = gpar(fontsize = 30),
+            vp = viewport(layout.pos.row = 6, layout.pos.col = 3))
+  popViewport()
+
+  data.table(
+    TF = tf_name, gene = target_gene, cancer = cancer, probe = target_probe,
+    n_total = nrow(d), n_healthy, n_tumor,
+    pearson_n = cor_res$n, pearson_r = cor_res$r, pearson_p = cor_res$p,
+    expr_wilcox_p = expr_wilcox$p, meth_wilcox_p = meth_wilcox$p
+  )
+}
+
+# ── Load all cancers ──────────────────────────────────────────────────────────
+cat(sprintf("\nLoading %d cancers with %d cores…\n", length(target_cancers), N_CORES))
+all_data <- mclapply(target_cancers, load_cancer,
+                     mc.cores = N_CORES, mc.preschedule = FALSE)
+names(all_data) <- target_cancers
+valid   <- Filter(Negate(is.null), all_data)
+n_valid <- length(valid)
+cat(sprintf("%d / %d cancers have data\n", n_valid, length(target_cancers)))
+if (n_valid == 0) stop("No data for any cancer type.")
+valid_cancers <- names(valid)
+
+# ── Compute global expression y-axis limits (shared across all cancer panels) ─
+all_expr_vals   <- unlist(lapply(valid, function(d) d$log2_expr), use.names = FALSE)
+global_expr_min <- min(all_expr_vals, na.rm = TRUE)
+global_expr_max <- max(all_expr_vals, na.rm = TRUE)
+global_expr_rng <- max(global_expr_max - global_expr_min, 1)
+global_ylim_lo  <- min(max(0, global_expr_min - 0.08 * global_expr_rng),
+                        expression_threshold - 0.05)
+global_ylim_hi  <- max(global_expr_max + 0.18 * global_expr_rng,
+                        expression_threshold + 0.05)
+global_expr_ylim   <- c(global_ylim_lo, global_ylim_hi)
+global_expr_breaks <- pretty(global_expr_ylim, n = 5)
+cat(sprintf("Global expression y-axis: [%.3f, %.3f]\n", global_ylim_lo, global_ylim_hi))
+
+# ── Draw grid PDF ─────────────────────────────────────────────────────────────
+out_pdf <- file.path(out_dir,
+  paste0(tf_name, "__", target_gene, "__", target_probe, "__all_cancers_grid.pdf"))
+cat("Writing PDF:", out_pdf, "\n")
+
+pdf(out_pdf, width = PDF_W, height = PDF_H, onefile = FALSE)
+grid.newpage()
+n_rows_outer <- ceiling(n_valid / N_COL)
+
+pushViewport(viewport(layout = grid.layout(
+  nrow    = n_rows_outer + 1L,
+  ncol    = N_COL,
+  heights = unit.c(unit(1.5, "cm"),
+                   rep(unit(1 / n_rows_outer, "null"), n_rows_outer)),
+  widths  = rep(unit(1 / N_COL, "null"), N_COL)
+)))
+
+grid.text(
+  sprintf("%s — %s | %s   (%d cancer type%s)",
+          tf_name, target_gene, target_probe, n_valid, ifelse(n_valid==1,"","s")),
+  gp = gpar(fontsize = 28, fontface = "bold"),
+  vp = viewport(layout.pos.row = 1, layout.pos.col = 1:N_COL)
+)
+
+stats_list <- vector("list", n_valid)
+for (ci in seq_along(valid_cancers)) {
+  can   <- valid_cancers[ci]
+  row_i <- ceiling(ci / N_COL) + 1L
+  col_i <- ((ci - 1L) %% N_COL) + 1L
+  pushViewport(viewport(layout.pos.row = row_i, layout.pos.col = col_i))
+  stats_list[[ci]] <- tryCatch(
+    draw_cell(valid[[can]], can, global_expr_ylim, global_expr_breaks),
+    error = function(e) {
+      grid.text(paste("ERROR:", conditionMessage(e)), gp = gpar(col = "red", fontsize = 8))
+      NULL
+    }
+  )
+  popViewport()
+}
+popViewport()
+dev.off()
+cat("Done. PDF written to:", out_pdf, "\n")
+
+# ── Write stats ───────────────────────────────────────────────────────────────
+stats_dt <- rbindlist(Filter(Negate(is.null), stats_list), fill = TRUE)
+if (nrow(stats_dt) > 0) {
+  fwrite(stats_dt, stats_out, sep = "\t")
+  cat("Stats written to:", stats_out, "\n")
+}
+EOF
+
+
 ###################################
 # Gene enrichment GO analysis for the genes
 ###################################
@@ -14137,3 +14506,49 @@ echo $(date)": gene_enrichment processed "$file" successfully"
 # download it from this https://gdc.cancer.gov/about-data/publications/brca_2012 and fixed the format 
 tr '\r' '\n' < BRCA_subtypes.txt > BRCA_subtypes_fixed.txt
 
+######################################################
+# barplot the number of samples that are 3d+4d cohort 
+######################################################
+Rscript -e '
+library(data.table)
+library(ggplot2)
+
+design <- fread("./expression/deseq2/design_file_annotated_3d4d.txt",
+                header = TRUE)
+
+design[, cancer := tstrsplit(sample, "-")[[2]]]
+
+colors_dt <- fread("./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
+                   header = FALSE, col.names = c("cancer_full", "color"))
+colors_dt[, cancer := sub("^TCGA-", "", cancer_full)]
+cancer_colors <- setNames(colors_dt$color, colors_dt$cancer)
+
+counts <- design[, .N, by = .(cancer, condition)]
+cancer_order <- counts[, sum(N), by = cancer][order(-V1), cancer]
+counts[, cancer := factor(cancer, levels = cancer_order)]
+
+n_tumor   <- nrow(design[condition == "tumor"])
+n_healthy <- nrow(design[condition == "healthy"])
+n_cancers <- length(unique(design$cancer))
+
+ggplot(counts, aes(x = cancer, y = N, fill = cancer)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = N), vjust = -0.4, size = 3, fontface = "bold") +
+  scale_fill_manual(values = cancer_colors) +
+  facet_wrap(~ condition, ncol = 1, scales = "free_y") +
+  labs(x = NULL, y = "Number of samples",
+       title = "3d+4d cohort - samples per cancer type",
+       subtitle = paste0(n_cancers, " cancer types | ",
+                         n_tumor, " tumor samples | ",
+                         n_healthy, " healthy samples"),
+       fill = NULL) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.subtitle   = element_text(size = 10, color = "grey40"),
+    axis.text.x     = element_text(angle = 45, hjust = 1, face = "bold"),
+    legend.position = "none"
+  )
+
+ggsave("./results/multi_omics/barplot_3d4d_samples.pdf",
+       width = 12, height = 7)
+'
