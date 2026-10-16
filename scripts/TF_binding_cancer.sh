@@ -12224,329 +12224,6 @@ p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
 ggsave("./results/multi_omics/samples_3+4datasets_barplot.pdf",plot = p, width = 5, height = 5, dpi = 300, bg = "white")
 '
 
-###########################################
-# 2d samples cohort (methylation + rnaseq)
-###########################################
-# Create a table of the samples for which we have 2d data (METH, RNA) 
-# create a tsv of the samples with 2d:
-cat ./results/multi_omics/sample_data_summary.tsv | awk ' $4==1 && $5==1 {print $0}' > ./results/multi_omics/samples_2d.tsv
-cat ./results/multi_omics/sample_data_summary.tsv | awk ' $2!="OV" && $2!="CHOL" && $4==1 && $5==1 {print $0}' > ./results/multi_omics/samples_2d_noOV_noCHOL.tsv
-
-# barplot the number of patients witht 2d per cancer type without OV and CHOL:
-Rscript -e '
-suppressPackageStartupMessages({
-  library(data.table)
-  library(ggplot2)
-  library(scales)
-})
-
-# Read multi-omics cohort table
-dt <- fread("./results/multi_omics/samples_2d.tsv", header = FALSE)
-setnames(dt, c("sample", "cancer", "SNV", "METH", "RNA", "ATAC"))
-
-# Remove CHOL and OV
-dt <- dt[cancer != "CHOL" & cancer != "OV"]
-
-# Count patients per cancer
-counts <- dt[, .N, by = cancer]
-total_samples <- nrow(dt)
-
-# Read defined cancer color file
-color_df <- fread(
-  "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
-  header = FALSE
-)
-
-setnames(color_df, c("Cancer_full", "Color"))
-
-color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
-color_df[, Color := trimws(gsub("\r", "", Color))]
-
-palette <- setNames(color_df$Color, color_df$Cancer)
-
-# Match colors to cancers in the plot
-counts[, Color := palette[cancer]]
-counts[is.na(Color), Color := "grey70"]
-
-# Plot
-p <- ggplot(counts, aes(x = reorder(cancer, N), y = N, fill = cancer)) +
-  geom_bar(stat = "identity", color = "black") +
-  geom_text(
-    aes(label = comma(N)),
-    hjust = -0.15,
-    size = 3,
-    family = "Times New Roman"
-  ) +
-  coord_flip() +
-  scale_fill_manual(values = setNames(counts$Color, counts$cancer)) +
-  scale_y_continuous(labels = label_comma()) +
-  labs(
-    x = "Cancer type",
-    y = "Number of patients",
-    title = "Patients per Cancer Type",
-    subtitle = paste0("Multi-omics cohort (n = ", comma(total_samples), ")")
-  ) +
-  expand_limits(y = max(counts$N) * 1.08) +
-  theme_minimal(base_family = "Times New Roman") +
-  theme(
-    legend.position = "none",
-    plot.title = element_text(
-      size = 14,
-      family = "Times New Roman",
-      face = "bold",
-      hjust = 0.5
-    ),
-    plot.subtitle = element_text(
-      size = 10,
-      family = "Times New Roman",
-      hjust = 0.5
-    ),
-    axis.title = element_text(
-      family = "Times New Roman"
-    ),
-    axis.text = element_text(
-      family = "Times New Roman"
-    )
-  )
-
-# Save PDF
-ggsave(
-  filename = "./results/multi_omics/samples_2d_barplot.pdf",
-  plot = p,
-  width = 5,
-  height = 5,
-  dpi = 300,
-  device = cairo_pdf,
-  bg = "white"
-)
-'
-# barplot the number of samples witht 2d per cancer type without OV nor CHOL:
-Rscript -e '
-suppressPackageStartupMessages({
-  library(data.table)
-  library(ggplot2)
-  library(scales)
-})
-
-# Output path
-out_pdf <- "./results/multi_omics/samples_2d_noOV_per_sampletype_barplot.pdf"
-
-# Read methylation sample annotation
-dt <- fread(
-  "./results/methylation/correlation_expression_methylation_2d/tumor_vs_healthy/BANP/all_samples/methylation_sample_annotation_2d_noOV.tsv.gz"
-)
-
-# Remove CHOL
-dt <- dt[cancer != "CHOL"]
-
-# Count samples per cancer and sample type
-counts <- dt[, .N, by = .(cancer, sample_type)]
-
-# Read cancer colors
-color_df <- fread(
-  "./results/multi_omics/cancer_color_order_with_defined_colours.tsv",
-  header = FALSE
-)
-
-setnames(color_df, c("Cancer_full", "Color"))
-
-color_df[, Cancer := sub("^TCGA-", "", trimws(Cancer_full))]
-color_df[, Color := trimws(gsub("\r", "", Color))]
-
-palette <- setNames(color_df$Color, color_df$Cancer)
-
-counts[, Color := palette[cancer]]
-counts[is.na(Color), Color := "grey70"]
-
-# Flag cancers with no healthy samples
-cancers_no_healthy <- counts[
-  ,
-  .(has_healthy = any(sample_type == "Healthy")),
-  by = cancer
-][has_healthy == FALSE, cancer]
-
-# Define cancer order by total sample count
-cancer_order <- counts[
-  ,
-  .(total = sum(N)),
-  by = cancer
-][order(total), cancer]
-
-counts[, cancer := factor(cancer, levels = cancer_order)]
-
-# Axis label colors in exact plotting order
-axis_colors <- ifelse(cancer_order %in% cancers_no_healthy, "red", "black")
-
-total_samples <- nrow(dt)
-
-# Use one color per cancer
-fill_palette <- unique(counts[, .(cancer, Color)])
-fill_palette <- setNames(fill_palette$Color, as.character(fill_palette$cancer))
-
-# Plot
-p <- ggplot(counts, aes(x = cancer, y = N, fill = cancer)) +
-  geom_col(color = "black", linewidth = 0.25) +
-  geom_text(
-    aes(label = comma(N)),
-    hjust = -0.15,
-    size = 5,
-    family = "Times New Roman"
-  ) +
-  coord_flip() +
-  facet_wrap(~sample_type) +
-  scale_fill_manual(values = fill_palette) +
-  scale_y_continuous(labels = label_comma()) +
-  labs(
-    x = "Cancer type",
-    y = "Number of samples",
-    title = "Samples per Cancer Type",
-    subtitle = paste0(
-      "2D cohort (n = ",
-      comma(total_samples),
-      ") | red = no healthy samples"
-    )
-  ) +
-  expand_limits(y = max(counts$N) * 1.10) +
-  theme_minimal(base_family = "Times New Roman") +
-  theme(
-    legend.position = "none",
-
-    strip.text = element_text(
-      size = 11,
-      family = "Times New Roman",
-      face = "bold"
-    ),
-
-    plot.title = element_text(
-      size = 14,
-      family = "Times New Roman",
-      face = "bold",
-      hjust = 0.5
-    ),
-
-    plot.subtitle = element_text(
-      size = 10,
-      family = "Times New Roman",
-      hjust = 0.5
-    ),
-
-    axis.text.y = element_text(
-      size = 11,
-      colour = axis_colors,
-      family = "Times New Roman"
-    ),
-
-    axis.text.x = element_text(
-      size = 11,
-      family = "Times New Roman"
-    ),
-
-    axis.title = element_text(
-      size = 11,
-      family = "Times New Roman"
-    )
-  )
-
-# Save PDF using Cairo device to avoid broken text in Affinity/Illustrator
-ggsave(
-  filename = out_pdf,
-  plot = p,
-  width = 12,
-  height = 7,
-  device = cairo_pdf,
-  bg = "white"
-)
-'
-#################################################################################################
-# Create a submatrix of gene expression 
-#################################################################################################
-# a) create a gene expressionmatrix of the 3d+4d samples with no OV cancer type:
-f="./results/multi_omics/samples_3d+4d.tsv"
-
-zcat ./expression/gene_expression_matrix_protein_coding.tsv.gz | \
-awk '
-  NR==FNR {
-    # cohort file: keep patient IDs except OV
-    if ($2 != "OV") keep[$1]=1
-    next
-  }
-  FNR==1 { print; next }  # keep header
-
-  {
-    if (FNR % 500 == 0)
-      printf("[awk] processed %d expression rows | kept %d\n", FNR, kept) > "/dev/stderr"
-
-    # extract patient barcode from expression sample id (no {n} intervals)
-    if (match($1, /TCGA-[A-Z0-9][A-Z0-9]-[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/)) {
-      pat = substr($1, RSTART, RLENGTH)
-      if (pat in keep) { print; kept++ }
-    }
-  }
-  END {
-    printf("[awk] DONE | kept %d rows (plus header)\n", kept) > "/dev/stderr"
-  }
-' "$f" - \
-> ./expression/gene_expression_matrix_3d4d_noOV.tsv
-echo "Done! Saved: ./expression/gene_expression_matrix_3d4d_noOV.tsv"
-
-
-# for the 2d and no OV:
-f="./results/multi_omics/samples_2d.tsv"
-
-zcat ./expression/gene_expression_matrix_protein_coding.tsv.gz | \
-awk '
-  NR==FNR {
-    # cohort file: keep patient IDs except OV
-    if ($2 != "OV") keep[$1]=1
-    next
-  }
-  FNR==1 { print; next }  # keep header
-
-  {
-    if (FNR % 500 == 0)
-      printf("[awk] processed %d expression rows | kept %d\n", FNR, kept) > "/dev/stderr"
-
-    # extract patient barcode from expression sample id (no {n} intervals)
-    if (match($1, /TCGA-[A-Z0-9][A-Z0-9]-[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/)) {
-      pat = substr($1, RSTART, RLENGTH)
-      if (pat in keep) { print; kept++ }
-    }
-  }
-  END {
-    printf("[awk] DONE | kept %d rows (plus header)\n", kept) > "/dev/stderr"
-  }
-' "$f" - \
-> ./expression/gene_expression_matrix_2d_noOV.tsv
-echo "Done! Saved: ./expression/gene_expression_matrix_2d_noOV.tsv"
-
-# for the 2d and no OV and no CHOL:
-f="./results/multi_omics/samples_2d.tsv"
-
-zcat ./expression/gene_expression_matrix_protein_coding.tsv.gz | \
-awk '
-  NR==FNR {
-    # cohort file: keep patient IDs except OV
-    if ($2 != "OV" && $2 != "CHOL") keep[$1]=1
-    next
-  }
-  FNR==1 { print; next }  # keep header
-
-  {
-    if (FNR % 500 == 0)
-      printf("[awk] processed %d expression rows | kept %d\n", FNR, kept) > "/dev/stderr"
-
-    # extract patient barcode from expression sample id (no {n} intervals)
-    if (match($1, /TCGA-[A-Z0-9][A-Z0-9]-[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/)) {
-      pat = substr($1, RSTART, RLENGTH)
-      if (pat in keep) { print; kept++ }
-    }
-  }
-  END {
-    printf("[awk] DONE | kept %d rows (plus header)\n", kept) > "/dev/stderr"
-  }
-' "$f" - \
-> ./expression/gene_expression_matrix_2d_noOV_noCHOL.tsv
-echo "Done! Saved: ./expression/gene_expression_matrix_2d_noOV_noCHOL.tsv"
 
 #################################################################
 # Proportional Euler diagram showing RNA-seq and DNA methylation
@@ -12835,333 +12512,7 @@ rm $TMP
 
 echo $(date)": gene_enrichment processed "$file" successfully"
 
-
-##################################
-# Prepare Deseq2 files
-##################################
-############################################
-# Create the design file for DESeq2 analysis only takes the 01A and 11A samples (tumor and healthy)
-############################################
-mkdir -p ./expression/deseq2
-echo -e "sample\tcondition\treplicate" > ./expression/deseq2/design_file.txt
-
-total=$(ls ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv | wc -l)
-count=0
-
-for f in ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv; do 
-    count=$((count + 1))
-    echo "Processing $count/$total: $(basename $f)"
-    
-    sample=$(basename $f | cut -d'.' -f1)
-    condition=$(echo $sample | cut -d'-' -f6 | cut -d'_' -f1)
-    replicate=$(echo $sample | cut -d'-' -f6 | cut -d'_' -f2 | cut -d'.' -f1)
-    echo -e "$sample\t$condition\t$replicate" >> ./expression/deseq2/design_file.txt
-
-done
-
-echo "Done! $total samples processed."
-
-# Transform the condition replicate into cancer 01A or healthy 11A
-awk 'BEGIN{OFS="\t"}
-NR==1{print; next}
-$2=="01A"{$2="tumor"; print}
-$2=="11A"{$2="healthy"; print}' ./expression/deseq2/design_file.txt > ./expression/deseq2/design_file_annotated.txt
-
-#############################################
-# Transform and filter count files for DESeq2
-# Only keeps genes associated with NRF1 or BANP motifs (from probe_gene_pairs_in_motifs.tsv)
-# Creates two separate count directories: counts_NRF1/ and counts_BANP/
-#############################################
-
-mkdir -p ./expression/deseq2/counts_NRF1
-mkdir -p ./expression/deseq2/counts_BANP
-
-# Build gene lists from the motif-probe-gene pairs file (col3 = gene name)
-awk -F'\t' '$1 =="NRF1_mm0to2_noCGmm" {print $3}' ./methylation/probe_gene_pairs_in_motifs.tsv | sort -u > /tmp/NRF1_genes.txt
-awk -F'\t' '$1 =="BANP_mm0to2_noCGmm" {print $3}' ./methylation/probe_gene_pairs_in_motifs.tsv | sort -u > /tmp/BANP_genes.txt
-
-echo "NRF1 genes: $(wc -l < /tmp/NRF1_genes.txt)"
-echo "BANP genes: $(wc -l < /tmp/BANP_genes.txt)"
-
-for f in ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv; do
-    sample=$(basename $f | cut -d'.' -f1)
-    
-    if grep -q "^$sample" ./expression/deseq2/design_file_annotated.txt; then
-
-        # NRF1: keep rows where gene_name (col2) is in NRF1 gene list
-        awk -F'\t' 'BEGIN{OFS="\t"} NR==FNR{g[$1]=1; next} $2 in g {print $1,$2,$4,1000}' \
-            /tmp/NRF1_genes.txt "$f" \
-            > ./expression/deseq2/counts_NRF1/${sample}_genes_count.txt
-
-        # BANP: keep rows where gene_name (col2) is in BANP gene list
-        awk -F'\t' 'BEGIN{OFS="\t"} NR==FNR{g[$1]=1; next} $2 in g {print $1,$2,$4,1000}' \
-            /tmp/BANP_genes.txt "$f" \
-            > ./expression/deseq2/counts_BANP/${sample}_genes_count.txt
-
-        echo "Processed: $sample"
-    fi
-done
-
-#############################################
-# Create one design file per cancer type
-#############################################
-for cancer in $(tail -n +2 ./expression/deseq2/design_file_annotated.txt | cut -d'-' -f2 | sort -u); do
-    head -1 ./expression/deseq2/design_file_annotated.txt > ./expression/deseq2/design_${cancer}.txt
-    grep "\-${cancer}\-" ./expression/deseq2/design_file_annotated.txt >> ./expression/deseq2/design_${cancer}.txt
-    echo "Created: design_${cancer}.txt"
-done
-conda install -c conda-forge r-cluster
-
-# Run the Deseq2 pipeline for each cancer type that has at least one tumor and one healthy sample (01A and 11A)
-#!/bin/bash
-cd /data/najemd/TF_binding_cancer
-conda activate /data/najemd/TF_binding_cancer/conda_envs/TF_binding_cancer_env
-
-# For NRF1
-Rscript --vanilla ./scripts/Deseq2.R \
-    -n CHOL \
-    -d ./expression/deseq2/design_CHOL.txt \
-    -c ./expression/deseq2/counts_NRF1 \
-    -o ./results/expression/deseq2/NRF1
-
-# For BANP
-Rscript --vanilla ./scripts/Deseq2.R \
-    -n CHOL \
-    -d ./expression/deseq2/design_CHOL.txt \
-    -c ./expression/deseq2/counts_BANP \
-    -o ./results/expression/deseq2/BANP
-
-conda activate /data/najemd/TF_binding_cancer/conda_envs/TF_binding_cancer_env
-
-for TF in NRF1 BANP; do
-    mkdir -p ./results/expression/deseq2/${TF}
-    
-    # Run in batches of 4
-    batch=0
-    for cancer in BLCA BRCA CESC CHOL COAD ESCA GBM HNSC KICH KIRC KIRP LIHC LUAD LUSC PAAD PCPG PRAD READ SARC SKCM STAD THCA THYM UCEC; do
-        Rscript --vanilla ./scripts/Deseq2.R \
-            -n ${cancer} \
-            -d ./expression/deseq2/design_${cancer}.txt \
-            -c ./expression/deseq2/counts_${TF} \
-            -o ./results/expression/deseq2/${TF} \
-            > ./results/expression/deseq2/${TF}/${cancer}.log 2>&1 &
-        
-        batch=$((batch+1))
-        if [ $batch -eq 4 ]; then
-            wait   # wait for the 4 running jobs to finish
-            batch=0
-        fi
-    done
-    wait  # wait for any remaining jobs
-done
-
-echo "All done!"
-
-######################################
-# Combine DESeq2 results for all cancers into one file per TF
-######################################
-Rscript --vanilla - << 'EOF'
-suppressMessages(library(ggplot2))
-suppressMessages(library(ggrepel))
-suppressMessages(library(cowplot))
-
-cancers <- c("BLCA","BRCA","CESC","CHOL","COAD","ESCA","GBM","HNSC",
-             "KICH","KIRC","KIRP","LIHC","LUAD","LUSC","PAAD","PCPG",
-             "PRAD","READ","SARC","SKCM","STAD","THCA","THYM","UCEC")
-
-for (TF in c("NRF1","BANP")) {
-    outdir <- paste0("./results/expression/deseq2/", TF)
-    pdf_out <- paste0(outdir, "/", TF, "_all_cancers_volcano.pdf")
-
-    all_res <- list()
-    for (cancer in cancers) {
-        files <- list.files(outdir, pattern=paste0("^",cancer,"_.*_deseq2_diff_table\\.txt$"), full.names=TRUE)
-        if (length(files) == 0) next
-        for (f in files) {
-            key <- paste0(cancer,"__",basename(f))
-            df <- tryCatch(read.table(f, header=TRUE, sep="\t", stringsAsFactors=FALSE), error=function(e) NULL)
-            if (!is.null(df) && nrow(df) > 0) all_res[[key]] <- list(file=f, cancer=cancer, df=df)
-        }
-    }
-
-    if (length(all_res) == 0) { cat(TF, ": no diff tables found\n"); next }
-
-    max_fc   <- ceiling(max(abs(unlist(lapply(all_res, function(x) x$df$log2FoldChange))), na.rm=TRUE))
-    max_pval <- min(ceiling(max(-log10(unlist(lapply(all_res, function(x) x$df$padj))), na.rm=TRUE)), 35)
-
-    # Total genes is the same across cancers — take from first result
-    n_total <- nrow(all_res[[1]]$df)
-
-    plots <- list()
-    for (key in names(all_res)) {
-        cancer <- all_res[[key]]$cancer
-        df     <- all_res[[key]]$df
-
-        df$padj[is.na(df$padj)] <- 1
-        df$padj_plot <- pmin(-log10(df$padj), max_pval)
-        n_up   <- sum(df$log2FoldChange >  1 & df$padj < 0.05, na.rm=TRUE)
-        n_down <- sum(df$log2FoldChange < -1 & df$padj < 0.05, na.rm=TRUE)
-
-        top_idx <- head(order(df$padj), 5)
-        df$label <- NA; df$label[top_idx] <- df$gene[top_idx]
-        df$sig <- "ns"
-        df$sig[df$log2FoldChange >  1 & df$padj < 0.05] <- "up"
-        df$sig[df$log2FoldChange < -1 & df$padj < 0.05] <- "down"
-
-        p <- ggplot(df, aes(x=log2FoldChange, y=padj_plot, label=label, color=sig)) +
-            ggtitle(cancer) +
-            geom_point(size=0.4, alpha=0.6) +
-            scale_color_manual(values=c(up="firebrick", down="steelblue", ns="grey70"), guide="none") +
-            geom_hline(yintercept=-log10(0.05), linetype="dashed", size=0.3, color="grey40") +
-            geom_vline(xintercept=c(-1,1), linetype="dashed", size=0.3, color="grey40") +
-            geom_text_repel(size=1.8, max.overlaps=10, color="black") +
-            annotate("text", x= max_fc*0.9, y=max_pval*0.92, label=paste0("up ",n_up),   color="firebrick", size=2.5, hjust=1) +
-            annotate("text", x=-max_fc*0.9, y=max_pval*0.92, label=paste0("down ",n_down), color="steelblue", size=2.5, hjust=0) +
-            xlab("log2FC") + ylab("-log10(padj)") +
-            xlim(-max_fc, max_fc) + ylim(0, max_pval) +
-            theme_classic(base_size=7)
-
-        plots[[cancer]] <- p
-        cat(TF, cancer, "done\n")
-    }
-
-    # Title + n= centered above the grid
-    title_row <- ggdraw() +
-        draw_label(TF, fontface="bold", size=20, hjust=0.5, x=0.5, y=0.7) +
-        draw_label(paste0("n = ", n_total, " genes"), size=12, hjust=0.5, x=0.5, y=0.25,
-                   color="grey40", fontface="italic")
-
-    grid <- plot_grid(plotlist=plots, ncol=6)
-
-    pdf(pdf_out, width=24, height=17, useDingbats=FALSE)
-    print(plot_grid(title_row, grid, ncol=1, rel_heights=c(0.05, 0.95)))
-    dev.off()
-    cat("=>", pdf_out, "\n")
-}
-cat("All done.\n")
-EOF
-
-####################################
-# Deseq2 analysis for all genes (not just NRF1 or BANP) for each cancer type USED A PVALUE OF 1e-10
-####################################
-
-# build set of valid patient IDs from column 1 only for samples that have methylation expression and mutation data (3d+4d cohort)
-mkdir -p ./expression/deseq2/counts_all
-
-declare -A valid_patients
-while IFS=$'\t' read -r patient rest; do
-    valid_patients["$patient"]=1
-done < results/multi_omics/samples_3d+4d.tsv
-
-for f in ./expression/RNA_TCGA-*.augmented_star_gene_counts_filtered.tsv; do
-    sample=$(basename "$f" | cut -d'.' -f1)
-    patient=$(basename "$f" | sed 's/.*TCGA-[A-Z]*-\(TCGA-[A-Z0-9]*-[A-Z0-9]*\)-.*/\1/')
-
-    if [[ -n "${valid_patients[$patient]}" ]] && \
-       grep -q "^$sample" ./expression/deseq2/design_file_annotated.txt; then
-        awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,$4,1000}' "$f" \
-            > ./expression/deseq2/counts_all/${sample}_genes_count.txt
-        echo "Processed: $sample (patient: $patient)"
-    fi
-done
-
-echo "Done. $(ls ./expression/deseq2/counts_all | wc -l) files created."
-#!IM HERE!
-# Run the Deseq2 pipeline for each cancer type that has at least one tumor and one healthy sample (01A and 11A)
-mkdir -p ./results/expression/deseq2/all_genes
-
-# load valid patients once
-declare -A valid_patients
-while IFS=$'\t' read -r patient rest; do
-    valid_patients["$patient"]=1
-done < results/multi_omics/samples_3d+4d.tsv
-
-batch=0
-for cancer in BLCA BRCA CESC CHOL COAD ESCA GBM HNSC KICH KIRC KIRP LIHC LUAD LUSC PAAD PCPG PRAD READ SARC SKCM STAD THCA THYM UCEC; do
-    Rscript --vanilla ./scripts/Deseq2.R \
-        -n ${cancer} \
-        -d ./expression/deseq2/design_${cancer}.txt \
-        -c ./expression/deseq2/counts_all \
-        -o ./results/expression/deseq2/all_genes \
-        > ./results/expression/deseq2/all_genes/${cancer}.log 2>&1 &
-
-    batch=$((batch+1))
-    if [ $batch -eq 2 ]; then
-        wait
-        batch=0
-    fi
-done
-wait
-echo "All done!"
-
-##################
-# Combine methylation beta values for all samples into one file per cancer type and put them in a beta_matrices directory
-##################
-
-Rscript -e '
-library(data.table)
-
-tf_files <- list(
-  BANP = "./methylation/overlaps/intersected_motifs2mm_HM450/BANP_mm0to2_noCGmm_probes.txt",
-  NRF1 = "./methylation/overlaps/intersected_motifs2mm_HM450/NRF1_mm0to2_noCGmm_probes.txt"
-)
-tf_probes <- lapply(tf_files, function(f) fread(f, header = FALSE)$V1)
-
-files <- list.files("./methylation/filtered_methylation",
-                    pattern = "annotated_methylation_filtered[.]bed[.]gz$",
-                    full.names = TRUE)
-
-parse_filename <- function(f) {
-  bn    <- basename(f)
-  parts <- strsplit(strsplit(bn, "_")[[1]][2], "-")[[1]]
-  list(cancer  = parts[2],
-       patient = paste(parts[3:5], collapse = "-"),
-       type    = ifelse(parts[6] == "01A", "tumor", "healthy"))
-}
-
-meta <- rbindlist(lapply(files, function(f) {
-  p <- parse_filename(f)
-  data.table(file = f, cancer = p$cancer, patient = p$patient, type = p$type)
-}))
-
-for (tf in names(tf_probes)) {
-  probes_keep <- tf_probes[[tf]]
-  outdir <- paste0("./methylation/beta_matrices_", tf)
-  dir.create(outdir, showWarnings = FALSE)
-  message("\n=== TF: ", tf, " (", length(probes_keep), " probes) ===")
-
-  for (cx in sort(unique(meta$cancer))) {
-    outfile <- file.path(outdir, paste0(cx, "_", tf, "_beta_matrix.tsv.gz"))
-    message("Processing: ", cx)
-    idx <- which(meta$cancer == cx)
-
-    dt <- rbindlist(lapply(idx, function(i) {
-      d <- fread(cmd = paste("zcat", shQuote(meta$file[i])),
-                 select = c(4, 5), col.names = c("probe", "beta"), header = FALSE)
-      d[, beta := as.numeric(beta)]
-      d <- d[!is.na(beta) & probe %in% probes_keep]
-      if (nrow(d) == 0) return(NULL)
-      d <- d[, .(beta = mean(beta)), by = probe]
-      d[, sample := paste0(meta$patient[i], "_", meta$type[i])]
-      d
-    }))
-
-    if (nrow(dt) == 0) {
-      message("  Skipping ", cx, " — no data"); next
-    }
-    mat <- dcast(dt, probe ~ sample, value.var = "beta", fun.aggregate = mean)
-    vals <- unlist(mat[, -1])
-    vals <- vals[!is.na(vals)]
-    message("  Saved: ", nrow(mat), " probes x ", ncol(mat)-1, " samples",
-            " | beta range: ", round(min(vals), 2), " – ", round(max(vals), 2),
-            " | median: ", round(median(vals), 2))
-    fwrite(mat, outfile, sep = "\t", na = "NA")
-    rm(dt, mat); gc()
-  }
-}
-message("All done.")
-'
-
+#!NOT LAUNCHED YET WAITING FOR THE BETA MATRIX TO FINISH
 ####################################
 # Do a differential methylation analysis using limma
 ####################################
@@ -13348,16 +12699,15 @@ PROX_THRESH       <- 2000
 MIN_SAMPLES       <- 10
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-limma_dir  <- "./results/methylation/limma"
-deseq_dir  <- "./results/expression/deseq2/all_genes"
-pg_file    <- "./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz"
-counts_dir <- "./expression/deseq2/counts_all"
-out_dir    <- "./results/integration"
+limma_dir <- "./results/methylation/limma"
+deseq_dir <- "./results/expression/deseq2/all_genes"
+pg_file   <- "./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz"
+tpm_file  <- "./expression/gene_expression_matrix_3d4d_noOV.tsv"
+out_dir   <- "./results/integration"
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 tsv_out <- file.path(out_dir, "meth_expr_filtered_pairs.tsv")
 
-# ── Skip computation if TSV already exists ────────────────────────────────────
 if (file.exists(tsv_out)) {
   cat("TSV already exists, loading and going straight to plots ...\n")
   full_dt <- fread(tsv_out)
@@ -13371,6 +12721,22 @@ if (file.exists(tsv_out)) {
   pg <- unique(pg[, .(tf, probe, gene)])
   cat(sprintf("  %d unique proximal probe-gene pairs\n", nrow(pg)))
 
+  # ── Load TPM matrix once ──────────────────────────────────────────────────
+  cat("Loading TPM matrix ...\n")
+  tpm_full <- fread(tpm_file)
+  setnames(tpm_full, 1, "sample")
+
+  # parse from "TCGA-ACC-TCGA-OR-A5J1-01A_1"
+  tpm_full[, cancer_tpm := tstrsplit(sample, "-")[[2]]]
+  tpm_full[, patient    := paste(tstrsplit(sample, "-")[[3]],
+                                  tstrsplit(sample, "-")[[4]],
+                                  tstrsplit(sample, "-")[[5]], sep = "-")]
+  tpm_full[, status     := ifelse(grepl("-01[A-Z]_", sample), "tumor",
+                          ifelse(grepl("-11[A-Z]_", sample), "healthy", "other"))]
+  tpm_full[, sample_key := paste(patient, status, sep = "_")]
+  tpm_full <- tpm_full[status %in% c("tumor", "healthy")]
+  cat(sprintf("  %d TPM samples loaded\n", nrow(tpm_full)))
+
   tfs         <- c("BANP", "NRF1")
   all_results <- list()
 
@@ -13378,22 +12744,22 @@ if (file.exists(tsv_out)) {
     cat("\n========", tf, "========\n")
 
     TF    <- tf
-    pg_tf <- unique(pg[grepl(paste0("^", TF, "(_|$)"), tf), .(probe, gene)])
-    cat(sprintf("  %d probe-gene pairs for %s\n", nrow(pg_tf), tf))
+    pg_tf <- unique(pg[grepl(paste0("^", TF, "(_|$)"), pg$tf), .(probe, gene)])
+    cat(sprintf("  %d probe-gene pairs for %s\n", nrow(pg_tf), TF))
 
-    beta_dir <- paste0("./methylation/beta_matrices_", tf)
+    beta_dir <- paste0("./methylation/beta_matrices_", TF)
 
     limma_files <- list.files(limma_dir,
-                               pattern    = paste0("^", tf, "_.*_limma_results\\.tsv$"),
+                               pattern    = paste0("^", TF, "_.*_limma_results\\.tsv$"),
                                full.names = TRUE)
-    cancers <- sub(paste0("^", tf, "_"), "",
+    cancers <- sub(paste0("^", TF, "_"), "",
                    sub("_limma_results\\.tsv$", "", basename(limma_files)))
     cat(sprintf("  %d cancers found\n", length(cancers)))
 
     for (cancer in cancers) {
       cat(" ", cancer, "...")
 
-      # ── Sample count filter (file-level) ──────────────────────────────────
+      # ── Beta matrix ───────────────────────────────────────────────────────
       bf <- list.files(beta_dir,
                         pattern    = paste0(cancer, ".*\\.tsv\\.gz$"),
                         full.names = TRUE)
@@ -13403,28 +12769,27 @@ if (file.exists(tsv_out)) {
       n_meth_tum <- sum(grepl("_tumor$",   beta_cols))
       n_meth_hlt <- sum(grepl("_healthy$", beta_cols))
 
-      cf_all     <- list.files(counts_dir,
-                                pattern    = paste0("^RNA_TCGA-", cancer, "-.*_genes_count\\.txt$"),
-                                full.names = FALSE)
-      n_expr_tum <- sum(grepl("-01[A-Z]_", cf_all))
-      n_expr_hlt <- sum(grepl("-11[A-Z]_", cf_all))
+      # ── TPM samples for this cancer ───────────────────────────────────────
+      tpm_cancer <- tpm_full[cancer_tpm == cancer]
+      n_expr_tum <- sum(tpm_cancer$status == "tumor")
+      n_expr_hlt <- sum(tpm_cancer$status == "healthy")
 
       if (n_meth_tum < MIN_SAMPLES || n_meth_hlt < MIN_SAMPLES ||
           n_expr_tum < MIN_SAMPLES || n_expr_hlt < MIN_SAMPLES) {
-        cat(sprintf(" skipped (meth T=%d H=%d | expr T=%d H=%d)\n",
+        cat(sprintf(" skipped (meth T=%d H=%d | tpm T=%d H=%d)\n",
                     n_meth_tum, n_meth_hlt, n_expr_tum, n_expr_hlt))
         next
       }
-      cat(sprintf(" meth T=%d H=%d | expr T=%d H=%d",
+      cat(sprintf(" meth T=%d H=%d | tpm T=%d H=%d",
                   n_meth_tum, n_meth_hlt, n_expr_tum, n_expr_hlt))
 
       # ── 1. Limma ──────────────────────────────────────────────────────────
-      lf        <- file.path(limma_dir, paste0(tf, "_", cancer, "_limma_results.tsv"))
+      lf        <- file.path(limma_dir, paste0(TF, "_", cancer, "_limma_results.tsv"))
       limma_res <- fread(lf)
       limma_res <- limma_res[adj.P.Val < METH_PADJ & abs(mean_delta_beta) >= DELTA_BETA_THRESH]
       if (nrow(limma_res) == 0) { cat(" no sig methylation\n"); next }
 
-      # ── 2. DESeq2 all-genes ───────────────────────────────────────────────
+      # ── 2. DESeq2 ─────────────────────────────────────────────────────────
       deseq_files <- list.files(deseq_dir,
                                  pattern    = paste0("^", cancer, "_.*_deseq2_diff_table\\.txt$"),
                                  full.names = TRUE)
@@ -13447,68 +12812,44 @@ if (file.exists(tsv_out)) {
       )
       if (nrow(merged) == 0) { cat(" no overlapping pairs\n"); next }
 
-      # ── 4. Load beta matrix and expression ────────────────────────────────
+      # ── 4. Load beta matrix ───────────────────────────────────────────────
       beta_mat <- fread(bf[1])
       if (!"probe" %in% colnames(beta_mat)) setnames(beta_mat, 1, "probe")
       beta_mat  <- beta_mat[probe %in% merged$probe]
       beta_long <- melt(beta_mat, id.vars = "probe",
                         variable.name = "col_name", value.name = "beta")
-      beta_long[, patient    := sub("^TCGA-([^_]+)_.*$", "\\1", as.character(col_name))]
-      beta_long[, status     := sub("^TCGA-[^_]+_(.*)$",  "\\1", as.character(col_name))]
-      beta_long[, sample_key := paste(patient, status, sep = "_")]
+      beta_long[, sample_key := as.character(col_name)]
 
-      cnt_files <- list.files(counts_dir,
-                               pattern    = paste0("^RNA_TCGA-", cancer, "-.*_genes_count\\.txt$"),
-                               full.names = TRUE)
-      bn   <- basename(cnt_files)
-      pt   <- sub("^RNA_TCGA-[A-Z]+-TCGA-([A-Z0-9]+-[A-Z0-9]+)-[0-9]+[A-Z]_.*", "\\1", bn)
-      st   <- ifelse(grepl("-01[A-Z]_", bn), "tumor",
-             ifelse(grepl("-11[A-Z]_", bn), "healthy", "other"))
-      fkey <- paste(pt, st, sep = "_")
+      # ── 5. Check matched patients ─────────────────────────────────────────
+      common_keys <- intersect(unique(beta_long$sample_key),
+                               unique(tpm_cancer$sample_key))
+      n_matched_tum <- sum(grepl("_tumor$",   common_keys))
+      n_matched_hlt <- sum(grepl("_healthy$", common_keys))
 
-      target_genes <- unique(merged$gene)
-      expr_list <- lapply(seq_along(cnt_files), function(i) {
-        dt <- tryCatch(
-          fread(cnt_files[i], header = FALSE,
-                select = c(2L, 3L), col.names = c("gene", "count"),
-                showProgress = FALSE),
-          error = function(e) NULL
-        )
-        if (is.null(dt)) return(NULL)
-        dt <- dt[gene %in% target_genes]
-        if (nrow(dt) == 0) return(NULL)
-        dt[, sample_key := fkey[i]]
-        dt
-      })
-      expr_dt <- rbindlist(Filter(Negate(is.null), expr_list))
-
-      # ── 5. Check matched patient overlap (deduplicated) ───────────────────
-      test_merge <- merge(
-        unique(beta_long[, .(sample_key)]),
-        unique(expr_dt[,   .(sample_key)]),
-        by = "sample_key"
-      )
-      n_matched_tum <- sum(grepl("_tumor$",   test_merge$sample_key))
-      n_matched_hlt <- sum(grepl("_healthy$", test_merge$sample_key))
       if (n_matched_tum < MIN_SAMPLES || n_matched_hlt < MIN_SAMPLES) {
         cat(sprintf(" skipped: too few matched patients (T=%d H=%d)\n",
                     n_matched_tum, n_matched_hlt))
         next
       }
 
-      # ── 6. Pearson r per probe-gene pair ──────────────────────────────────
+      # ── 6. Pearson r per probe-gene pair using TPM ────────────────────────
       merged[, pearson_r := NA_real_]
       merged[, pearson_p := NA_real_]
 
       for (i in seq_len(nrow(merged))) {
-        pr   <- merged$probe[i]
-        gn   <- merged$gene[i]
-        bv   <- beta_long[probe == pr, .(sample_key, beta)]
-        ev   <- expr_dt[gene == gn,    .(sample_key, count)]
+        pr <- merged$probe[i]
+        gn <- merged$gene[i]
+        if (!gn %in% colnames(tpm_cancer)) next
+
+        bv   <- beta_long[probe == pr & sample_key %in% common_keys,
+                          .(sample_key, beta)]
+        ev   <- tpm_cancer[sample_key %in% common_keys,
+                           .(sample_key, tpm = get(gn))]
         both <- merge(bv, ev, by = "sample_key")
         if (nrow(both) < 5) next
+
         ct <- tryCatch(
-          cor.test(both$beta, log2(both$count + 1), method = "pearson"),
+          cor.test(both$beta, log2(both$tpm + 1), method = "pearson"),
           error = function(e) NULL
         )
         if (!is.null(ct)) {
@@ -13518,10 +12859,10 @@ if (file.exists(tsv_out)) {
       }
 
       merged[, cancer := cancer]
-      merged[, TF     := tf]
+      merged[, TF     := TF]
       n <- nrow(merged)
       cat(sprintf(" | %d pairs | r computed for %d\n", n, sum(!is.na(merged$pearson_r))))
-      all_results[[paste(tf, cancer, sep = "_")]] <- merged
+      all_results[[paste(TF, cancer, sep = "_")]] <- merged
     }
   }
 
@@ -13534,13 +12875,11 @@ if (file.exists(tsv_out)) {
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
 r_scale <- scale_colour_gradient2(
-  low = "#2166ac", mid = "white", high = "#d6604d",
+  low      = "#2166ac", mid = "white", high = "#d6604d",
   midpoint = 0, limits = c(-1, 1), na.value = "grey70", name = "Pearson r"
 )
 
-tfs <- unique(full_dt$TF)
-
-for (tf in tfs) {
+for (tf in unique(full_dt$TF)) {
   dt <- full_dt[TF == tf]
   if (nrow(dt) == 0) next
 
@@ -13568,23 +12907,23 @@ for (tf in tfs) {
       show.legend   = FALSE
     ) +
     r_scale +
-    facet_wrap(~cancer, scales = "free") +
+    facet_wrap(~ cancer, scales = "free") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50", linewidth = 0.4) +
     geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50", linewidth = 0.4) +
     labs(
       title    = paste0(tf, " methylation delta vs expression log2FC"),
-      subtitle = paste0("Proximal probes =< ", PROX_THRESH, " bp | |deltabeta| >= ", DELTA_BETA_THRESH,
-                        "%, padj < ", METH_PADJ, " | |log2FC| >= ", LOG2FC_THRESH,
-                        ", padj < ", EXPR_PADJ,
-                        " | >=", MIN_SAMPLES, " matched tumor+healthy patients",
+      subtitle = paste0("Proximal probes =< ", PROX_THRESH, " bp | |deltabeta| >= ",
+                        DELTA_BETA_THRESH, "%, padj < ", METH_PADJ,
+                        " | |log2FC| >= ", LOG2FC_THRESH, ", padj < ", EXPR_PADJ,
+                        " | >=", MIN_SAMPLES, " matched patients",
                         " | top 20 labelled by |log2FC|x|r|"),
       x = "Methylation delta (tumor - healthy, %)",
       y = "Expression log2FC (tumor vs healthy)"
     ) +
     theme_bw(base_size = 9) +
-    theme(strip.text      = element_text(face = "bold"),
+    theme(strip.text    = element_text(face = "bold"),
           legend.position = "right",
-          plot.subtitle   = element_text(size = 7, colour = "grey40"))
+          plot.subtitle = element_text(size = 7, colour = "grey40"))
 
   out_pdf <- file.path(out_dir, paste0(tf, "_meth_expr_scatter.pdf"))
   ggsave(out_pdf, p,
@@ -13594,7 +12933,6 @@ for (tf in tfs) {
 
 cat("All done.\n")
 EOF
-
 
 # Script to generate scatter plots for each gene in tsv file it takes the list of genes that are in the first column of the tsv file: 
 # ============================================================
@@ -14002,503 +13340,6 @@ cat(sprintf("\nFull ranking written to: %s\n", out_tsv))
 EOF
 
 
-##################################################################################################################################################################################################################
-# Same integration methylation_expression pipeline as before just here this is to get one pdf page per gene-cancer pair with the scatter plot and the boxplots for methylation and expression
-# to have the gene with multiple cancer type detected in the same page in the same pdf for the report file
-##################################################################################################################################################################################################################
-Rscript - << 'EOF'
-suppressPackageStartupMessages({
-  library(data.table)
-  library(ggplot2)
-  library(grid)
-  library(gtable)
-  library(parallel)
-})
-
-# ── USER CONFIG ───────────────────────────────────────────────────────────────
-target_gene    <- "SLITRK3"      # gene you want to plot
-target_probe   <- NULL        # NULL = auto-pick best from pairs_tsv, or "cg12345678"
-target_cancers <- c("COAD", "KIRC", "KIRP", "PRAD", "UCEC")        # NULL = all cancers with a beta matrix, or c("ACC","BRCA")
-
-tf_name  <- "BANP"
-N_COL    <- 3L
-PDF_W    <- 80
-PDF_H    <- 80
-N_CORES  <- max(1L, detectCores() - 2L)
-
-pairs_tsv <- "./results/integration/meth_expr_filtered_pairs.tsv"
-beta_dir  <- paste0("./methylation/beta_matrices_", tf_name)
-tpm_file  <- "./expression/gene_expression_matrix_protein_coding.tsv"
-out_dir   <- file.path("./results/integration/gene_cancer_plots_BANP/")
-stats_out <- paste0("./results/integration//gene_cancer_plots_BANP/meth_expr_wilcoxon_", tf_name,
-                    "_", target_gene, "_grid_stats.tsv")
-
-min_n_cor            <- 3L
-min_n_wilcox         <- 2L
-expression_threshold <- 1
-side_box_size        <- unit(6, "cm")
-top_margin_size      <- unit(1.5, "cm")
-# ─────────────────────────────────────────────────────────────────────────────
-
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-fmt_p <- function(x) {
-  if (is.na(x)) return("NA")
-  if (x < 2.2e-16) return("<2.2e-16")
-  formatC(x, format = "e", digits = 2)
-}
-p_to_stars <- function(p) {
-  if (is.na(p)) return("NA")
-  if (p < 0.001) return("***")
-  if (p < 0.01)  return("**")
-  if (p < 0.05)  return("*")
-  "ns"
-}
-p_label <- function(p) paste0("p = ", fmt_p(p), "\n", p_to_stars(p))
-
-safe_pearson <- function(x, y, min_n = 3L) {
-  ok <- is.finite(x) & is.finite(y)
-  x <- x[ok]; y <- y[ok]; n <- length(x)
-  if (n < min_n || length(unique(x)) < 2 || length(unique(y)) < 2)
-    return(list(n = n, r = NA_real_, p = NA_real_))
-  ct <- tryCatch(cor.test(x, y, method = "pearson"), error = function(e) NULL)
-  if (is.null(ct)) return(list(n = n, r = NA_real_, p = NA_real_))
-  list(n = n, r = unname(ct$estimate), p = ct$p.value)
-}
-
-safe_wilcox <- function(values, groups, min_n = 2L) {
-  keep   <- is.finite(values) & groups %in% c("Healthy", "Tumor")
-  values <- values[keep]; groups <- groups[keep]
-  n_h <- sum(groups == "Healthy"); n_t <- sum(groups == "Tumor")
-  if (n_h < min_n || n_t < min_n) return(list(p = NA_real_, n_h = n_h, n_t = n_t))
-  wt <- tryCatch(suppressWarnings(wilcox.test(values ~ groups, exact = FALSE)),
-                 error = function(e) NULL)
-  list(p = if (is.null(wt)) NA_real_ else wt$p.value, n_h = n_h, n_t = n_t)
-}
-
-# ── Resolve probe ─────────────────────────────────────────────────────────────
-if (is.null(target_probe)) {
-  if (file.exists(pairs_tsv)) {
-    pairs <- fread(pairs_tsv)
-    pairs <- pairs[TF == tf_name & gene == target_gene & !is.na(pearson_r)]
-    if (nrow(pairs) > 0) {
-      target_probe <- pairs[order(-abs(pearson_r)), probe][1]
-      cat("Auto-selected probe:", target_probe, "\n")
-    } else {
-      stop("No pairs found for gene ", target_gene, " in ", pairs_tsv,
-           ". Set target_probe manually.")
-    }
-  } else {
-    stop("pairs_tsv not found and target_probe is NULL. Set target_probe manually.")
-  }
-} else {
-  cat("Using probe:", target_probe, "\n")
-}
-
-# ── Resolve cancers ───────────────────────────────────────────────────────────
-if (is.null(target_cancers)) {
-  beta_files     <- list.files(beta_dir, pattern = "\\.tsv\\.gz$")
-  target_cancers <- sort(sub(paste0("_", tf_name, "_beta_matrix\\.tsv\\.gz$"), "", beta_files))
-  target_cancers <- target_cancers[nchar(target_cancers) > 0]
-  cat("Auto-detected cancers:", paste(target_cancers, collapse = ", "), "\n")
-} else {
-  cat("Using cancers:", paste(target_cancers, collapse = ", "), "\n")
-}
-if (length(target_cancers) == 0) stop("No cancer types found.")
-
-# ── Load TPM matrix ───────────────────────────────────────────────────────────
-cat("Loading TPM matrix…\n")
-tpm_mat <- fread(tpm_file, header = TRUE, check.names = FALSE)
-setnames(tpm_mat, 1L, "tpm_sample_id")
-tpm_mat[, patient    := sub("^TCGA-[A-Z]+-TCGA-([A-Z0-9]+-[A-Z0-9]+)-[0-9]+[A-Z]_.*", "\\1", tpm_sample_id)]
-tpm_mat[, cancer_col := sub("^TCGA-([A-Z]+)-.*", "\\1", tpm_sample_id)]
-tpm_mat[, st         := fifelse(grepl("-01[A-Z]_", tpm_sample_id), "Tumor",
-                        fifelse(grepl("-11[A-Z]_", tpm_sample_id), "Healthy", "other"))]
-tpm_mat[, sample_key := paste(patient, st, sep = "_")]
-tpm_mat <- tpm_mat[st != "other"]
-cat(sprintf("TPM matrix: %d samples\n", nrow(tpm_mat)))
-if (!target_gene %in% names(tpm_mat))
-  stop("Gene '", target_gene, "' not found in TPM matrix.")
-
-# ── Load data for one cancer ──────────────────────────────────────────────────
-load_cancer <- function(cancer) {
-  tag <- sprintf("[%s | %s]", cancer, target_gene)
-  bf  <- list.files(beta_dir, pattern = paste0(cancer, ".*\\.tsv\\.gz$"), full.names = TRUE)
-  if (length(bf) == 0) { cat(tag, "– no beta matrix\n"); return(NULL) }
-  beta_mat <- tryCatch(fread(bf[1]), error = function(e) NULL)
-  if (is.null(beta_mat)) { cat(tag, "– fread failed\n"); return(NULL) }
-  if (!"probe" %in% colnames(beta_mat)) setnames(beta_mat, 1, "probe")
-  beta_mat <- beta_mat[probe == target_probe]
-  if (nrow(beta_mat) == 0) { cat(tag, "– probe not in matrix\n"); return(NULL) }
-  beta_long <- melt(beta_mat, id.vars = "probe",
-                    variable.name = "col_name", value.name = "meth_beta")
-  beta_long[, patient     := sub("^TCGA-([^_]+)_.*$", "\\1", as.character(col_name))]
-  beta_long[, sample_type := sub("^TCGA-[^_]+_(.*)$", "\\1", as.character(col_name))]
-  beta_long[, sample_type := fifelse(sample_type == "tumor",   "Tumor",
-                              fifelse(sample_type == "healthy", "Healthy", sample_type))]
-  beta_long[, sample_key  := paste(patient, sample_type, sep = "_")]
-  if (max(beta_long$meth_beta, na.rm = TRUE) <= 1.5)
-    beta_long[, meth_percent := meth_beta * 100] else
-    beta_long[, meth_percent := meth_beta]
-  expr_dt <- tpm_mat[cancer_col == cancer, .(sample_key, count = get(target_gene))]
-  if (nrow(expr_dt) == 0) { cat(tag, "– no TPM rows\n"); return(NULL) }
-  d <- merge(
-    beta_long[, .(sample_key, patient, sample_type, meth_percent)],
-    expr_dt[,   .(sample_key, count)],
-    by = "sample_key"
-  )
-  d <- d[sample_type %in% c("Tumor","Healthy") & is.finite(meth_percent) & is.finite(count)]
-  if (nrow(d) == 0) { cat(tag, "– no matched samples\n"); return(NULL) }
-  d[, log2_expr   := log2(count + 1)]
-  d[, sample_type := factor(sample_type, levels = c("Healthy","Tumor"))]
-  d[, cancer      := cancer]
-  cat(tag, sprintf("– %d rows (T=%d H=%d)\n",
-        nrow(d), sum(d$sample_type=="Tumor"), sum(d$sample_type=="Healthy")))
-  d
-}
-
-# ── draw_cell(): draws one cancer cell into the current active viewport ───────
-draw_cell <- function(d, cancer, expr_ylim, expr_breaks) {
-  x_lim    <- c(0, 100)
-  x_breaks <- c(0, 25, 50, 75, 100)
-  n_tumor   <- sum(d$sample_type == "Tumor")
-  n_healthy <- sum(d$sample_type == "Healthy")
-  cor_res     <- safe_pearson(d$meth_percent, d$log2_expr, min_n_cor)
-  expr_wilcox <- safe_wilcox(d$log2_expr,    as.character(d$sample_type), min_n_wilcox)
-  meth_wilcox <- safe_wilcox(d$meth_percent, as.character(d$sample_type), min_n_wilcox)
-  stat_label    <- paste0("n = ", cor_res$n,
-                           "\nr = ", ifelse(is.na(cor_res$r), "NA", sprintf("%.2f", cor_res$r)),
-                           "\np = ", fmt_p(cor_res$p))
-  main_title    <- paste0(cancer, " | ", target_gene, " | ", target_probe)
-  main_subtitle <- paste0("Tumor n = ", n_tumor, " ; Healthy n = ", n_healthy)
-
-  scatter_plot <- ggplot() +
-    geom_point(data = d[sample_type == "Tumor"],
-               aes(x = meth_percent, y = log2_expr),
-               color = "red", shape = 16, size = 2.2, alpha = 0.65) +
-    geom_point(data = d[sample_type == "Healthy"],
-               aes(x = meth_percent, y = log2_expr),
-               color = "black", fill = "white", shape = 24, size = 3.4, stroke = 1.1, alpha = 1) +
-    geom_hline(yintercept = expression_threshold, color = "red",
-               linewidth = 0.7, linetype = "dashed") +
-    annotate("text", x = 98, y = expression_threshold,
-             label = paste0("expression = ", expression_threshold),
-             color = "red", hjust = 1, vjust = -0.5, size = 14) +
-    annotate("text", x = Inf, y = Inf, label = stat_label,
-             hjust = 1.05, vjust = 1.1, size = 14) +
-    scale_x_continuous(limits = x_lim, breaks = x_breaks, expand = c(0.01, 0.01)) +
-    scale_y_continuous(limits = expr_ylim, breaks = expr_breaks, expand = c(0.01, 0.01)) +
-    labs(x = NULL, y = NULL) +
-    theme_bw(base_size = 40) +
-    theme(legend.position = "none", plot.margin = margin(0, 10, 0, 0))
-
-  expr_boxplot <- ggplot() +
-    geom_boxplot(data = d, aes(x = sample_type, y = log2_expr),
-                 width = 0.55, outlier.shape = NA, color = "#0b3c5d", fill = NA) +
-    geom_jitter(data = d[sample_type == "Tumor"],
-                aes(x = sample_type, y = log2_expr),
-                color = "red", width = 0.12, height = 0, size = 1.8, alpha = 0.65) +
-    geom_jitter(data = d[sample_type == "Healthy"],
-                aes(x = sample_type, y = log2_expr),
-                color = "black", fill = "white", shape = 24,
-                width = 0.12, height = 0, size = 2.8, stroke = 1.0, alpha = 1) +
-    annotate("segment", x = 1, xend = 2,
-             y = expr_ylim[2] - 0.045 * diff(expr_ylim),
-             yend = expr_ylim[2] - 0.045 * diff(expr_ylim), linewidth = 0.6) +
-    annotate("text", x = 1.5, y = expr_ylim[2] - 0.005 * diff(expr_ylim),
-             label = p_label(expr_wilcox$p), size = 7, lineheight = 0.9) +
-    scale_x_discrete(labels = c("Healthy" = "H", "Tumor" = "T")) +
-    scale_y_continuous(limits = expr_ylim, breaks = expr_breaks, expand = c(0.01, 0.01)) +
-    labs(x = NULL, y = NULL) +
-    theme_bw(base_size = 35) +
-    theme(legend.position = "none", plot.margin = margin(0, 5, 0, 0))
-
-  meth_boxplot <- ggplot() +
-    geom_boxplot(data = d, aes(x = meth_percent, y = sample_type),
-                 width = 0.55, outlier.shape = NA, color = "#0b3c5d", fill = NA) +
-    geom_jitter(data = d[sample_type == "Tumor"],
-                aes(x = meth_percent, y = sample_type),
-                color = "red", width = 0, height = 0.12, size = 1.8, alpha = 0.65) +
-    geom_jitter(data = d[sample_type == "Healthy"],
-                aes(x = meth_percent, y = sample_type),
-                color = "black", fill = "white", shape = 24,
-                width = 0, height = 0.12, size = 2.8, stroke = 1.0, alpha = 1) +
-    annotate("segment", x = 88, xend = 98, y = 1.35, yend = 1.35, linewidth = 0.6) +
-    annotate("text", x = 93, y = 1.60,
-             label = p_label(meth_wilcox$p), size = 9, lineheight = 0.9) +
-    scale_x_continuous(limits = x_lim, breaks = x_breaks, expand = c(0.01, 0.01)) +
-    scale_y_discrete(labels = c("Healthy" = "H", "Tumor" = "T")) +
-    labs(x = NULL, y = NULL) +
-    theme_bw(base_size = 35) +
-    theme(legend.position = "none", plot.margin = margin(5, 10, 0, 0))
-
-  expr_grob    <- ggplotGrob(expr_boxplot)
-  scatter_grob <- ggplotGrob(scatter_plot)
-  meth_grob    <- ggplotGrob(meth_boxplot)
-  common_x_widths      <- unit.pmax(scatter_grob$widths, meth_grob$widths)
-  scatter_grob$widths  <- common_x_widths
-  meth_grob$widths     <- common_x_widths
-  common_y_heights     <- unit.pmax(expr_grob$heights, scatter_grob$heights)
-  expr_grob$heights    <- common_y_heights
-  scatter_grob$heights <- common_y_heights
-
-  pushViewport(viewport(layout = grid.layout(
-    nrow = 6, ncol = 3,
-    widths  = unit.c(unit(0.8, "cm"), side_box_size, unit(1, "null")),
-    heights = unit.c(unit(0.6, "cm"), unit(1.8, "cm"), unit(1.3, "cm"),
-                     unit(1, "null"), side_box_size, unit(0.65, "cm"))
-  )))
-  grid.text(main_title, x = 0.5, y = 0.5, just = "center",
-            gp = gpar(fontsize = 40, fontface = "bold"),
-            vp = viewport(layout.pos.row = 2, layout.pos.col = 1:3))
-  grid.text(main_subtitle, x = 0.5, y = 0.5, just = "center",
-            gp = gpar(fontsize = 32),
-            vp = viewport(layout.pos.row = 3, layout.pos.col = 1:3))
-  grid.text("Gene expression (log2(TPM+1))", x = 0.5, y = 0.5, rot = 90, just = "center",
-            gp = gpar(fontsize = 30),
-            vp = viewport(layout.pos.row = 4, layout.pos.col = 1))
-  grid.draw(editGrob(expr_grob,
-            vp = viewport(layout.pos.row = 4, layout.pos.col = 2)))
-  grid.draw(editGrob(scatter_grob,
-            vp = viewport(layout.pos.row = 4, layout.pos.col = 3)))
-  grid.draw(editGrob(meth_grob,
-            vp = viewport(layout.pos.row = 5, layout.pos.col = 3)))
-  grid.text("Probe methylation (%)", x = 0.5, y = 0.5, just = "center",
-            gp = gpar(fontsize = 30),
-            vp = viewport(layout.pos.row = 6, layout.pos.col = 3))
-  popViewport()
-
-  data.table(
-    TF = tf_name, gene = target_gene, cancer = cancer, probe = target_probe,
-    n_total = nrow(d), n_healthy, n_tumor,
-    pearson_n = cor_res$n, pearson_r = cor_res$r, pearson_p = cor_res$p,
-    expr_wilcox_p = expr_wilcox$p, meth_wilcox_p = meth_wilcox$p
-  )
-}
-
-# ── Load all cancers ──────────────────────────────────────────────────────────
-cat(sprintf("\nLoading %d cancers with %d cores…\n", length(target_cancers), N_CORES))
-all_data <- mclapply(target_cancers, load_cancer,
-                     mc.cores = N_CORES, mc.preschedule = FALSE)
-names(all_data) <- target_cancers
-valid   <- Filter(Negate(is.null), all_data)
-n_valid <- length(valid)
-cat(sprintf("%d / %d cancers have data\n", n_valid, length(target_cancers)))
-if (n_valid == 0) stop("No data for any cancer type.")
-valid_cancers <- names(valid)
-
-# ── Compute global expression y-axis limits (shared across all cancer panels) ─
-all_expr_vals   <- unlist(lapply(valid, function(d) d$log2_expr), use.names = FALSE)
-global_expr_min <- min(all_expr_vals, na.rm = TRUE)
-global_expr_max <- max(all_expr_vals, na.rm = TRUE)
-global_expr_rng <- max(global_expr_max - global_expr_min, 1)
-global_ylim_lo  <- min(max(0, global_expr_min - 0.08 * global_expr_rng),
-                        expression_threshold - 0.05)
-global_ylim_hi  <- max(global_expr_max + 0.18 * global_expr_rng,
-                        expression_threshold + 0.05)
-global_expr_ylim   <- c(global_ylim_lo, global_ylim_hi)
-global_expr_breaks <- pretty(global_expr_ylim, n = 5)
-cat(sprintf("Global expression y-axis: [%.3f, %.3f]\n", global_ylim_lo, global_ylim_hi))
-
-# ── Draw grid PDF ─────────────────────────────────────────────────────────────
-out_pdf <- file.path(out_dir,
-  paste0(tf_name, "__", target_gene, "__", target_probe, "__all_cancers_grid.pdf"))
-cat("Writing PDF:", out_pdf, "\n")
-
-pdf(out_pdf, width = PDF_W, height = PDF_H, onefile = FALSE)
-grid.newpage()
-n_rows_outer <- ceiling(n_valid / N_COL)
-
-pushViewport(viewport(layout = grid.layout(
-  nrow    = n_rows_outer + 1L,
-  ncol    = N_COL,
-  heights = unit.c(unit(1.5, "cm"),
-                   rep(unit(1 / n_rows_outer, "null"), n_rows_outer)),
-  widths  = rep(unit(1 / N_COL, "null"), N_COL)
-)))
-
-grid.text(
-  sprintf("%s — %s | %s   (%d cancer type%s)",
-          tf_name, target_gene, target_probe, n_valid, ifelse(n_valid==1,"","s")),
-  gp = gpar(fontsize = 28, fontface = "bold"),
-  vp = viewport(layout.pos.row = 1, layout.pos.col = 1:N_COL)
-)
-
-stats_list <- vector("list", n_valid)
-for (ci in seq_along(valid_cancers)) {
-  can   <- valid_cancers[ci]
-  row_i <- ceiling(ci / N_COL) + 1L
-  col_i <- ((ci - 1L) %% N_COL) + 1L
-  pushViewport(viewport(layout.pos.row = row_i, layout.pos.col = col_i))
-  stats_list[[ci]] <- tryCatch(
-    draw_cell(valid[[can]], can, global_expr_ylim, global_expr_breaks),
-    error = function(e) {
-      grid.text(paste("ERROR:", conditionMessage(e)), gp = gpar(col = "red", fontsize = 8))
-      NULL
-    }
-  )
-  popViewport()
-}
-popViewport()
-dev.off()
-cat("Done. PDF written to:", out_pdf, "\n")
-
-# ── Write stats ───────────────────────────────────────────────────────────────
-stats_dt <- rbindlist(Filter(Negate(is.null), stats_list), fill = TRUE)
-if (nrow(stats_dt) > 0) {
-  fwrite(stats_dt, stats_out, sep = "\t")
-  cat("Stats written to:", stats_out, "\n")
-}
-EOF
-
-
-###################################
-# Gene enrichment GO analysis for the genes
-###################################
-# 1) Extract gene lists
-awk -F'\t' '{print $1}' ./results/integration/gene_ranking_NRF1.tsv | tail -n +2 | sort -u > ./results/integration/NRF1_genes_cancer.txt
-awk -F'\t' '{print $1}' ./results/integration/gene_ranking_BANP.tsv | tail -n +2 | sort -u > ./results/integration/BANP_genes_cancer.txt
-
-NRF1_file="./results/integration/NRF1_genes_cancer.txt" 
-BANP_file="./results/integration/BANP_genes_cancer.txt" 
-
-
-mkdir -p ./results/integration/GO_plots/
-mkdir -p ./results/integration/GO_plots/NRF1/plots
-mkdir -p ./results/integration/GO_plots/BANP/plots
-# 2) Run enrichment for both TFs
-# 2) run the enrichment pipeline for each of the gene lists:
-
-file="./results/integration/BANP_genes_cancer.txt"
-output_dir="./results/integration/GO_plots/BANP"
-column=1
-species="hsa"
-format="name"
-pvalue=0.001
-database="go_biological_process"
-
-while getopts "hf:s:n:c:p:o:d:" opt; do
-    case $opt in
-	h)
-	    echo -e $help >&2
-	    exit
-	    ;;
-	f)
-	    file=$OPTARG
-	    ;;
-	s)
-	    species=$OPTARG
-	    ;;
-	n)
-	    format=$OPTARG
-	    ;;
-	c)
-	    column=$OPTARG
-	    ;;
-	p)
-	    pvalue=$OPTARG
-	    ;;
-	o)
-	    output_dir=$OPTARG
-	    ;;
-	d)
-	    database=$OPTARG
-	    ;;
-	\?)
-            echo -e $help >&2
-            exit
-	    ;;
-    esac
-done
-
-# Check file name and species are provided
-if [[ -z $file || -z $species ]]; then echo -e $help >&2; exit; fi
-
-# Check file exist and is not empty
-if [[ ! -s $file ]]; then echo ${file}" file does not exist or is empty" >&2; exit 1; fi
-
-# Check species is in the list
-if [[ $species != "hsa" && $species != "mmu" && $species != "bta" && $species != "cfa" && $species != "dre" && $species != "gga" && $species != "ssc" ]]; then echo ${species}" species is not supported" >&2; echo -e $help >&2; exit 1; fi
-
-# Assign species to DB file
-if [[ $database = "go_biological_process" ]]; then
-    DB=/data/genome/annotations/${species}_go_biological_process.txt
-elif [[ $database = "wikipathways" ]]; then
-    DB=/data/genome/annotations/${species}_wikipathways.txt
-elif [[ $database = "tf_dbd" ]]; then
-    DB=/data/genome/annotations/${species}_tf_dbd.txt
-else echo $database" database not available"; exit 1
-fi
-if [[ ! -s $DB ]]; then echo "Database file not available: "$DB; exit 1; fi
-						   
-
-# Check column exists in file
-if [[ ! $column =~ ^[0-9]+$ ]]; then echo "COLUMN "$column" is not a number"; exit 1; fi
-status=$(awk -vN=$column '(N>NF){print "KO"}' $file | uniq)
-if [[ $status = "KO" ]]; then echo $file" file does not contain column "$column" on all lines"; exit 1; fi
-
-# Check p-value is between 0 and 1
-status=$(awk -vP=$pvalue 'BEGIN{if(P<0||P>1){print "KO"}}')
-if [[ $pvalue = "KO" ]]; then echo "P-value threshold should be between 0 and 1"; exit 1; fi
-
-# TMP file containing gene names
-if [[ $format != "name" && $format != "id" ]]; then echo -e $help >&2; exit 1; fi
-TMP=$(mktemp -u -p /scratch/$USER/tmp/)
-if [[ $format = "name" ]]; then
-    cat $file | awk -vN=$column '{print $N}' | sort -u > $TMP
-# Convert ensembl IDs to gene names
-elif [[ $format = "id" ]]; then
-    if [[ $species = "hsa" ]]; then gene_file=/data/genome/annotations/hg38_genes.bed
-    elif [[ $species = "mmu" ]]; then gene_file=/data/genome/annotations/mm10_genes.bed
-    elif [[ $species = "bta" ]]; then gene_file=/data/genome/annotations/bosTau8_genes.bed
-    elif [[ $species = "cfa" ]]; then gene_file=/data/genome/annotations/canFam3_genes.bed
-    elif [[ $species = "dre" ]]; then gene_file=/data/genome/annotations/danRer10_genes.bed
-    elif [[ $species = "gga" ]]; then gene_file=/data/genome/annotations/galGal5_genes.bed
-    elif [[ $species = "ssc" ]]; then gene_file=/data/genome/annotations/susScr11_genes.bed
-    fi
-    cat $file | awk -vN=$column '{print $N}' | sort -u | awk -vF=$gene_file -vTMP=$TMP -vFS='\t' 'BEGIN{while(getline<F){G[$6]=$4}}{if(G[$1]){print G[$1]>TMP;c++}}END{print c" IDs could be converted to gene names ("int(c*100/NR)"%)"}'
-fi
-
-echo $(date)": gene_enrichment start processing "$file
-
-# Check gene names exist
-total=$(cat $TMP | sort -u | wc -l)
-count=$(cat $TMP | awk -vDB=$DB 'BEGIN{while(getline<DB){G[$1]=1}}{if($1 in G){c++}}END{print c+0}')
-if [[ $count -eq 0 ]]; then  echo "None of your genes are present in the current annotation database "$DB" (check gene name/id format)"; exit 1;
-else echo $count" genes are present in the current annotation database ("$(awk -vC=$count -vT=$total 'BEGIN{print int(C*100/T)}')"%)";fi
-
-# Output directory
-if [[ -n $output_dir ]]; then mkdir -p $output_dir
-else output_dir=$(echo $file | awk '{if($1!~"/"){print "."}else{split($1,X,"/");L=X[1];for(i=2;i<=length(X)-1;i++){L=L"/"X[i]};print L}}')
-fi
-
-# Output file
-output_file=$(echo $file | awk '{split($1,X,"/");split(X[length(X)],Y,".");print Y[1]}')
-
-# Run annotation enrichment
-(echo -e "#db_category\tgenes_in_category\tgenes\tdb_category\tdb\tp-value\tcategory_name\tgene_list"
- cat $TMP | awk -vF=$DB -vOFS='\t' '{G[$1]=1}END{while(getline<F){DBt[$2]++;FUNC[$2]=$3;Gt[$1]=1;if($1 in G){Gg[$1]=1;DBg[$2]++;if(!Lg[$2]){Lg[$2]=$1}else{Lg[$2]=Lg[$2]","$1}}};for(db in DBt){if(!Lg[db]){Lg[db]="."};print db,DBg[db]+0,length(Gg)+0,DBt[db]+0,length(Gt)+0,FUNC[db],Lg[db]}}' | Rscript /data/software/dorsal/scripts/hyper.R -i - | awk -vOFS='\t' -vP=$pvalue '($8<=P){print $1,$2,$3,$4,$5,$8,$6,$7}' | sort -k6,6g -k2,2nr
-)> ${output_dir}/${output_file}"_"$database"_table.txt"
-
-# Number of categories enriched
-NB=$(awk '(NR>1)' ${output_dir}/${output_file}"_"$database"_table.txt" | wc -l)
-echo $NB" categories significantly enriched (p-value <= "$pvalue") (top ones below)"
-if [[ $NB -gt 0 ]]; then 
-    cat ${output_dir}/${output_file}"_"$database"_table.txt" | head | column -t
-else
-    rm ${output_dir}/${output_file}"_"$database"_table.txt"
-fi
-
-# Plot results
-if [[ $NB -ge 20 ]]; then NB=20; fi
-if [[ $NB -gt 0 ]]; then 
-    Rscript /data/bardeta/scripts/gene_enrichment_plot.R -i ${output_dir}/${output_file}"_"$database"_table.txt" -n $NB -o ${output_dir}/plots/${output_file}"_"$database"_barplot.pdf"
-    echo "Plot generated: display "${output_dir}/plots/${output_file}"_"$database"_barplot.pdf"
-fi
-rm $TMP
-
-echo $(date)": gene_enrichment processed "$file" successfully"
-
 
 ########################################
 # Get the BRCA subtypes information for the concordant genes
@@ -14552,3 +13393,5 @@ ggplot(counts, aes(x = cancer, y = N, fill = cancer)) +
 ggsave("./results/multi_omics/barplot_3d4d_samples.pdf",
        width = 12, height = 7)
 '
+
+
