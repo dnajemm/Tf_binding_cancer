@@ -1,1056 +1,596 @@
-# create the output directory and the file with the selected motif-gene pairs for the local probe controls
-mkdir -p ./results/methylation/local_probe_controls
-
-cat > ./results/methylation/local_probe_controls/selected_motif_gene_pairs.tsv << 'EOF'
-gene	cancer	TF	motif_id	chr	start	end	strand
-GGT6	KIRC	BANP	chr17:4560723:4560733:+	chr17	4560723	4560733	+
-TDRD1	PRAD	NRF1	chr10:114179257:114179267:+	chr10	114179257	114179267	+
-EOF
-
-# create the output directory for the nearby probe results in a selected window around the motif-gene pairs
-mkdir -p ./results/methylation/local_probe_controls
-
-Rscript - << 'EOF'
 suppressPackageStartupMessages({
   library(data.table)
+  library(parallel)
 })
 
-selected_file <- "./results/methylation/local_probe_controls/selected_motif_gene_pairs.tsv"
-probe_file <- "./methylation/annotated_methylation_data_probes_filtered.bed"
-out_file <- "./results/methylation/local_probe_controls/nearby_HM450_probes_within_1kb.tsv"
+# ── Arguments ─────────────────────────────────────────────────────────────────
+args    <- commandArgs(trailingOnly = TRUE)
+tf_name <- args[1]
+if (is.na(tf_name) || !tf_name %in% c("NRF1", "BANP"))
+  stop("Usage: Rscript correlation_controle_probe_test.R <TF>   (NRF1 or BANP)")
+cat(sprintf("[INFO] TF: %s\n", tf_name))
 
-window_bp <- 1000
+# ── Paths ─────────────────────────────────────────────────────────────────────
+ranking_file <- paste0("./results/integration/gene_ranking_", tf_name, ".tsv")
+pairs_file   <- "./results/integration/meth_expr_filtered_pairs.tsv"
+motif_file   <- "./methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz"
+beta_dir     <- paste0("./methylation/beta_matrices_", tf_name)
+meth_dir     <- "./methylation/filtered_methylation"
+counts_dir   <- "./expression/deseq2/counts_all"
+shared_file  <- "./results/multi_omics/expr_meth_shared_samples.txt"
+out_dir      <- "./results/integration/controle_probe"
+ckpt_dir     <- file.path(out_dir, paste0("checkpoints_", tf_name))
+dir.create(out_dir,  recursive = TRUE, showWarnings = FALSE)
+dir.create(ckpt_dir, recursive = TRUE, showWarnings = FALSE)
 
-cat("[INFO] Reading selected motif-gene pairs...\n")
-selected <- fread(selected_file)
+ckpt <- function(name) file.path(ckpt_dir, paste0(name, ".rds"))
+load_or_run <- function(name, expr) {
+  f <- ckpt(name)
+  if (file.exists(f)) {
+    cat(sprintf("[SKIP] %s already done — loading from checkpoint\n", name))
+    return(readRDS(f))
+  }
+  result <- expr
+  saveRDS(result, f)
+  cat(sprintf("[SAVE] %s checkpoint saved\n", name))
+  result
+}
 
-cat("[INFO] Reading HM450 probe coordinates...\n")
-probes <- fread(
-  probe_file,
-  header = FALSE,
-  col.names = c("probe_chr", "probe_start", "probe_end", "probe")
-)
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 1 — Load and join
+# ══════════════════════════════════════════════════════════════════════════════
+todo <- load_or_run("step1_todo", {
+  cat("[STEP 1] Loading gene ranking...\n")
+  ranking    <- fread(ranking_file)
+  genes_keep <- unique(ranking$gene)
+  cat(sprintf("  %d genes in ranking\n", length(genes_keep)))
 
-selected[, start := as.integer(start)]
-selected[, end := as.integer(end)]
-probes[, probe_start := as.integer(probe_start)]
-probes[, probe_end := as.integer(probe_end)]
+  cat("[STEP 1] Loading filtered pairs...\n")
+  pairs <- fread(pairs_file)
+  pairs <- pairs[TF == tf_name & gene %in% genes_keep]
+  cat(sprintf("  %d gene-cancer-probe rows after filter\n", nrow(pairs)))
 
-cat("[INFO] Searching for probes within +/-", window_bp, "bp around each selected motif...\n")
+  cat("[STEP 1] Loading motif instance IDs...\n")
+  motifs <- fread(cmd = paste("zcat", motif_file))
+  motifs <- motifs[grepl(paste0("^", tf_name), TF) & gene %in% genes_keep]
+  motifs <- unique(motifs[, .(TF, probe, gene, motif_instance_id)])
+  cat(sprintf("  %d probe-gene-motif rows\n", nrow(motifs)))
 
-nearby_list <- lapply(seq_len(nrow(selected)), function(i) {
-  
-  row <- selected[i]
-  
-  window_start <- max(0L, row$start - window_bp)
-  window_end <- row$end + window_bp
-  
-  nearby <- probes[
-    probe_chr == row$chr &
-      probe_start >= window_start &
-      probe_end <= window_end
-  ]
-  
-  if (nrow(nearby) == 0) return(NULL)
-  
-  nearby[, `:=`(
-    gene = row$gene,
-    cancer = row$cancer,
-    TF = row$TF,
-    motif_id = row$motif_id,
-    motif_chr = row$chr,
-    motif_start = row$start,
-    motif_end = row$end,
-    motif_strand = row$strand,
-    window_start = window_start,
-    window_end = window_end,
-    distance_to_motif = fifelse(
-      probe_end < row$start,
-      row$start - probe_end,
-      fifelse(probe_start > row$end, probe_start - row$end, 0L)
-    ),
-    overlaps_selected_motif = probe_start < row$end & probe_end > row$start
-  )]
-  
-  nearby[]
+  cat("[STEP 1] Joining...\n")
+  td <- merge(pairs, motifs, by = c("probe", "gene"), all.x = FALSE)
+  td[, motif_chr    := sub(":.*", "", motif_instance_id)]
+  td[, motif_start  := as.integer(sub("^[^:]+:([0-9]+):.*", "\\1", motif_instance_id))]
+  td[, motif_end    := as.integer(sub("^[^:]+:[0-9]+:([0-9]+):.*", "\\1", motif_instance_id))]
+  td[, motif_strand := sub(".*:", "", motif_instance_id)]
+  td
 })
 
-nearby_probes <- rbindlist(nearby_list, fill = TRUE)
+cat(sprintf("[STEP 1] %d rows\n", nrow(todo)))
+print(todo[1:min(5,.N), .(gene, cancer, probe, motif_chr, motif_start, motif_end, motif_strand)])
 
-if (nrow(nearby_probes) == 0) {
-  stop("No probes found within the selected window. Try increasing window_bp.")
-}
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 2 — Find nearby control probes
+# ══════════════════════════════════════════════════════════════════════════════
+controls <- load_or_run("step2_controls", {
+  cat("[STEP 2] Loading probe BED file...\n")
+  all_probes <- fread(
+    "./methylation/annotated_methylation_data_probes_filtered.bed",
+    header = FALSE, col.names = c("probe_chr","probe_start","probe_end","probe"))
+  all_probes[, probe_start := as.integer(probe_start)]
+  all_probes[, probe_end   := as.integer(probe_end)]
+  cat(sprintf("  %d probes loaded\n", nrow(all_probes)))
 
-setcolorder(
-  nearby_probes,
-  c(
-    "gene", "cancer", "TF", "motif_id",
-    "motif_chr", "motif_start", "motif_end", "motif_strand",
-    "window_start", "window_end",
-    "probe", "probe_chr", "probe_start", "probe_end",
-    "distance_to_motif", "overlaps_selected_motif"
-  )
-)
+  todo[, win_start := fifelse(motif_strand == "+", motif_start - 500L,  motif_start - 1500L)]
+  todo[, win_end   := fifelse(motif_strand == "+", motif_end   + 1500L, motif_end   + 500L)]
+  todo[, win_start := pmax(0L, win_start)]
 
-setorder(nearby_probes, gene, cancer, TF, motif_chr, motif_start, distance_to_motif)
-
-fwrite(nearby_probes, out_file, sep = "\t")
-
-cat("[INFO] Done.\n")
-cat("[INFO] Output written to:", out_file, "\n")
-cat("[INFO] Total nearby probes found:", nrow(nearby_probes), "\n\n")
-
-cat("[INFO] Probe counts per selected motif:\n")
-print(
-  nearby_probes[
-    ,
-    .(
-      n_nearby_probes = .N,
-      n_overlapping_selected_motif = sum(overlaps_selected_motif),
-      n_control_probes = sum(!overlaps_selected_motif),
-      closest_control_probe_distance = suppressWarnings(min(distance_to_motif[!overlaps_selected_motif], na.rm = TRUE))
-    ),
-    by = .(gene, cancer, TF, motif_id)
-  ]
-)
-EOF
-
-# Step 3:
-Rscript - << 'EOF'
-suppressPackageStartupMessages({
-  library(data.table)
+  cat("[STEP 2] Finding nearby control probes...\n")
+  ctrl_list <- lapply(seq_len(nrow(todo)), function(i) {
+    row <- todo[i]
+    nearby <- all_probes[
+      probe_chr   == row$motif_chr &
+      probe_start >= row$win_start &
+      probe_end   <= row$win_end &
+      probe       != row$probe &
+      !(probe_start < row$motif_end &
+        probe_end > row$motif_start)
+    ]
+    if (nrow(nearby) == 0) return(NULL)
+    nearby[, `:=`(gene         = row$gene,
+                  cancer       = row$cancer,
+                  target_probe = row$probe,
+                  motif_id     = row$motif_instance_id,
+                  win_start    = row$win_start,
+                  win_end      = row$win_end)]
+    nearby[]
+  })
+  rbindlist(ctrl_list, fill = TRUE)
 })
 
-# ============================================================
-# Paths
-# ============================================================
+cat(sprintf("[STEP 2] %d control probe rows | %d unique control probes\n",
+            nrow(controls), uniqueN(controls$probe)))
+print(controls[, .N, by = .(gene, cancer, target_probe)][order(-N)][1:min(10,.N)])
 
-nearby_probe_file <- "./results/methylation/local_probe_controls/nearby_HM450_probes_within_1kb.tsv"
-meth_dir          <- "./methylation/filtered_methylation"
-expr_file         <- "./expression/gene_expression_matrix_2d_noOV_noCHOL.tsv"
-cohort_file       <- "./results/multi_omics/samples_2d_noOV_noCHOL.tsv"
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — Load beta values
+# Option B: sample_key uses FULL patient ID (CANCER-TCGA-PART1-PART2)
+#           to match original pipeline format exactly
+# ══════════════════════════════════════════════════════════════════════════════
+beta_long <- load_or_run("step3_beta_long", {
+  shared         <- fread(shared_file, header = FALSE)$V1  # full IDs: CANCER-TCGA-PART1-PART2
+  cancers_needed <- unique(todo$cancer)
+  control_probes <- unique(controls$probe)
+  target_probes  <- unique(todo$probe)
 
-outdir <- "./results/methylation/local_probe_controls/probe_level_1kb"
-dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+  # 3a — target probes from beta matrices
+  # Column names in beta matrices: CANCER-TCGA-PART1-PART2_tumor / _healthy (lowercase)
+  cat("[STEP 3a] Loading target probe betas from beta matrices...\n")
+  target_beta <- rbindlist(lapply(cancers_needed, function(cx) {
+    bf <- list.files(beta_dir, pattern = paste0(cx, ".*\\.tsv\\.gz$"), full.names = TRUE)
+    if (length(bf) == 0) { cat(sprintf("  [WARN] No beta matrix for %s\n", cx)); return(NULL) }
+    mat <- fread(bf[1])
+    if (!"probe" %in% colnames(mat)) setnames(mat, 1, "probe")
+    mat <- mat[probe %in% target_probes]
+    if (nrow(mat) == 0) return(NULL)
+    long <- melt(mat, id.vars = "probe", variable.name = "col_name", value.name = "meth_beta")
+    long[, col_name := as.character(col_name)]
+    # Extract full patient (CANCER-TCGA-PART1-PART2) — strip trailing _tumor / _healthy
+    long[, full_patient := sub("_(tumor|healthy)$", "", col_name)]
+    long[, sample_type  := sub(".*_(tumor|healthy)$", "\\1", col_name)]   # lowercase
+    long[, sample_key   := paste(full_patient, sample_type, sep = "_")]   # CANCER-TCGA-XX-YY_tumor
+    long <- long[sample_type %in% c("tumor","healthy") & full_patient %in% shared]
+    if (nrow(long) == 0) return(NULL)
+    long[, cancer := cx]
+    if (max(long$meth_beta, na.rm = TRUE) <= 1.5)
+      long[, meth_pct := meth_beta * 100] else
+      long[, meth_pct := meth_beta]
+    long[, .(cancer, probe, sample_key, meth_pct)]
+  }), fill = TRUE)
+  cat(sprintf("  Target beta rows: %d | Unique probes: %d\n",
+              nrow(target_beta), uniqueN(target_beta$probe)))
 
-out_merged <- file.path(outdir, "nearby_probe_expression_methylation_1kb.tsv.gz")
-out_cor    <- file.path(outdir, "nearby_probe_correlation_results_1kb.tsv")
+  # 3b — control probes from raw methylation files (10 workers)
+  # sample_key format: CANCER-TCGA-PART1-PART2_tumor  (full, lowercase)
+  raw_files <- list.files(meth_dir,
+    pattern = "(01A_1|11A_1)_annotated_methylation_filtered\\.bed\\.gz$",
+    full.names = TRUE)
+  raw_meta <- data.table(file = raw_files, fname = basename(raw_files))
+  raw_meta[, cancer       := sub("^HM450_TCGA-([A-Z]+)-.*", "\\1", fname)]
+  raw_meta[, full_patient := sub("^HM450_TCGA-([A-Z]+-TCGA-[A-Z0-9]+-[A-Z0-9]+)-.*", "\\1", fname)]
+  raw_meta[, sample_type  := fifelse(grepl("-01A_1_", fname), "tumor",
+                             fifelse(grepl("-11A_1_", fname), "healthy", NA_character_))]
+  raw_meta[, sample_key   := paste(full_patient, sample_type, sep = "_")]
+  raw_meta <- raw_meta[cancer %in% cancers_needed & !is.na(sample_type) & full_patient %in% shared]
+  cat(sprintf("[STEP 3b] %d raw files to read (10 workers)...\n", nrow(raw_meta)))
 
-min_n_cor <- 3L
-
-# ============================================================
-# Helper functions
-# ============================================================
-
-clean_sample_type <- function(x) {
-  x <- trimws(as.character(x))
-  x[tolower(x) %in% c("healthy", "normal", "solid tissue normal", "adjacent normal")] <- "Healthy"
-  x[tolower(x) %in% c("tumor", "primary tumor", "primary tumour", "cancer")] <- "Tumor"
-  x
-}
-
-extract_sample_barcode_from_meth_file <- function(x) {
-  x <- basename(as.character(x))
-  out <- sub("^HM450_TCGA-[^-]+-(TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z]).*$", "\\1", x)
-  out[!grepl("^TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z]$", out)] <- NA_character_
-  out
-}
-
-extract_patient_id <- function(x) {
-  x <- as.character(x)
-  out <- sub("^(TCGA-[^-]+-[^-]+).*$", "\\1", x)
-  out[!grepl("^TCGA-[^-]+-[^-]+$", out)] <- NA_character_
-  out
-}
-
-extract_sample_type_tcga <- function(x) {
-  x <- as.character(x)
-  code <- sub("^TCGA-[^-]+-[^-]+-([0-9]{2})[A-Z]$", "\\1", x)
-  fifelse(code == "01", "Tumor",
-          fifelse(code == "11", "Healthy", NA_character_))
-}
-
-extract_expr_sample_barcode <- function(x) {
-  x <- as.character(x)
-  out <- sub("^TCGA-[^-]+-(TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z])(?:_.*)?$", "\\1", x)
-  out[!grepl("^TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z]$", out)] <- NA_character_
-  out
-}
-
-extract_expr_cancer <- function(x) {
-  x <- as.character(x)
-  out <- sub("^TCGA-([^-]+)-TCGA-[^-]+-[^-]+-[0-9]{2}[A-Z](?:_.*)?$", "\\1", x)
-  out[!grepl("^[A-Z0-9]+$", out)] <- NA_character_
-  out
-}
-
-safe_pearson <- function(x, y, min_n = 3L) {
-  ok <- is.finite(x) & is.finite(y)
-  x <- x[ok]
-  y <- y[ok]
-  n <- length(x)
-
-  if (n < min_n) return(list(n = n, r = NA_real_, p = NA_real_))
-  if (length(unique(x)) < 2 || length(unique(y)) < 2) {
-    return(list(n = n, r = NA_real_, p = NA_real_))
+  read_one <- function(i) {
+    dt <- tryCatch(
+      fread(cmd = paste("zcat", shQuote(raw_meta$file[i])),
+            header = FALSE, select = c(4L, 5L),
+            col.names = c("probe", "meth_beta"), showProgress = FALSE),
+      error = function(e) NULL)
+    if (is.null(dt) || nrow(dt) == 0) return(NULL)
+    dt[, meth_beta := suppressWarnings(as.numeric(meth_beta))]
+    dt <- dt[probe %chin% control_probes & is.finite(meth_beta)]
+    if (nrow(dt) == 0) return(NULL)
+    dt[, `:=`(cancer     = raw_meta$cancer[i],
+               sample_key = raw_meta$sample_key[i])]
+    if (max(dt$meth_beta, na.rm = TRUE) <= 1.5)
+      dt[, meth_pct := meth_beta * 100] else
+      dt[, meth_pct := meth_beta]
+    dt[, .(cancer, probe, sample_key, meth_pct)]
   }
 
-  ct <- tryCatch(cor.test(x, y, method = "pearson"), error = function(e) NULL)
-  if (is.null(ct)) return(list(n = n, r = NA_real_, p = NA_real_))
+  n_files    <- nrow(raw_meta)
+  chunk_size <- 10L
+  chunks     <- split(seq_len(n_files), ceiling(seq_len(n_files) / chunk_size))
+  n_chunks   <- length(chunks)
 
-  list(n = n, r = unname(ct$estimate), p = ct$p.value)
-}
+  cl <- makeCluster(10L)
+  clusterExport(cl, varlist = c("raw_meta", "control_probes"), envir = environment())
+  clusterEvalQ(cl, library(data.table))
 
-# ============================================================
-# 1. Read nearby probes
-# ============================================================
+  res_list <- vector("list", n_chunks)
+  for (k in seq_along(chunks)) {
+    res_list[[k]] <- parLapply(cl, chunks[[k]], read_one)
+    cat(sprintf("\r  Progress: %d / %d files (%.0f%%)",
+                min(k * chunk_size, n_files), n_files, 100 * k / n_chunks))
+    flush.console()
+  }
+  stopCluster(cl)
+  cat("\n")
 
-cat("[INFO] Reading nearby probe table...\n")
-nearby <- fread(nearby_probe_file)
+  control_beta <- rbindlist(unlist(res_list, recursive = FALSE), fill = TRUE)
+  cat(sprintf("  Control beta rows: %d | Unique probes: %d\n",
+              nrow(control_beta), uniqueN(control_beta$probe)))
 
-nearby[, probe := as.character(probe)]
-nearby[, gene := as.character(gene)]
-nearby[, cancer := as.character(cancer)]
-nearby[, TF := as.character(TF)]
-nearby[, motif_id := as.character(motif_id)]
-
-nearby[, probe_class := fifelse(
-  overlaps_selected_motif == TRUE,
-  "motif_overlapping_probe",
-  "nearby_control_probe"
-)]
-
-probe_keep <- unique(nearby$probe)
-genes_keep <- unique(nearby$gene)
-cancers_keep <- unique(nearby$cancer)
-
-cat("[INFO] Probes to extract: ", length(probe_keep), "\n", sep = "")
-cat("[INFO] Genes: ", paste(genes_keep, collapse = ", "), "\n", sep = "")
-cat("[INFO] Cancers: ", paste(cancers_keep, collapse = ", "), "\n", sep = "")
-
-# ============================================================
-# 2. Build methylation sample annotation
-# ============================================================
-
-cat("[INFO] Building methylation sample annotation...\n")
-
-cohort <- fread(cohort_file, header = FALSE)
-patients_keep <- unique(as.character(cohort[[1]]))
-patients_keep <- patients_keep[grepl("^TCGA-[^-]+-[^-]+$", patients_keep)]
-
-files <- list.files(meth_dir, pattern = "\\.bed\\.gz$", full.names = TRUE)
-
-sa <- data.table(file = files, fname = basename(files))
-sa[, sample_barcode := extract_sample_barcode_from_meth_file(fname)]
-sa[, patient_id := extract_patient_id(sample_barcode)]
-sa[, sample_type := extract_sample_type_tcga(sample_barcode)]
-sa[, cancer := sub("^HM450_TCGA-([^-]+)-.*$", "\\1", fname)]
-
-sa <- sa[
-  !is.na(sample_barcode) &
-    !is.na(patient_id) &
-    !is.na(sample_type) &
-    patient_id %in% patients_keep &
-    cancer %in% cancers_keep &
-    file.exists(file)
-]
-
-sa <- unique(sa[, .(patient_id, sample_barcode, sample_type, cancer, file)])
-
-cat("[INFO] Methylation samples kept: ", nrow(sa), "\n", sep = "")
-
-# ============================================================
-# 3. Extract methylation beta values for nearby probes
-# ============================================================
-
-cat("[INFO] Extracting probe methylation values from HM450 files...\n")
-
-read_one_sample <- function(i) {
-  f  <- sa$file[i]
-  sb <- sa$sample_barcode[i]
-  st <- sa$sample_type[i]
-  ca <- sa$cancer[i]
-
-  dt <- tryCatch(
-    fread(f, header = FALSE, select = c(4, 5), showProgress = FALSE),
-    error = function(e) NULL
-  )
-
-  if (is.null(dt) || nrow(dt) == 0) return(NULL)
-
-  setnames(dt, c("probe", "meth_beta"))
-  dt[, probe := as.character(probe)]
-  dt[, meth_beta := suppressWarnings(as.numeric(meth_beta))]
-
-  dt <- dt[probe %in% probe_keep & is.finite(meth_beta)]
-
-  if (nrow(dt) == 0) return(NULL)
-
-  dt[, `:=`(
-    sample_barcode = sb,
-    sample_type = st,
-    cancer = ca
-  )]
-
-  dt[]
-}
-
-meth_list <- lapply(seq_len(nrow(sa)), read_one_sample)
-meth_long <- rbindlist(meth_list, fill = TRUE)
-
-if (nrow(meth_long) == 0) stop("No methylation values recovered for nearby probes.")
-
-cat("[INFO] Methylation rows recovered: ", nrow(meth_long), "\n", sep = "")
-
-# Convert to percent when beta is 0-1
-if (max(meth_long$meth_beta, na.rm = TRUE) <= 1.5) {
-  meth_long[, meth_percent := meth_beta * 100]
-} else {
-  meth_long[, meth_percent := meth_beta]
-}
-
-# ============================================================
-# 4. Read expression and keep selected genes/cancers
-# ============================================================
-
-cat("[INFO] Reading expression matrix...\n")
-
-expr <- fread(expr_file)
-
-if (!"sample" %in% names(expr)) {
-  stop("Expression file must contain a column named 'sample'.")
-}
-
-missing_genes <- setdiff(genes_keep, names(expr))
-if (length(missing_genes) > 0) {
-  stop("Missing genes in expression matrix: ", paste(missing_genes, collapse = ", "))
-}
-
-expr <- expr[, c("sample", genes_keep), with = FALSE]
-
-expr_long <- melt(
-  expr,
-  id.vars = "sample",
-  variable.name = "gene",
-  value.name = "expression",
-  variable.factor = FALSE
-)
-
-expr_long[, `:=`(
-  sample = as.character(sample),
-  gene = as.character(gene),
-  expression = suppressWarnings(as.numeric(expression))
-)]
-
-expr_long[, sample_barcode := extract_expr_sample_barcode(sample)]
-expr_long[, cancer := extract_expr_cancer(sample)]
-expr_long[, sample_type_expr := extract_sample_type_tcga(sample_barcode)]
-
-expr_long <- expr_long[
-  cancer %in% cancers_keep &
-    gene %in% genes_keep &
-    !is.na(sample_barcode) &
-    is.finite(expression)
-]
-
-# ============================================================
-# 5. Merge nearby probe annotation, methylation, and expression
-# ============================================================
-
-cat("[INFO] Merging methylation with nearby-probe annotation...\n")
-
-probe_meth <- merge(
-  nearby,
-  meth_long,
-  by = c("probe", "cancer"),
-  allow.cartesian = TRUE
-)
-
-cat("[INFO] Probe methylation rows after annotation merge: ", nrow(probe_meth), "\n", sep = "")
-
-cat("[INFO] Merging with expression...\n")
-
-merged <- merge(
-  probe_meth,
-  expr_long[, .(gene, cancer, sample_barcode, expression)],
-  by = c("gene", "cancer", "sample_barcode"),
-  all = FALSE,
-  allow.cartesian = TRUE
-)
-
-merged[, log2_expr := log2(expression + 1)]
-
-merged <- merged[
-  is.finite(meth_percent) &
-    is.finite(log2_expr)
-]
-
-if (nrow(merged) == 0) {
-  stop("Merged methylation-expression table is empty. Check sample barcode/cancer formats.")
-}
-
-setorder(merged, gene, cancer, TF, motif_id, probe_class, distance_to_motif, probe, sample_type, sample_barcode)
-
-fwrite(merged, out_merged, sep = "\t")
-
-cat("[INFO] Merged table written to: ", out_merged, "\n", sep = "")
-cat("[INFO] Merged rows: ", nrow(merged), "\n", sep = "")
-
-# ============================================================
-# 6. Compute probe-level correlations
-# ============================================================
-
-cat("[INFO] Computing probe-level correlations...\n")
-
-cor_dt <- merged[
-  ,
-  {
-    z <- safe_pearson(meth_percent, log2_expr, min_n = min_n_cor)
-    .(
-      n = z$n,
-      pearson_r = z$r,
-      pearson_p = z$p,
-      n_healthy = sum(sample_type == "Healthy", na.rm = TRUE),
-      n_tumor = sum(sample_type == "Tumor", na.rm = TRUE),
-      mean_meth_healthy = mean(meth_percent[sample_type == "Healthy"], na.rm = TRUE),
-      mean_meth_tumor = mean(meth_percent[sample_type == "Tumor"], na.rm = TRUE),
-      mean_expr_healthy = mean(log2_expr[sample_type == "Healthy"], na.rm = TRUE),
-      mean_expr_tumor = mean(log2_expr[sample_type == "Tumor"], na.rm = TRUE)
-    )
-  },
-  by = .(
-    gene, cancer, TF, motif_id,
-    probe, probe_class,
-    distance_to_motif,
-    probe_chr, probe_start, probe_end,
-    overlaps_selected_motif
-  )
-]
-
-cor_dt[, pearson_fdr := p.adjust(pearson_p, method = "BH"), by = .(gene, cancer, TF, motif_id)]
-setorder(cor_dt, gene, cancer, TF, motif_id, probe_class, distance_to_motif, pearson_fdr)
-
-fwrite(cor_dt, out_cor, sep = "\t")
-
-cat("[INFO] Correlation table written to: ", out_cor, "\n\n", sep = "")
-
-cat("[INFO] Probe-level summary:\n")
-print(
-  cor_dt[
-    ,
-    .(
-      n_probes = .N,
-      n_motif_overlapping = sum(probe_class == "motif_overlapping_probe"),
-      n_controls = sum(probe_class == "nearby_control_probe"),
-      strongest_probe = probe[which.max(abs(pearson_r))],
-      strongest_probe_class = probe_class[which.max(abs(pearson_r))],
-      strongest_r = pearson_r[which.max(abs(pearson_r))],
-      strongest_fdr = pearson_fdr[which.max(abs(pearson_r))]
-    ),
-    by = .(gene, cancer, TF, motif_id)
-  ]
-)
-
-cat("\n[INFO] Full correlation results:\n")
-print(cor_dt)
-
-EOF
-
-# step 4 
-Rscript - << 'EOF'
-suppressPackageStartupMessages({
-  library(data.table)
-  library(ggplot2)
+  # 3c — combine (no probe_type here — added in Step 5)
+  rbindlist(list(target_beta, control_beta), fill = TRUE)
 })
 
-# ============================================================
-# Paths
-# ============================================================
+cat(sprintf("[STEP 3] Total beta rows: %d\n", nrow(beta_long)))
 
-merged_file <- "./results/methylation/local_probe_controls/probe_level_1kb/nearby_probe_expression_methylation_1kb.tsv.gz"
-cor_file    <- "./results/methylation/local_probe_controls/probe_level_1kb/nearby_probe_correlation_results_1kb.tsv"
-color_file  <- "./results/multi_omics/cancer_color_order_with_defined_colours.tsv"
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 4 — Load expression from raw STAR count files (Option B)
+# Exactly matches the original pipeline: log2(count+1), col 3 of count files
+# sample_key format: CANCER-TCGA-PART1-PART2_tumor  (full, lowercase)
+# ══════════════════════════════════════════════════════════════════════════════
+count_long <- load_or_run("step4_count_long", {
+  genes_needed   <- unique(todo$gene)
+  cancers_needed <- unique(todo$cancer)
+  shared         <- fread(shared_file, header = FALSE)$V1   # full IDs
 
-outdir <- "./results/methylation/local_probe_controls/probe_level_1kb/probe_plots"
-dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+  cat(sprintf("[STEP 4] Reading count files — %d cancers, %d genes...\n",
+              length(cancers_needed), length(genes_needed)))
 
-# ============================================================
-# Helper functions
-# ============================================================
+  expr_all <- rbindlist(lapply(cancers_needed, function(cx) {
+    cnt_files <- list.files(counts_dir,
+      pattern = paste0("^RNA_TCGA-", cx, "-.*_genes_count\\.txt$"),
+      full.names = TRUE)
+    if (length(cnt_files) == 0) {
+      cat(sprintf("  [WARN] No count files for %s\n", cx))
+      return(NULL)
+    }
+    bn  <- basename(cnt_files)
+    # Full patient: CANCER-TCGA-PART1-PART2
+    pt  <- sub("^RNA_TCGA-([A-Z]+)-TCGA-([A-Z0-9]+-[A-Z0-9]+)-[0-9]+[A-Z]_.*",
+               "\\1-TCGA-\\2", bn)
+    st  <- fifelse(grepl("-01[A-Z]_", bn), "tumor",
+           fifelse(grepl("-11[A-Z]_", bn), "healthy", NA_character_))
+    fkey <- paste(pt, st, sep = "_")   # CANCER-TCGA-PART1-PART2_tumor
 
-safe_name <- function(x) {
-  x <- as.character(x)
-  x <- gsub("[^A-Za-z0-9._-]+", "_", x)
-  x <- gsub("_+", "_", x)
-  x <- gsub("^_|_$", "", x)
-  x
-}
+    keep      <- !is.na(st) & pt %in% shared
+    cnt_files <- cnt_files[keep]
+    fkey      <- fkey[keep]
+    if (length(cnt_files) == 0) return(NULL)
 
-fmt_p <- function(x) {
-  out <- rep(NA_character_, length(x))
-  out[is.na(x)] <- "NA"
-  out[!is.na(x) & x < 2.2e-16] <- "<2.2e-16"
-  idx <- !is.na(x) & x >= 2.2e-16
-  out[idx] <- formatC(x[idx], format = "e", digits = 2)
-  out
-}
+    cat(sprintf("  %s: %d files\n", cx, length(cnt_files)))
+    rbindlist(lapply(seq_along(cnt_files), function(i) {
+      dt <- tryCatch(
+        fread(cnt_files[i], header = FALSE, select = c(2L, 3L),
+              col.names = c("gene", "count"), showProgress = FALSE),
+        error = function(e) NULL)
+      if (is.null(dt) || nrow(dt) == 0) return(NULL)
+      dt[, count := suppressWarnings(as.numeric(count))]
+      dt <- dt[gene %chin% genes_needed & is.finite(count)]
+      if (nrow(dt) == 0) return(NULL)
+      dt[, `:=`(cancer = cx, sample_key = fkey[i])]
+      dt[]
+    }), fill = TRUE)
+  }), fill = TRUE)
 
-p_to_stars <- function(p) {
-  out <- rep(NA_character_, length(p))
-  out[is.na(p)] <- "NA"
-  out[!is.na(p) & p < 0.001] <- "***"
-  out[!is.na(p) & p >= 0.001 & p < 0.01] <- "**"
-  out[!is.na(p) & p >= 0.01 & p < 0.05] <- "*"
-  out[!is.na(p) & p >= 0.05] <- "ns"
-  out
-}
+  expr_all[, log2_expr := log2(count + 1)]
+  expr_all[is.finite(log2_expr)]
+})
 
-clean_sample_type <- function(x) {
-  x <- trimws(as.character(x))
-  x[tolower(x) %in% c("healthy", "normal", "solid tissue normal", "adjacent normal")] <- "Healthy"
-  x[tolower(x) %in% c("tumor", "primary tumor", "primary tumour", "cancer")] <- "Tumor"
-  x
-}
+cat(sprintf("[STEP 4] %d expression rows | %d samples | %d genes\n",
+            nrow(count_long), uniqueN(count_long$sample_key), uniqueN(count_long$gene)))
 
-load_color_map <- function(color_file) {
-  col_dt <- fread(color_file, header = FALSE)
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 5 — Correlations
+# ══════════════════════════════════════════════════════════════════════════════
+cor_results <- load_or_run("step5_cor_results", {
+  cat("[STEP 5] Building probe x sample table...\n")
 
-  if (ncol(col_dt) < 2) {
-    stop("color_file must have at least 2 columns")
+  safe_pearson <- function(x, y, min_n = 5L) {
+    ok <- is.finite(x) & is.finite(y)
+    x <- x[ok]; y <- y[ok]; n <- length(x)
+    if (n < min_n || length(unique(x)) < 2 || length(unique(y)) < 2)
+      return(list(n = n, r = NA_real_, p = NA_real_))
+    ct <- tryCatch(cor.test(x, y, method = "pearson"), error = function(e) NULL)
+    if (is.null(ct)) return(list(n = n, r = NA_real_, p = NA_real_))
+    list(n = n, r = unname(ct$estimate), p = ct$p.value)
   }
 
-  setnames(col_dt, c("cancer", "color"))
+  all_probe_rows <- rbind(
+    todo[,     .(gene, cancer, probe, probe_type = "target")],
+    controls[, .(gene, cancer, probe, probe_type = "control")]
+  )
 
-  col_dt <- unique(col_dt[, .(
-    cancer = sub("^TCGA-", "", as.character(cancer)),
-    color  = as.character(color)
-  )])
+  # Join methylation
+  all_probe_rows <- merge(all_probe_rows, beta_long,
+                          by = c("cancer", "probe"), allow.cartesian = TRUE)
+  cat(sprintf("  After beta join: %d rows\n", nrow(all_probe_rows)))
 
-  col_dt <- col_dt[
-    !is.na(cancer) & nzchar(cancer) &
-      !is.na(color) & nzchar(color)
+  # Join expression (gene + cancer + sample_key — all full-format, match exactly)
+  all_probe_rows <- merge(all_probe_rows,
+                          count_long[, .(gene, cancer, sample_key, log2_expr)],
+                          by = c("gene", "cancer", "sample_key"),
+                          all = FALSE)
+  cat(sprintf("  After expression join: %d rows\n", nrow(all_probe_rows)))
+
+  all_probe_rows[
+    is.finite(meth_pct) & is.finite(log2_expr),
+    { cr <- safe_pearson(meth_pct, log2_expr)
+      .(n = cr$n, pearson_r = cr$r, pearson_p = cr$p) },
+    by = .(gene, cancer, probe, probe_type)
   ]
+})
 
-  setNames(col_dt$color, col_dt$cancer)
-}
+cat(sprintf("[STEP 5] Correlations — target: %d | control: %d\n",
+    cor_results[probe_type == "target"  & !is.na(pearson_r), .N],
+    cor_results[probe_type == "control" & !is.na(pearson_r), .N]))
+cat("[INFO] Preview (target):\n")
+print(cor_results[probe_type == "target"][1:min(10,.N),
+      .(gene, cancer, probe, probe_type, n, pearson_r, pearson_p)])
+cat("[INFO] Preview (control):\n")
+print(cor_results[probe_type == "control"][1:min(10,.N),
+      .(gene, cancer, probe, probe_type, n, pearson_r, pearson_p)])
 
-safe_wilcox_hc <- function(values, groups, min_n = 2L) {
-  keep <- is.finite(values) & !is.na(groups)
-  values <- values[keep]
-  groups <- clean_sample_type(groups[keep])
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 6 — Save
+# ══════════════════════════════════════════════════════════════════════════════
+out_file <- file.path(out_dir, paste0("control_probe_correlations_", tf_name, ".tsv"))
+fwrite(cor_results, out_file, sep = "\t")
+cat(sprintf("[DONE] Results saved to %s\n", out_file))
 
-  keep2 <- groups %in% c("Healthy", "Tumor")
-  values <- values[keep2]
-  groups <- groups[keep2]
-
-  n_h <- sum(groups == "Healthy")
-  n_t <- sum(groups == "Tumor")
-
-  if (n_h < min_n || n_t < min_n) {
-    return(list(
-      p = NA_real_,
-      n_h = n_h,
-      n_t = n_t,
-      status = "insufficient_n"
-    ))
-  }
-
-  wt <- tryCatch(
-    suppressWarnings(wilcox.test(values ~ groups, exact = FALSE)),
-    error = function(e) NULL
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 7 — Compare target r vs mean control r
+# For each target probe: mean(control pearson_r) vs target pearson_r
+# delta_r = target_r - mean_ctrl_r  (negative = target more correlated than controls)
+# ══════════════════════════════════════════════════════════════════════════════
+comparison <- load_or_run("step7_comparison", {
+  cat("[STEP 7] Comparing target r vs mean control r...\n")
+ 
+  # Link each control probe back to its target probe
+  ctrl_map <- unique(controls[, .(gene, cancer, probe, target_probe)])
+ 
+  ctrl_r <- merge(
+    cor_results[probe_type == "control" & !is.na(pearson_r),
+                .(gene, cancer, probe, ctrl_r = pearson_r)],
+    ctrl_map,
+    by = c("gene", "cancer", "probe")
   )
+ 
+  # Mean control r per (gene, cancer, target_probe)
+  ctrl_mean <- ctrl_r[, .(mean_ctrl_r = mean(ctrl_r), n_ctrl = .N),
+                       by = .(gene, cancer, target_probe)]
+ 
+  # Target r
+  target_r <- cor_results[probe_type == "target" & !is.na(pearson_r),
+                           .(gene, cancer, probe, target_r = pearson_r)]
+ 
+  comp <- merge(target_r, ctrl_mean,
+                by.x = c("gene", "cancer", "probe"),
+                by.y = c("gene", "cancer", "target_probe"))
+ 
+  comp[, delta_r := target_r - mean_ctrl_r]
+  comp
+})
+ 
+cat("\n=== Target r vs mean control r ===\n")
+print(comparison[order(delta_r), .(gene, cancer, probe, target_r, mean_ctrl_r, n_ctrl, delta_r)])
+ 
+cat("\n=== Summary of delta_r ===\n")
+print(summary(comparison$delta_r))
+ 
+cat(sprintf("\nTarget probes more negative than controls (delta_r < 0): %d / %d\n",
+    comparison[delta_r < 0, .N], nrow(comparison)))
+ 
+comp_file <- file.path(out_dir, paste0("target_vs_control_mean_", tf_name, ".tsv"))
+fwrite(comparison, comp_file, sep = "\t")
+cat(sprintf("[STEP 7] Comparison saved to %s\n", comp_file))
+ 
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 8 — Scatter plot: target r vs mean control r
+# ══════════════════════════════════════════════════════════════════════════════
+cat("[STEP 8] Generating scatter plot...\n")
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(ggrepel))
+ 
+thresh <- 0.1   # 10% r change threshold
+ 
+lim <- range(c(comparison$target_r, comparison$mean_ctrl_r), na.rm = TRUE)
+pad <- diff(lim) * 0.07
+lim <- c(lim[1] - pad, lim[2] + pad)
+ 
+n_below   <- comparison[delta_r <  0,      .N]
+n_above   <- comparison[delta_r >= 0,      .N]
+n_sig_neg <- comparison[delta_r < -thresh, .N]
+n_sig_pos <- comparison[delta_r >  thresh, .N]
+ 
+# Label only top 10 by absolute delta_r
+top10_idx <- order(abs(comparison$delta_r), decreasing = TRUE)[1:min(10L, nrow(comparison))]
+comparison[, label := fifelse(.I %in% top10_idx,
+                               paste(gene, cancer, sep = "\n"), NA_character_)]
+ 
+p <- ggplot(comparison, aes(x = mean_ctrl_r, y = target_r, label = label)) +
+  # zero lines
+  geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.4) +
+  geom_vline(xintercept = 0, colour = "grey75", linewidth = 0.4) +
+  # threshold bands (±10% r change)
+  geom_abline(slope = 1, intercept =  thresh, linetype = "dotted",
+              colour = "#4575b4", linewidth = 0.7) +
+  geom_abline(slope = 1, intercept = -thresh, linetype = "dotted",
+              colour = "#d73027", linewidth = 0.7) +
+  # identity diagonal
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed",
+              colour = "grey30", linewidth = 0.6) +
+  # points
+  geom_point(aes(colour = delta_r), size = 1, alpha = 0.85) +
+  # labels — only top 10 by |delta_r|, plain text no box
+  geom_text_repel(na.rm = TRUE, size = 2.5, max.overlaps = 20,
+                  box.padding = 0.35, point.padding = 0.2,
+                  segment.colour = "grey40", segment.size = 0.3) +
+  scale_colour_gradient2(
+    low = "#d73027", mid = "grey85", high = "#4575b4",
+    midpoint = 0, limits = c(-0.5, 0.5), oob = scales::squish,
+    name = "delta_r\n(target − ctrl)") +
+  coord_equal(xlim = lim, ylim = lim) +
+  annotate("text", x = lim[1] + 0.02, y = lim[2] - 0.02,
+           label = sprintf(">10%% above: %d", n_sig_pos),
+           hjust = 0, vjust = 1, size = 3.5, colour = "#4575b4") +
+  annotate("text", x = lim[2] - 0.02, y = lim[1] + 0.02,
+           label = sprintf(">10%% below: %d", n_sig_neg),
+           hjust = 1, vjust = 0, size = 3.5, colour = "#d73027") +
+  labs(
+    title    = sprintf("%s — target probe r vs mean control probe r", tf_name),
+    subtitle = sprintf("%d / %d probes below diagonal  |  ±10%% threshold: %d negative, %d positive",
+                       n_below, nrow(comparison), n_sig_neg, n_sig_pos),
+    x = "Mean control probe r",
+    y = "Target probe r") +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "right", plot.subtitle = element_text(size = 10))
+ 
+plot_file <- file.path(out_dir, paste0("plot_target_vs_ctrl_mean_", tf_name, ".png"))
+ggsave(plot_file, p, width = 6, height = 6, dpi = 150)
+cat(sprintf("[DONE] Plot saved to %s\n", plot_file))
 
-  if (is.null(wt)) {
-    return(list(
-      p = NA_real_,
-      n_h = n_h,
-      n_t = n_t,
-      status = "wilcox_error"
-    ))
-  }
-
-  list(
-    p = wt$p.value,
-    n_h = n_h,
-    n_t = n_t,
-    status = "ok"
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 9 — Fisher z-test: is target r significantly more negative than controls?
+#
+# For each target probe:
+#   z_target    = atanh(target_r),  SE = 1/sqrt(n_target - 3)
+#   z_ctrl_i    = atanh(ctrl_r_i)  for each control probe
+#   z_mean_ctrl = mean(z_ctrl_i),   SE = sd(z_ctrl_i) / sqrt(n_ctrl_probes)
+#   z_stat      = (z_target - z_mean_ctrl) / sqrt(SE_target^2 + SE_mean_ctrl^2)
+#   p_fisher    = pnorm(z_stat)  [one-tailed: target MORE negative than controls]
+# ══════════════════════════════════════════════════════════════════════════════
+fisher_results <- load_or_run("step9_fisher", {
+  cat("[STEP 9] Fisher z-test: target r vs control r distribution...\n")
+ 
+  # Target probe info (r + n)
+  target_info <- cor_results[probe_type == "target" & !is.na(pearson_r),
+                              .(gene, cancer, probe,
+                                target_r = pearson_r, n_target = n)]
+  target_info[, z_target  := atanh(target_r)]
+  target_info[, se_target := 1 / sqrt(pmax(n_target - 3L, 1L))]
+ 
+  # Control probe r values linked to each target probe
+  ctrl_map  <- unique(controls[, .(gene, cancer, probe, target_probe)])
+  ctrl_info <- merge(
+    cor_results[probe_type == "control" & !is.na(pearson_r),
+                .(gene, cancer, probe, ctrl_r = pearson_r)],
+    ctrl_map,
+    by = c("gene", "cancer", "probe")
   )
-}
+  ctrl_info[, z_ctrl := atanh(ctrl_r)]
+ 
+  # Summarise control z distribution per target probe
+  ctrl_summary <- ctrl_info[, {
+    n_p   <- .N
+    z_mu  <- mean(z_ctrl)
+    z_sd  <- if (n_p > 1L) sd(z_ctrl) else NA_real_
+    se_mu <- if (n_p > 1L) z_sd / sqrt(n_p) else NA_real_
+    .(n_ctrl_probes = n_p,
+      z_mean_ctrl   = z_mu,
+      z_sd_ctrl     = z_sd,
+      se_mean_ctrl  = se_mu)
+  }, by = .(gene, cancer, target_probe)]
+ 
+  # Merge and compute test statistic
+  res <- merge(target_info, ctrl_summary,
+               by.x = c("gene", "cancer", "probe"),
+               by.y = c("gene", "cancer", "target_probe"))
+ 
+  # z_stat: NA when only 1 control probe (no SD estimate)
+  res[, z_stat   := (z_target - z_mean_ctrl) /
+                     sqrt(se_target^2 + se_mean_ctrl^2)]
+  # One-tailed: P(target more negative than controls)
+  res[, p_fisher := pnorm(z_stat)]
+  res[, p_adj    := p.adjust(p_fisher, method = "BH")]
+ 
+  res[order(p_fisher)]
+})
+ 
+cat("\n=== Fisher z-test results ===\n")
+print(fisher_results[, .(gene, cancer, probe, target_r, n_ctrl_probes,
+                          z_stat, p_fisher, p_adj)])
+ 
+cat(sprintf("\nSignificant (p_fisher < 0.05): %d / %d\n",
+    fisher_results[p_fisher < 0.05, .N], nrow(fisher_results)))
+cat(sprintf("Significant after BH correction (p_adj < 0.05): %d / %d\n",
+    fisher_results[p_adj < 0.05, .N], nrow(fisher_results)))
+ 
+fisher_file <- file.path(out_dir, paste0("fisher_test_", tf_name, ".tsv"))
+fwrite(fisher_results, fisher_file, sep = "\t")
+cat(sprintf("[DONE] Fisher results saved to %s\n", fisher_file))
 
-make_dual_panel_dt <- function(d) {
-  d <- copy(d)
-
-  y1_min <- suppressWarnings(min(d$log2_expr, na.rm = TRUE))
-  y1_max <- suppressWarnings(max(d$log2_expr, na.rm = TRUE))
-
-  if (!is.finite(y1_min) || !is.finite(y1_max) || y1_min == y1_max) {
-    y1_min <- 0
-    y1_max <- 1
-  }
-
-  y2_min <- 0
-  y2_max <- 100
-
-  scale_factor <- (y1_max - y1_min) / (y2_max - y2_min)
-
-  if (!is.finite(scale_factor) || scale_factor == 0) {
-    scale_factor <- 1
-  }
-
-  expr_dt <- d[, .(
-    sample_type,
-    cancer,
-    measure = "Expression",
-    value_raw = log2_expr,
-    value_plot = log2_expr
-  )]
-
-  meth_dt <- d[, .(
-    sample_type,
-    cancer,
-    measure = "Methylation",
-    value_raw = meth_percent,
-    value_plot = (meth_percent - y2_min) * scale_factor + y1_min
-  )]
-
-  out <- rbindlist(list(expr_dt, meth_dt), fill = TRUE)
-
-  out[, x_num := fifelse(
-    measure == "Expression" & sample_type == "Healthy", 1,
-    fifelse(
-      measure == "Expression" & sample_type == "Tumor", 2,
-      fifelse(
-        measure == "Methylation" & sample_type == "Healthy", 4, 5
-      )
-    )
-  )]
-
-  list(
-    dt = out,
-    y1_min = y1_min,
-    y1_max = y1_max,
-    y2_min = y2_min,
-    y2_max = y2_max,
-    scale_factor = scale_factor
-  )
-}
-
-# ============================================================
-# Read data
-# ============================================================
-
-cat("[INFO] Reading merged methylation-expression table...\n")
-dt <- fread(merged_file)
-
-cat("[INFO] Reading correlation table...\n")
-cor_dt <- fread(cor_file)
-
-cat("[INFO] Reading cancer color map...\n")
-color_map_global <- load_color_map(color_file)
-
-# Clean cancer names
-dt[, cancer := sub("^TCGA-", "", as.character(cancer))]
-cor_dt[, cancer := sub("^TCGA-", "", as.character(cancer))]
-
-# Clean sample type
-dt[, sample_type := clean_sample_type(sample_type)]
-
-dt <- dt[
-  sample_type %in% c("Healthy", "Tumor") &
-    is.finite(meth_percent) &
-    is.finite(log2_expr)
-]
-
-if (nrow(dt) == 0) {
-  stop("No valid rows found in merged table after filtering.")
-}
-
-# Label probe class
-cor_dt[, probe_class_label := fifelse(
-  probe_class == "motif_overlapping_probe",
-  "Motif-overlapping probe",
-  "Nearby control probe"
-)]
-
-# ============================================================
-# Build plot key table
-# ============================================================
-
-plot_keys <- unique(cor_dt[, .(
-  gene,
-  cancer,
-  TF,
-  motif_id,
-  probe,
-  probe_class,
-  probe_class_label,
-  distance_to_motif,
-  pearson_r,
-  pearson_p,
-  pearson_fdr,
-  n
-)])
-
-setorder(plot_keys, gene, cancer, TF, motif_id, probe_class, distance_to_motif, probe)
-
-cat("[INFO] Number of probes to plot: ", nrow(plot_keys), "\n", sep = "")
-
-report_index <- list()
-
-# ============================================================
-# Plot one PDF per probe
-# ============================================================
-
-for (i in seq_len(nrow(plot_keys))) {
-
-  key <- plot_keys[i]
-
-  d <- dt[
-    gene == key$gene &
-      cancer == key$cancer &
-      TF == key$TF &
-      motif_id == key$motif_id &
-      probe == key$probe
-  ]
-
-  if (nrow(d) == 0) {
-    next
-  }
-
-  d[, sample_type := factor(sample_type, levels = c("Tumor", "Healthy"))]
-  d[, cancer := factor(as.character(cancer), levels = key$cancer)]
-
-  cancer_i <- as.character(key$cancer)
-
-  cancer_color <- color_map_global[cancer_i]
-
-  if (is.na(cancer_color) || !nzchar(cancer_color)) {
-    cancer_color <- "grey50"
-  }
-
-  probe_label <- ifelse(
-    key$probe_class == "motif_overlapping_probe",
-    "motif-overlapping probe",
-    "nearby control probe"
-  )
-
-  stat_label <- paste0(
-    "probe = ", key$probe,
-    "\nclass = ", probe_label,
-    "\ndistance = ", key$distance_to_motif, " bp",
-    "\nn = ", key$n,
-    "\nr = ", ifelse(is.na(key$pearson_r), "NA", sprintf("%.3f", key$pearson_r)),
-    "\np = ", fmt_p(key$pearson_p),
-    "\nFDR = ", fmt_p(key$pearson_fdr)
-  )
-
-  base_name <- paste0(
-    safe_name(key$gene), "__",
-    safe_name(key$cancer), "__",
-    safe_name(key$TF), "__",
-    safe_name(key$probe_class), "__",
-    safe_name(key$probe)
-  )
-
-  out_pdf <- file.path(outdir, paste0(base_name, "_probe_report.pdf"))
-
-  pdf(out_pdf, width = 10, height = 8)
-
-  # ==========================================================
-  # Page 1: Scatter plot
-  # ==========================================================
-
-  p1 <- ggplot(
-    d,
-    aes(
-      x = meth_percent,
-      y = log2_expr,
-      shape = sample_type,
-      color = cancer
-    )
-  ) +
-    geom_point(size = 2.3, alpha = 0.65) +
-    geom_hline(
-      yintercept = 1,
-      color = "red",
-      linewidth = 0.8,
-      linetype = "dashed"
-    ) +
-    annotate(
-      "text",
-      x = 95,
-      y = 1,
-      label = "expression = 1",
-      color = "red",
-      vjust = -0.5,
-      hjust = 1,
-      size = 4
-    ) +
-    geom_smooth(
-      aes(group = 1),
-      method = "lm",
-      se = FALSE,
-      color = "black",
-      linewidth = 0.8
-    ) +
-    annotate(
-      "text",
-      x = Inf,
-      y = Inf,
-      label = stat_label,
-      hjust = 1.02,
-      vjust = 1.05,
-      size = 4
-    ) +
-    scale_x_continuous(
-      limits = c(0, 100),
-      breaks = c(0, 25, 50, 75, 100),
-      expand = c(0.01, 0.01)
-    ) +
-    scale_shape_manual(
-      values = c(Tumor = 16, Healthy = 17),
-      breaks = c("Tumor", "Healthy"),
-      labels = c("Tumor", "Healthy"),
-      name = "Sample type"
-    ) +
-    scale_color_manual(
-      values = setNames(cancer_color, cancer_i),
-      breaks = cancer_i,
-      labels = cancer_i,
-      name = "Cancer type",
-      drop = FALSE
-    ) +
-    labs(
-      title = paste0(
-        key$gene,
-        " in ",
-        key$cancer,
-        " | ",
-        key$TF,
-        " local CpG control"
-      ),
-      subtitle = paste0(
-        key$probe,
-        " | ",
-        probe_label,
-        " | distance to selected motif: ",
-        key$distance_to_motif,
-        " bp"
-      ),
-      x = "Probe methylation (%)",
-      y = "log2(expression + 1)"
-    ) +
-    theme_bw(base_size = 13) +
-    theme(
-      plot.title = element_text(face = "bold"),
-      legend.position = "right"
-    )
-
-  print(p1)
-
-  # ==========================================================
-  # Page 2: Dual-panel summary
-  # ==========================================================
-
-  dual <- make_dual_panel_dt(d)
-  d_dual <- dual$dt
-
-  sf <- dual$scale_factor
-  y1_min <- dual$y1_min
-  y2_min <- dual$y2_min
-
-  expr_test <- safe_wilcox_hc(d$log2_expr, d$sample_type)
-  meth_test <- safe_wilcox_hc(d$meth_percent, d$sample_type)
-
-  expr_star <- p_to_stars(expr_test$p)
-  meth_star <- p_to_stars(meth_test$p)
-
-  expr_vals <- d_dual[measure == "Expression"]$value_plot
-  meth_vals <- d_dual[measure == "Methylation"]$value_plot
-
-  expr_range <- diff(range(expr_vals, na.rm = TRUE))
-  if (!is.finite(expr_range) || expr_range == 0) {
-    expr_range <- 1
-  }
-
-  meth_range <- diff(range(meth_vals, na.rm = TRUE))
-  if (!is.finite(meth_range) || meth_range == 0) {
-    meth_range <- 1
-  }
-
-  expr_y <- max(expr_vals, na.rm = TRUE) + 0.08 * expr_range
-  meth_y <- max(meth_vals, na.rm = TRUE) + 0.08 * meth_range
-
-  p2 <- ggplot() +
-    geom_boxplot(
-      data = d_dual,
-      aes(
-        x = x_num,
-        y = value_plot,
-        group = x_num
-      ),
-      width = 0.55,
-      outlier.shape = NA,
-      color = "#0b3c5d",
-      fill = NA
-    ) +
-    geom_jitter(
-      data = d_dual,
-      aes(
-        x = x_num,
-        y = value_plot
-      ),
-      color = cancer_color,
-      width = 0.12,
-      height = 0,
-      size = 1.8,
-      alpha = 0.60
-    ) +
-    stat_summary(
-      data = d_dual,
-      aes(
-        x = x_num,
-        y = value_plot,
-        group = x_num
-      ),
-      fun = median,
-      geom = "point",
-      shape = 95,
-      size = 10,
-      color = "black"
-    ) +
-    annotate(
-      "segment",
-      x = 1,
-      xend = 2,
-      y = expr_y,
-      yend = expr_y,
-      linewidth = 0.7
-    ) +
-    annotate(
-      "text",
-      x = 1.5,
-      y = expr_y + 0.03 * expr_range,
-      label = expr_star,
-      size = 6
-    ) +
-    annotate(
-      "segment",
-      x = 4,
-      xend = 5,
-      y = meth_y,
-      yend = meth_y,
-      linewidth = 0.7
-    ) +
-    annotate(
-      "text",
-      x = 4.5,
-      y = meth_y + 0.03 * meth_range,
-      label = meth_star,
-      size = 6
-    ) +
-    annotate(
-      "segment",
-      x = 3,
-      xend = 3,
-      y = min(d_dual$value_plot, na.rm = TRUE),
-      yend = max(d_dual$value_plot, na.rm = TRUE),
-      linewidth = 1.5
-    ) +
-    annotate(
-      "text",
-      x = 0.45,
-      y = mean(range(d_dual$value_plot, na.rm = TRUE)),
-      label = "expression",
-      angle = 90,
-      size = 7
-    ) +
-    annotate(
-      "text",
-      x = 5.55,
-      y = mean(range(d_dual$value_plot, na.rm = TRUE)),
-      label = "methylation",
-      angle = 270,
-      size = 7
-    ) +
-    scale_x_continuous(
-      breaks = c(1, 2, 4, 5),
-      labels = c("H", "C", "H", "C"),
-      limits = c(0.3, 5.7)
-    ) +
-    scale_y_continuous(
-      name = "log2(expression + 1)",
-      sec.axis = sec_axis(
-        trans = ~ (. - y1_min) / sf + y2_min,
-        name = "Probe methylation (%)"
-      )
-    ) +
-    labs(
-      title = paste0(
-        "Dual-panel summary: ",
-        key$gene,
-        " in ",
-        key$cancer
-      ),
-      subtitle = paste0(
-        key$probe,
-        " | ",
-        probe_label,
-        " ; Expression H vs C: ",
-        expr_star,
-        " (p=",
-        fmt_p(expr_test$p),
-        ", H=",
-        expr_test$n_h,
-        ", C=",
-        expr_test$n_t,
-        ") ; Methylation H vs C: ",
-        meth_star,
-        " (p=",
-        fmt_p(meth_test$p),
-        ", H=",
-        meth_test$n_h,
-        ", C=",
-        meth_test$n_t,
-        ")"
-      ),
-      x = NULL
-    ) +
-    theme_bw(base_size = 13) +
-    theme(
-      plot.title = element_text(face = "bold"),
-      axis.title.x = element_blank()
-    )
-
-  print(p2)
-
-  dev.off()
-
-  report_index[[length(report_index) + 1]] <- data.table(
-    gene = key$gene,
-    cancer = key$cancer,
-    TF = key$TF,
-    motif_id = key$motif_id,
-    probe = key$probe,
-    probe_class = key$probe_class,
-    distance_to_motif = key$distance_to_motif,
-    pearson_r = key$pearson_r,
-    pearson_p = key$pearson_p,
-    pearson_fdr = key$pearson_fdr,
-    pdf_file = out_pdf
-  )
-}
-
-# ============================================================
-# Save report index
-# ============================================================
-
-index_dt <- rbindlist(report_index, fill = TRUE)
-
-index_file <- file.path(outdir, "generated_probe_reports_index.tsv")
-fwrite(index_dt, index_file, sep = "\t")
-
-cat("[INFO] Done.\n")
-cat("[INFO] Plot directory: ", outdir, "\n", sep = "")
-cat("[INFO] Index file: ", index_file, "\n", sep = "")
-EOF
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 10 — Filter gene ranking by Fisher p_adj
+# Keep only gene-cancer pairs where the target probe correlation is
+# significantly more negative than its control probes (p_adj < 0.05)
+# ══════════════════════════════════════════════════════════════════════════════
+cat("[STEP 10] Filtering gene ranking by Fisher p_adj < 0.05...\n")
+ 
+ranking <- fread(ranking_file)
+cat(sprintf("  Original ranking: %d genes\n", nrow(ranking)))
+ 
+# Aggregate ALL Fisher results to gene level (for annotated file)
+best_p_all <- fisher_results[, .(best_p_adj       = min(p_adj, na.rm = TRUE),
+                                  best_cancer      = cancer[which.min(p_adj)],
+                                  best_probe       = probe[which.min(p_adj)],
+                                  n_cancers_tested = uniqueN(cancer)),
+                              by = gene]
+ 
+# Preserve original ranking order after merge
+ranking[, .rank_order := .I]
+ranking_annotated <- merge(ranking, best_p_all, by = "gene", all.x = TRUE)
+setorder(ranking_annotated, .rank_order)
+ranking_annotated[, .rank_order := NULL]
+ 
+cat(sprintf("  Genes with Fisher result:    %d\n", sum(!is.na(ranking_annotated$best_p_adj))))
+cat(sprintf("  After filter (p_adj < 0.05): %d genes\n",
+            ranking_annotated[best_p_adj < 0.05, .N]))
+ 
+# Load source files to recalculate summary columns for significant cancers only
+pairs_all  <- fread(pairs_file)   # has mean_delta_beta, log2foldchange, adj.P.Val, padj, pearson_r, pearson_p
+stats_file <- paste0("./results/integration/meth_expr_wilcoxon_", tf_name, "_stats.tsv")
+stats_all  <- fread(stats_file)   # has expr_wilcox_p, meth_wilcox_p
+ 
+# Significant gene-cancer pairs from Fisher test
+sig_pairs <- fisher_results[p_adj < 0.05, .(gene, cancer)]
+ 
+# Filter both source files to significant cancers only
+pairs_sig <- merge(pairs_all[TF == tf_name], sig_pairs, by = c("gene", "cancer"))
+stats_sig <- merge(stats_all[TF == tf_name], sig_pairs, by = c("gene", "cancer"))
+ 
+# Recalculate summary columns per gene from significant cancers
+pairs_summary <- pairs_sig[, .(
+  n_cancers      = uniqueN(cancer),
+  cancers        = paste(sort(unique(cancer)), collapse = ", "),
+  mean_pearson_r = mean(pearson_r,       na.rm = TRUE),
+  mean_delta_beta= mean(mean_delta_beta, na.rm = TRUE),
+  mean_log2FC    = mean(log2foldchange,  na.rm = TRUE),
+  best_pearson_p = min(pearson_p,        na.rm = TRUE),
+  best_padj      = min(padj,             na.rm = TRUE),
+  best_adj_P_Val = min(adj.P.Val,        na.rm = TRUE)
+), by = gene]
+ 
+stats_summary <- stats_sig[, .(
+  best_expr_wilcox_p = min(expr_wilcox_p, na.rm = TRUE),
+  best_meth_wilcox_p = min(meth_wilcox_p, na.rm = TRUE)
+), by = gene]
+ 
+# Fisher-level summary (best cancer, probe, p_adj from Fisher test)
+best_p_sig <- fisher_results[p_adj < 0.05,
+                              .(best_p_adj  = min(p_adj, na.rm = TRUE),
+                                best_cancer = cancer[which.min(p_adj)],
+                                best_probe  = probe[which.min(p_adj)]),
+                              by = gene]
+ 
+# Drop columns being replaced, then merge all summaries
+cols_replace <- c("n_cancers", "cancers", "mean_pearson_r", "mean_delta_beta",
+                  "mean_log2FC", "best_pearson_p", "best_padj", "best_adj_P_Val",
+                  "best_expr_wilcox_p", "best_meth_wilcox_p")
+ranking[, .rank_order := .I]
+ranking_filtered <- merge(ranking[, !cols_replace, with = FALSE], pairs_summary,  by = "gene")
+ranking_filtered <- merge(ranking_filtered, stats_summary, by = "gene")
+ranking_filtered <- merge(ranking_filtered, best_p_sig,   by = "gene")
+setorder(ranking_filtered, .rank_order)
+ranking_filtered[, .rank_order := NULL]
+ 
+cat(sprintf("  Genes passing filter (p_adj < 0.05): %d\n", nrow(ranking_filtered)))
+ 
+# Save outputs
+filtered_file  <- file.path(out_dir, paste0("gene_ranking_", tf_name, "_ctrl_filtered.tsv"))
+annotated_file <- file.path(out_dir, paste0("gene_ranking_", tf_name, "_ctrl_annotated.tsv"))
+fwrite(ranking_filtered,  filtered_file,  sep = "\t")
+fwrite(ranking_annotated, annotated_file, sep = "\t")
+ 
+cat(sprintf("[STEP 10] Filtered ranking saved to  %s\n", filtered_file))
+cat(sprintf("[STEP 10] Annotated ranking saved to %s\n", annotated_file))
+ 
+cat("\n=== Top filtered hits ===\n")
+print(ranking_filtered[order(best_p_adj)][1:min(20, .N),
+      .(gene, best_cancer, best_probe, n_cancers, best_p_adj)])
