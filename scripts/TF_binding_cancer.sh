@@ -10536,13 +10536,6 @@ cat ./snv/SNVs_presence_matrix_motifs2mm/NRF1_mm0to2_noCGmm/gene_frequency_per_c
 cat ./snv/SNVs_presence_matrix_motifs2mm/BANP_mm0to2_noCGmm/gene_frequency_per_cancer.tsv | awk '{print $1}' | sort | uniq -cd | wc -l
 # 5039
 
-################################################
-# Multiple Mutations needed analysis 
-################################################
-# look into if there are mutations that coexist 
-
-
-
 
 
 
@@ -11955,7 +11948,7 @@ rownames(X) <- sample_ids
 cat("[INFO] Final matrix dims (samples x genes):", nrow(X), "x", ncol(X), "\n")
 cat("[STEP] Saving to gene_expression_matrix_protein_coding.tsv.gz ...\n")
 gene_expression_matrix <- X
-fwrite(as.data.table(gene_expression_matrix, keep.rownames="sample"),file="./expression/gene_expression_matrix_protein_coding.tsv.gz",sep="\t")
+fwrite(as.data.table(gene_expression_matrix, keep.rownames="sample"),file="xpression_matrix_prote./expression/gene_ein_coding.tsv.gz",sep="\t")
 cat("[DONE] Saved ./expression/gene_expression_matrix_protein_coding.tsv.gz\n")
 '
 
