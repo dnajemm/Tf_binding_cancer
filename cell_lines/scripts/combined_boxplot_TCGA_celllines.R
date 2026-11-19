@@ -7,10 +7,10 @@
 # Layout: 2 columns per row
 #
 # Usage:
-#   Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R <cancer_type> [CellLine_healthy|tumor ...]
-#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R COAD NCM460_healthy HCT116_tumor
-#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R PRAD LNCaP_tumor PrEC_healthy
-
+#   Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R <cancer_type> <RRBS|WGBS|all> [CellLine_healthy|tumor ...]
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R COAD RRBS NCM460_healthy HCT116_tumor
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R PRAD WGBS PreC_healthy LNCaP_tumor
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R BRCA WGBS HMEC_healthy HCC1954_tumor 
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
@@ -29,8 +29,10 @@ if (length(args) < 1) stop(
 )
 cancer_type <- args[1]
 cat("Cancer type:", cancer_type, "\n")
+seq_type_filter <- ifelse(length(args) >= 2, args[2], "all")
+cl_type_args    <- if (length(args) >= 3) args[-(1:2)] else character(0)
+cat("Seq type filter:", seq_type_filter, "\n")
 
-cl_type_args <- args[-1]
 cl_type_map  <- NULL
 if (length(cl_type_args) > 0) {
   cl_type_map <- data.table(arg = cl_type_args)
@@ -127,7 +129,10 @@ bs_files <- list.files(cell_line_meth_dir,
                        pattern    = "^(RRBS|WGBS)_.*_meth\\.bed\\.gz$",
                        full.names = TRUE)
 if (length(bs_files) == 0) stop("No RRBS/WGBS files in: ", cell_line_meth_dir)
-
+if (!is.null(seq_type_filter) && seq_type_filter != "all") {
+  bs_files <- bs_files[grepl(paste0("^", seq_type_filter, "_"), basename(bs_files))]
+  cat("Keeping only", seq_type_filter, "files:", length(bs_files), "\n")
+}
 rrbs_dt <- data.table(path = bs_files)
 rrbs_dt[, basename_ := basename(path)]
 rrbs_dt[, cell_line := sub("^(?:RRBS|WGBS)_(.+)_[0-9]+_meth\\.bed\\.gz$",
@@ -220,7 +225,7 @@ meth_conc_dt    <- NULL
 expr_conc_dt    <- NULL
 meth_conc_label <- NULL
 expr_conc_label <- NULL
-both_label      <- NULL 
+both_label      <- NULL
 
 if (!is.null(cl_type_map) && all(c("healthy", "tumor") %in% cl_type_map$type)) {
 
@@ -232,26 +237,32 @@ if (!is.null(cl_type_map) && all(c("healthy", "tumor") %in% cl_type_map$type)) {
   )
   cl_meth_med  <- meth_typed[, .(med = median(meth, na.rm = TRUE)), by = .(probe, cl_type)]
   cl_meth_wide <- dcast(cl_meth_med, probe ~ cl_type, value.var = "med")
-  cl_meth_wide[, cl_dir := fifelse(tumor > healthy, "Hyper",
-                            fifelse(tumor < healthy, "Hypo", "Flat"))]
-  cl_meth_wide <- merge(cl_meth_wide, pair_dir[, .(probe, direction)],
-                        by = "probe", all.x = TRUE)
-  cl_meth_wide[, tcga_dir := fifelse(grepl("Hyper", direction), "Hyper",
-                             fifelse(grepl("Hypo",  direction), "Hypo", NA_character_))]
-  cl_meth_wide[, concordant := cl_dir == tcga_dir]
-  covered_probes <- unique(cl_meth$probe)
-  cl_meth_wide[, covered := probe %in% covered_probes]
+  if (!all(c("healthy", "tumor") %in% names(cl_meth_wide))) {
+    cat("Skipping meth concordance: no data for",
+        paste(setdiff(c("healthy", "tumor"), names(cl_meth_wide)), collapse = ", "),
+        "cell line type\n")
+  } else {
+    cl_meth_wide[, cl_dir := fifelse(tumor > healthy, "Hyper",
+                              fifelse(tumor < healthy, "Hypo", "Flat"))]
+    cl_meth_wide <- merge(cl_meth_wide, pair_dir[, .(probe, direction)],
+                          by = "probe", all.x = TRUE)
+    cl_meth_wide[, tcga_dir := fifelse(grepl("Hyper", direction), "Hyper",
+                               fifelse(grepl("Hypo",  direction), "Hypo", NA_character_))]
+    cl_meth_wide[, concordant := cl_dir == tcga_dir]
+    covered_probes <- unique(cl_meth$probe)
+    cl_meth_wide[, covered := probe %in% covered_probes]
 
-  n_conc_m <- sum(cl_meth_wide$concordant, na.rm = TRUE)
-  n_tot_m  <- sum(!is.na(cl_meth_wide$concordant))
-  n_uncov  <- sum(!sig_probes %in% covered_probes)
-  meth_conc_label <- paste0(
-    "Meth: ", n_conc_m, "/", n_tot_m,
-    " (", round(100 * n_conc_m / n_tot_m, 1), "%) concordant with TCGA",
-    if (n_uncov > 0) paste0("  |  ", n_uncov, " probe(s) not covered by RRBS") else ""
-  )
-  meth_conc_dt <- cl_meth_wide[, .(probe, meth_concordant = concordant, covered)]
-  cat("Meth concordance:", meth_conc_label, "\n")
+    n_conc_m <- sum(cl_meth_wide$concordant, na.rm = TRUE)
+    n_tot_m  <- sum(!is.na(cl_meth_wide$concordant))
+    n_uncov  <- sum(!sig_probes %in% covered_probes)
+    meth_conc_label <- paste0(
+      "Meth: ", n_conc_m, "/", n_tot_m,
+      " (", round(100 * n_conc_m / n_tot_m, 1), "%) concordant with TCGA",
+      if (n_uncov > 0) paste0("  |  ", n_uncov, " probe(s) not covered by WGBS") else ""
+    )
+    meth_conc_dt <- cl_meth_wide[, .(probe, meth_concordant = concordant, covered)]
+    cat("Meth concordance:", meth_conc_label, "\n")
+  } # end meth concordance else
 
   # ---- Expression concordance ----
   expr_typed <- merge(
@@ -261,79 +272,69 @@ if (!is.null(cl_type_map) && all(c("healthy", "tumor") %in% cl_type_map$type)) {
   )
   cl_expr_med  <- expr_typed[, .(med = median(TPM, na.rm = TRUE)), by = .(gene, cl_type)]
   cl_expr_wide <- dcast(cl_expr_med, gene ~ cl_type, value.var = "med")
-  cl_expr_wide[, cl_dir := fifelse(tumor > healthy, "Up",
-                            fifelse(tumor < healthy, "Down", "Flat"))]
-  gene_dir_uniq <- pair_dir[!duplicated(gene), .(gene, direction)]
-  cl_expr_wide  <- merge(cl_expr_wide, gene_dir_uniq, by = "gene", all.x = TRUE)
-  cl_expr_wide[, tcga_dir := fifelse(grepl("Down", direction), "Down",
-                             fifelse(grepl("Up",   direction), "Up", NA_character_))]
-  cl_expr_wide[, expr_concordant := cl_dir == tcga_dir]
+  if (!all(c("healthy", "tumor") %in% names(cl_expr_wide))) {
+    cat("Skipping expr concordance: no data for",
+        paste(setdiff(c("healthy", "tumor"), names(cl_expr_wide)), collapse = ", "),
+        "cell line type\n")
+  } else {
+    cl_expr_wide[, cl_dir := fifelse(tumor > healthy, "Up",
+                              fifelse(tumor < healthy, "Down", "Flat"))]
+    gene_dir_uniq <- pair_dir[!duplicated(gene), .(gene, direction)]
+    cl_expr_wide  <- merge(cl_expr_wide, gene_dir_uniq, by = "gene", all.x = TRUE)
+    cl_expr_wide[, tcga_dir := fifelse(grepl("Down", direction), "Down",
+                               fifelse(grepl("Up",   direction), "Up", NA_character_))]
+    cl_expr_wide[, expr_concordant := cl_dir == tcga_dir]
 
-  cl_expr_med2 <- cl_expr[, .(median_cl = median(TPM, na.rm = TRUE)), by = gene]
-  cl_expr_wide <- merge(cl_expr_wide, cl_expr_med2, by = "gene", all.x = TRUE)
-  cl_expr_wide[, expressed := median_cl >= 1]
+    n_conc_e <- sum(cl_expr_wide$expr_concordant, na.rm = TRUE)
+    n_tot_e  <- sum(!is.na(cl_expr_wide$expr_concordant))
+    expr_conc_label <- paste0(
+      "Expr: ", n_conc_e, "/", n_tot_e,
+      " (", round(100 * n_conc_e / n_tot_e, 1), "%) concordant with TCGA"
+    )
+    expr_conc_dt <- cl_expr_wide[, .(gene, expr_concordant)]
+    cat("Expr concordance:", expr_conc_label, "\n")
+  } # end expr concordance else
 
-  n_conc_e  <- sum(cl_expr_wide$expr_concordant, na.rm = TRUE)
-  n_tot_e   <- sum(!is.na(cl_expr_wide$expr_concordant))
-  n_not_exp <- sum(!cl_expr_wide$expressed, na.rm = TRUE)
-  expr_conc_label <- paste0(
-    "Expr: ", n_conc_e, "/", n_tot_e,
-    " (", round(100 * n_conc_e / n_tot_e, 1), "%) concordant with TCGA",
-    if (n_not_exp > 0) paste0("  |  ", n_not_exp, " gene(s) not expressed in cell lines") else ""
-  )
-  expr_conc_dt <- cl_expr_wide[, .(gene, expr_concordant, expressed)]
-  cat("Expr concordance:", expr_conc_label, "\n")
-
-      # ---- Both concordant ----
-  both_conc <- merge(
-    pair_dir[, .(probe, gene)],
-    meth_conc_dt[, .(probe, meth_concordant, covered)],
-    by = "probe", all.x = TRUE
-  )
-  both_conc <- merge(
-    both_conc,
-    expr_conc_dt[, .(gene, expr_concordant, expressed)],
-    by = "gene", all.x = TRUE
-  )
-  n_both <- sum(
-    both_conc$meth_concordant == TRUE &
-    both_conc$expr_concordant == TRUE &
-    both_conc$covered         == TRUE &
-    both_conc$expressed       == TRUE,
-    na.rm = TRUE
-  )
-  n_tot_both <- sum(
-    both_conc$covered   == TRUE &
-    both_conc$expressed == TRUE,
-    na.rm = TRUE
-  )
-  n_both_genes <- uniqueN(both_conc[
-    meth_concordant == TRUE & expr_concordant == TRUE &
-    covered == TRUE & expressed == TRUE, gene])
-  n_tot_genes <- uniqueN(both_conc[
-    covered == TRUE & expressed == TRUE, gene])
-  both_label <- paste0(
-    "Both concordant: ", n_both, "/", n_tot_both,
-    " (", round(100 * n_both / n_tot_both, 1), "%) probe-gene pairs",
-    " [", n_both_genes, "/", n_tot_genes, " unique genes]"
-  )
-  cat("Both concordant:", both_label, "\n")
+  # ---- Both concordant ----
+  if (!is.null(meth_conc_dt) && !is.null(expr_conc_dt)) {
+    both_conc <- merge(
+      pair_dir[, .(probe, gene)],
+      meth_conc_dt[, .(probe, meth_concordant, covered)],
+      by = "probe", all.x = TRUE
+    )
+    both_conc <- merge(
+      both_conc,
+      expr_conc_dt[, .(gene, expr_concordant)],
+      by = "gene", all.x = TRUE
+    )
+    n_both <- sum(
+      both_conc$meth_concordant == TRUE &
+      both_conc$expr_concordant == TRUE &
+      both_conc$covered         == TRUE,
+      na.rm = TRUE
+    )
+    n_tot_both <- sum(
+      both_conc$covered == TRUE,
+      na.rm = TRUE
+    )
+    n_both_genes <- uniqueN(both_conc[
+      meth_concordant == TRUE & expr_concordant == TRUE &
+      covered == TRUE, gene])
+    n_tot_genes <- uniqueN(both_conc[
+      covered == TRUE, gene])
+    both_label <- paste0(
+      "Both concordant: ", n_both, "/", n_tot_both,
+      " (", round(100 * n_both / n_tot_both, 1), "%) probe-gene pairs",
+      " [", n_both_genes, "/", n_tot_genes, " unique genes]"
+    )
+    cat("Both concordant:", both_label, "\n")
+  } # end both concordant
 }
-
 
 
 # ===========================================================================
 # Step 7 - Build unified panel data (one panel per probe-gene, dual y-axis)
 # ===========================================================================
-# Within each facet the x-axis has two numeric blocks:
-#   positions 1 .. n_groups          -> methylation (left half)
-#   positions n_groups+2 .. 2N+1    -> expression (right half)
-#   vline at x = n_groups + 1.5     -> visible separator
-#
-# Both halves share one y scale (left axis = methylation %).
-# Expression is globally scaled to [0,100] to fit the same axis.
-# sec_axis on the right shows actual log2(TPM+1) tick values.
-
 group_levels <- c("Healthy", "Tumor", cl_names)
 n_groups     <- length(group_levels)
 
@@ -354,12 +355,11 @@ if (!is.null(meth_conc_dt)) {
   meth_long_all[, meth_concordant := NA]
   meth_long_all[, covered         := NA]
 }
-# tag for STRIP label — will be attached after combining both halves
 meth_long_all[, meth_tag := fifelse(!is.na(covered)         & !covered,        "[0]",
                             fifelse(!is.na(meth_concordant) & meth_concordant,  "[+]",
                             fifelse(!is.na(meth_concordant) & !meth_concordant, "[-]", "")))]
-meth_long_all[, block   := "Methylation"]
-meth_long_all[, x_pos   := meth_xpos[as.character(group)]]
+meth_long_all[, block    := "Methylation"]
+meth_long_all[, x_pos    := meth_xpos[as.character(group)]]
 meth_long_all[, y_scaled := y_raw]  # meth is already 0-100 %
 
 # ---- Expr data ----
@@ -367,7 +367,6 @@ expr_long_all <- rbindlist(list(
   tpm_long[gene %in% sig_genes, .(gene, y_raw = log2(TPM + 1), group, source)],
   cl_expr[gene %in% sig_genes,  .(gene, y_raw = log2(TPM + 1), group, source)]
 ))
-# allow.cartesian: genes with multiple probes get one copy per probe-gene pair
 expr_long_all <- merge(expr_long_all,
                        pair_dir[, .(gene, probe, direction, pair_rank)],
                        by = "gene", allow.cartesian = TRUE)
@@ -375,24 +374,18 @@ if (!is.null(expr_conc_dt)) {
   expr_long_all <- merge(expr_long_all, expr_conc_dt, by = "gene", all.x = TRUE)
 } else {
   expr_long_all[, expr_concordant := NA]
-  expr_long_all[, expressed       := NA]
 }
-expr_long_all[, expr_tag := fifelse(!is.na(expressed)       & !expressed,       "[0]",
-                            fifelse(!is.na(expr_concordant) & expr_concordant,   "[+]",
-                            fifelse(!is.na(expr_concordant) & !expr_concordant,  "[-]", "")))]
+expr_long_all[, expr_tag := fifelse(!is.na(expr_concordant) & expr_concordant,  "[+]",
+                            fifelse(!is.na(expr_concordant) & !expr_concordant, "[-]", ""))]
 expr_long_all[, block := "Expression"]
 expr_long_all[, x_pos := expr_xpos[as.character(group)]]
 
-# Scale expression to [0,100] using the global max across all data
 expr_global_max <- max(expr_long_all$y_raw, na.rm = TRUE)
 expr_long_all[, y_scaled := y_raw / expr_global_max * 100]
 cat("Expression scaling: max log2(TPM+1) =", round(expr_global_max, 2),
     "-> mapped to 100 on the shared y-axis\n")
 
-# ---- Combine FIRST, then build a single shared panel_label ----
-# CRITICAL: panel_label must be IDENTICAL for meth and expr rows of the same
-# probe-gene pair so ggplot merges them into one facet.
-# The concordance tags per block go into separate columns, NOT into the label.
+# ---- Combine ----
 meth_cols <- c("probe", "gene", "pair_rank", "direction", "block",
                "y_raw", "y_scaled", "x_pos", "group", "source", "meth_tag")
 expr_cols <- c("probe", "gene", "pair_rank", "direction", "block",
@@ -405,7 +398,7 @@ expr_sub[, meth_tag := ""]
 
 all_panels <- rbindlist(list(meth_sub, expr_sub), use.names = TRUE, fill = TRUE)
 
-# Build the per-probe-gene concordance tag line from the probe-level summaries
+# Build per-probe-gene concordance tag line
 tag_lookup <- unique(pair_dir[, .(probe, gene, direction, pair_rank)])
 if (!is.null(meth_conc_dt)) {
   tag_lookup <- merge(tag_lookup, meth_conc_dt, by = "probe", all.x = TRUE)
@@ -417,9 +410,8 @@ if (!is.null(meth_conc_dt)) {
 }
 if (!is.null(expr_conc_dt)) {
   tag_lookup <- merge(tag_lookup, expr_conc_dt, by = "gene", all.x = TRUE)
-  tag_lookup[, e_tag := fifelse(!is.na(expressed) & !expressed, "expr[0]",
-                        fifelse(!is.na(expr_concordant) & expr_concordant,  "expr[+]",
-                        fifelse(!is.na(expr_concordant) & !expr_concordant, "expr[-]", "")))]
+  tag_lookup[, e_tag := fifelse(!is.na(expr_concordant) & expr_concordant,  "expr[+]",
+                        fifelse(!is.na(expr_concordant) & !expr_concordant, "expr[-]", ""))]
 } else {
   tag_lookup[, e_tag := ""]
 }
@@ -466,25 +458,22 @@ subtitle <- NULL
 if (!is.null(meth_conc_label) || !is.null(expr_conc_label)) {
   subtitle <- paste(c(meth_conc_label, expr_conc_label, both_label), collapse = "\n")
 }
+
 # ===========================================================================
 # Step 10 - Plot
 # ===========================================================================
-# sec_axis: convert the scaled y [0,100] back to actual log2(TPM+1) values
 expr_breaks_actual <- pretty(c(0, expr_global_max), n = 5)
 expr_breaks_actual <- expr_breaks_actual[expr_breaks_actual <= expr_global_max]
 expr_breaks_scaled <- expr_breaks_actual / expr_global_max * 100
 
-# X-axis ticks and labels
 x_breaks <- c(unname(meth_xpos), unname(expr_xpos))
 x_labels <- rep(group_levels, 2)
 
-# Annotation x-centres for block labels
 meth_centre <- mean(meth_xpos)
 expr_centre <- mean(expr_xpos)
 
 p <- ggplot(all_panels, aes(x = x_pos, y = y_scaled, fill = group, colour = group)) +
 
-  # Shaded backgrounds for each half (appear in every facet via annotate)
   annotate("rect",
            xmin = min(meth_xpos) - 0.5, xmax = max(meth_xpos) + 0.5,
            ymin = -Inf, ymax = Inf, fill = "#F2EBF5", alpha = 0.5) +
@@ -492,7 +481,6 @@ p <- ggplot(all_panels, aes(x = x_pos, y = y_scaled, fill = group, colour = grou
            xmin = min(expr_xpos) - 0.5, xmax = max(expr_xpos) + 0.5,
            ymin = -Inf, ymax = Inf, fill = "#EBF2F5", alpha = 0.5) +
 
-  # Block labels near the top of each half
   annotate("text", x = meth_centre, y = 97,
            label = "Methylation (%)", size = 2.6,
            colour = "grey25", fontface = "italic", hjust = 0.5) +
@@ -500,8 +488,6 @@ p <- ggplot(all_panels, aes(x = x_pos, y = y_scaled, fill = group, colour = grou
            label = "Expression (log2 TPM+1)", size = 2.6,
            colour = "grey25", fontface = "italic", hjust = 0.5) +
 
-  # TCGA: jitter first (behind), then hollow boxplot outline on top.
-  # Drawing order matters: jitter underneath keeps the Q1/median/Q3 lines visible.
   geom_jitter(data    = tcga_data,
               aes(group = x_pos),
               width   = 0.18, size = 0.25, alpha = 0.12, shape = 16) +
@@ -510,12 +496,10 @@ p <- ggplot(all_panels, aes(x = x_pos, y = y_scaled, fill = group, colour = grou
                outlier.shape = NA, fill = NA,
                width         = 0.55, linewidth = 0.55) +
 
-  # Cell lines: points + median crossbar
   geom_point(data = cl_data, size = 2.5, alpha = 0.9) +
   stat_summary(data     = cl_data, fun = median,
                geom     = "crossbar", width = 0.4, linewidth = 0.5) +
 
-  # Vertical separator between meth and expr halves
   geom_vline(xintercept = vline_at,
              linetype = "dashed", colour = "grey40", linewidth = 0.5) +
 
@@ -546,8 +530,8 @@ p <- ggplot(all_panels, aes(x = x_pos, y = y_scaled, fill = group, colour = grou
   theme(
     legend.position    = "none",
     axis.text.x        = element_text(angle = 35, hjust = 1, size = 7.5),
-    axis.title.y.left  = element_text(colour = "#6B3D7A"),   # meth purple
-    axis.title.y.right = element_text(colour = "#2E6B8A"),   # expr blue
+    axis.title.y.left  = element_text(colour = "#6B3D7A"),
+    axis.title.y.right = element_text(colour = "#2E6B8A"),
     strip.background   = element_rect(fill = "grey92"),
     strip.text         = element_text(face = "bold", size = 9),
     panel.grid.minor   = element_blank(),
@@ -561,10 +545,8 @@ n_pairs <- nrow(pair_dir)
 out_dir <- file.path(project_root, "cell_lines", cancer_type, "results")
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 out_pdf <- file.path(out_dir,
-  paste0(cancer_type, "_meth_expr_combined_boxplots.pdf"))
-
-# ncol = 2; each panel spans both meth and expr groups
-panel_width <- (n_groups * 2 + 1) * 0.55 + 1.5   # ~0.55 in per group + margins
+  paste0(cancer_type, "_", seq_type_filter, "_meth_expr_combined_boxplots.pdf"))
+panel_width <- (n_groups * 2 + 1) * 0.55 + 1.5
 ggsave(out_pdf, plot = p,
        width  = 2 * panel_width,
        height = ceiling(n_pairs / 2) * 3.8,

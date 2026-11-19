@@ -33,6 +33,26 @@ ln -s /data/papers/yao_natCommun_2014/reads/* /data/najemd/TF_binding_cancer/cel
 ln -s /data/papers/yao_natCommun_2014/tracks/* /data/najemd/TF_binding_cancer/cell_lines/COAD/tracks
 ln -s /data/papers/yao_natCommun_2014/expression/* /data/najemd/TF_binding_cancer/cell_lines/COAD/expression
 
+# dowload the HCT116 WGBS 
+# get data and launch bismark pipeline  LAUNCHED WAITING FOR OUTPUT
+# found that R2 should be clipped at 3 
+
+sample=WGBS_HCT116_1
+mkdir -p /data/najemd/TF_binding_cancer/cell_lines/COAD/logs
+
+snakemake --cores 4 --latency-wait 180 --use-envmodules \
+    -s /data/scripts/pipelines/1.0/getdata_pipeline.smk \
+    -C sample=${sample} geo=y quality=y \
+    prepath=/data/najemd/TF_binding_cancer/cell_lines/COAD \
+    > /data/najemd/TF_binding_cancer/cell_lines/COAD/logs/${sample}_getdata.log 2>&1
+
+sample=WGBS_HCT116_1 #LAUNCHED WAITING FOR OUTPUT
+snakemake --cores 4 --latency-wait 180 --use-envmodules \
+    -s /data/collotr/pipelines/bismark_pipeline.smk \
+    -C sample="$sample" subset=n trim=y \
+        trim_args="--clip_R2 3" \
+        prepath=/data/najemd/TF_binding_cancer/cell_lines/COAD \
+    > /data/najemd/TF_binding_cancer/cell_lines/COAD/logs/${sample}_bismark.log 2>&1 
 
 #########################################################################################
 # NCM460 cell line RNA-seq and RRBS data download and analysis pipeline
@@ -146,7 +166,9 @@ Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Deseq2.R \
     -o /data/najemd/TF_binding_cancer/cell_lines/COAD/results/expression/deseq2 \
     -t COAD
 
-Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Expression_boxplots_TCGA_celllines.R COAD HCT116_tumor NCM460_healthy
+Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Expression_boxplots_TCGA_celllines.R COAD NCM460_healthy HCT116_tumor
+Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R COAD NCM460_healthy HCT116_tumor
+Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R COAD NCM460_healthy HCT116_tumor
 
 #################################################################################################################################################################################
 
@@ -164,7 +186,7 @@ for sample in WGBS_LNCaP_1 WGBS_LNCaP_2 WGBS_PreC_1 WGBS_PreC_2; do
 done
 
 
-# launch bismark pipeline for WGBS data for LNCaP and PreC cell lines HAVE NTO RELAUNCH IT with clipR2 three prime 1 and from 5' at 2  launched in WGBS_PRAD screen
+# launch bismark pipeline for WGBS data for LNCaP and PreC cell lines HAVE NTO RELAUNCH IT with clipR2 three prime 1 and from 5' at 2   done
 mkdir -p /data/najemd/TF_binding_cancer/cell_lines/PRAD/logs
 
 for sample in WGBS_LNCaP_1 WGBS_LNCaP_2 WGBS_PreC_1 WGBS_PreC_2; do
@@ -234,6 +256,13 @@ Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Deseq2.R \
     -t PRAD
 
 Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Expression_boxplots_TCGA_celllines.R PRAD LNCaP_tumor PreC_healthy
+
+
+# plot the boxplots for the methylation data for HCC1954 and HMEC cell lines and TCGA PRAD samples
+Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R PRAD PreC_healthy LNCaP_tumor
+
+# plot the boxplots for the methylation data and expression data combined for HCC1954 and HMEC cell lines and TCGA PRAD samples
+Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R PRAD PreC_healthy LNCaP_tumor
 
 
 #######################################################################
@@ -314,8 +343,9 @@ Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Deseq2.R \
 Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Expression_boxplots_TCGA_celllines.R BRCA HMEC_healthy HCC1954_tumor
 
 
-# get data and launch bismark pipeline  done 
+# get data and launch bismark pipeline  done done FOR THE _3 
 # Did it first and found it should be clipped at 2bp for r1 so redid it 
+export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
 run_sample() {
     local sample=$1
     local prepath=/data/najemd/TF_binding_cancer/cell_lines/BRCA
@@ -349,7 +379,7 @@ run_sample() {
 
 mkdir -p /data/najemd/TF_binding_cancer/cell_lines/BRCA/logs
 
-for sample in WGBS_HCC1954_1 WGBS_HCC1954_2 WGBS_HMEC_1 WGBS_HMEC_2; do
+for sample in  WGBS_HCC1954_2 WGBS_HMEC_1 WGBS_HMEC_2 WGBS_HCC1954_3 ; do
     run_sample $sample &
 
     if (( $(jobs -r | wc -l) >= 2 )); then
@@ -365,6 +395,216 @@ Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_T
 # plot the boxplots for the methylation data and expression data combined for HCC1954 and HMEC cell lines and TCGA BRCA samples
 Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R BRCA HCC1954_tumor HMEC_healthy
 
+#######################
+# ChIP HCC1954
+#######################
+# BANP
+# Download the ChIP data for HCC1954 from SRA using fasterq-dump done 
+export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
+for sample in BANP_HCC1954_1 BANP_HCC1954_2; do
+    snakemake --cores 4 --latency-wait 180 --use-envmodules \
+        -s /data/scripts/pipelines/1.0/getdata_pipeline.smk \
+        -C sample=$sample geo=y quality=y \
+        prepath=/data/najemd/TF_binding_cancer/cell_lines/BRCA \
+        2>&1 | tee /data/najemd/TF_binding_cancer/cell_lines/BRCA/logs/${sample}_getdata.log
+done
+
+# launch the chipseq pipeline LAUNCHED WAITING FOR OUTPUT LAUNCHED IN SCREEN 20293.BANP_HCC1954
+export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
+PROJECT="/data/najemd/TF_binding_cancer/cell_lines/BRCA"
+MAX_PARALLEL=2
+
+cd "$PROJECT"
+
+samples=$(awk '!/^#/ && NF > 0 {print $1}' "$PROJECT/SAMPLEFILE" | grep -E '^(BANP)_')
+
+running=0
+
+for sample in $samples; do
+
+    echo "===================================="
+    echo "Processing: $sample"
+    echo "===================================="
+
+    snakemake -s /data/bancquaa/pipelines/chipseq_pipeline.smk \
+        -C sample="$sample" \
+           prepath="$PROJECT" \
+           trim=y \
+           map=y \
+           track=y \
+        --cores 2 &
+
+    running=$((running + 1))
+
+    # Wait when 2 samples are running
+    if [ "$running" -ge "$MAX_PARALLEL" ]; then
+        wait
+        running=0
+    fi
+
+done
+
+# Wait for remaining samples
+wait
+
+echo "All samples processed successfully."
+
+# NRF1
+# Download the ChIP data for HCC1954 from SRA using fasterq-dump done 
+export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
+for sample in NRF1_HCC1954_1 NRF1_HCC1954_2 inputNRF1_HCC1954_1; do
+    snakemake --cores 4 --latency-wait 180 --use-envmodules \
+        -s /data/scripts/pipelines/1.0/getdata_pipeline.smk \
+        -C sample=$sample geo=y quality=y \
+        prepath=/data/najemd/TF_binding_cancer/cell_lines/BRCA \
+        2>&1 | tee /data/najemd/TF_binding_cancer/cell_lines/BRCA/logs/${sample}_getdata.log
+done
+
+# launch the chipseq pipeline LAUNCHED WAITING FOR OUTPUT LAUNCHED IN SCREEN 20293.BANP_HCC1954
+export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
+PROJECT="/data/najemd/TF_binding_cancer/cell_lines/BRCA"
+MAX_PARALLEL=3
+
+cd "$PROJECT"
+
+samples=$(awk '!/^#/ && NF > 0 {print $1}' "$PROJECT/SAMPLEFILE" | grep -E '^(NRF1|inputNRF1)_')
+
+running=0
+
+for sample in $samples; do
+
+    echo "===================================="
+    echo "Processing: $sample"
+    echo "===================================="
+
+    snakemake -s /data/bancquaa/pipelines/chipseq_pipeline.smk \
+        -C sample="$sample" \
+           prepath="$PROJECT" \
+           trim=y \
+           map=y \
+           track=y \
+        --cores 2 &
+
+    running=$((running + 1))
+
+    # Wait when 3 samples are running
+    if [ "$running" -ge "$MAX_PARALLEL" ]; then
+        wait
+        running=0
+    fi
+
+done
+
+# Wait for remaining samples
+wait
+
+echo "All samples processed successfully."
+
+
+
+
+
+
+
+
+
+
+
+
+###########################################
+# MCF-7 and MCF10A cell line LAUNCHED
+###########################################
+export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
+run_sample() {
+    local sample=$1
+    local prepath=/data/najemd/TF_binding_cancer/cell_lines/BRCA
+    local logdir=$prepath/logs
+
+    echo "[$(date)] Starting getdata: $sample"
+    snakemake --cores 4 --latency-wait 180 --use-envmodules \
+        -s /data/scripts/pipelines/1.0/getdata_pipeline.smk \
+        -C sample=$sample geo=y quality=y \
+            prepath=$prepath \
+        > $logdir/${sample}_getdata.log 2>&1
+
+    if [[ $? -eq 0 ]]; then
+        echo "[$(date)] getdata done for $sample — launching Bismark"
+        snakemake \
+            --cores 4 \
+            --retries 2 \
+            --latency-wait 180 \
+            --use-envmodules \
+            --directory /data/tmp/najemd/${sample} \
+            -s /data/scripts/pipelines/1.0/bismark_pipeline.smk \
+            -C sample=$sample subset=y trim=y \
+                prepath=$prepath \
+            > $logdir/${sample}_bismark.log 2>&1
+        echo "[$(date)] Bismark done for $sample"
+    else
+        echo "[$(date)] ERROR: getdata failed for $sample — skipping Bismark" >&2
+    fi
+}
+
+mkdir -p /data/najemd/TF_binding_cancer/cell_lines/BRCA/logs
+
+for sample in WGBS_MCF7_1 BS_MCF10A ; do
+    run_sample $sample &
+
+    if (( $(jobs -r | wc -l) >= 2 )); then
+        wait
+    fi
+done
+wait
+echo "All BRCA WGBS samples done"
+
+
+
+
+
+
+
 #######################################################################
-# LUAD cell lines RNA-seq and WGBS data download and analysis pipeline
+# LUAD cell lines RNA-seq and WGBS data download and analysis pipeline NOT LAUNCHED YET
 #######################################################################
+# get data and launch bismark pipeline   
+run_sample() {
+    local sample=$1
+    local prepath=/data/najemd/TF_binding_cancer/cell_lines/LUAD
+    local logdir=$prepath/logs
+
+    echo "[$(date)] Starting getdata: $sample"
+    snakemake --cores 4 --latency-wait 180 --use-envmodules \
+        -s /data/scripts/pipelines/1.0/getdata_pipeline.smk \
+        -C sample=$sample geo=y quality=y \
+            prepath=$prepath \
+        > $logdir/${sample}_getdata.log 2>&1
+
+    if [[ $? -eq 0 ]]; then
+        echo "[$(date)] getdata done for $sample — launching Bismark"
+        snakemake \
+            --cores 4 \
+            --retries 2 \
+            --latency-wait 180 \
+            --use-envmodules \
+            --directory /data/tmp/najemd/${sample} \
+            -s /data/collotr/pipelines/bismark_pipeline.smk \
+            -C sample=$sample subset=y trim=y \
+                prepath=$prepath \
+            > $logdir/${sample}_bismark.log 2>&1
+        echo "[$(date)] Bismark done for $sample"
+    else
+        echo "[$(date)] ERROR: getdata failed for $sample — skipping Bismark" >&2
+    fi
+}
+
+mkdir -p /data/najemd/TF_binding_cancer/cell_lines/LUAD/logs
+
+for sample in WGBS_A549_1 WGBS_A549_2; do
+    run_sample $sample &
+
+    if (( $(jobs -r | wc -l) >= 2 )); then
+        wait
+    fi
+done
+wait
+echo "All LUAD WGBS samples done"

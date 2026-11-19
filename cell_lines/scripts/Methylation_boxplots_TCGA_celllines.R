@@ -1,20 +1,23 @@
 #!/usr/bin/env Rscript
-# Usage: Rscript ./cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R <cancer_type> [CellLine_healthy|tumor ...]
-#   e.g.: Rscript s./cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R COAD NCM460_healthy HCT116_tumor
-
+# Usage: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R <cancer_type> <RRBS|WGBS|all> [CellLine_healthy|tumor ...]
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R COAD WGBS NCM460_healthy HCT116_tumor
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R BRCA WGBS HMEC_healthy HCC1954_tumor
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R PRAD WGBS PreC_healthy LNCaP_tumor
 suppressPackageStartupMessages(library(data.table))
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 1) stop(
-  "Usage: Rscript ./cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R <cancer_type> [CellLine_healthy|tumor ...]\n",
-  "  e.g.: Rscript ./cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R COAD NCM460_healthy HCT116_tumor\n",
-  "  If no cell line arguments are given, all cell lines get distinct colours."
+  "Usage: Rscript script.R <cancer_type> <RRBS|WGBS|all> [CellLine_healthy|tumor ...]\n",
+  "  e.g.: Rscript script.R COAD WGBS NCM460_healthy HCT116_tumor\n"
 )
-cancer_type <- args[1]
-cat("Cancer type:", cancer_type, "\n")
 
-cl_type_args <- args[-1]
-cl_type_map  <- NULL
+cancer_type     <- args[1]
+seq_type_filter <- ifelse(length(args) >= 2, args[2], "all")
+cl_type_args    <- if (length(args) >= 3) args[-(1:2)] else character(0)
+
+cat("Cancer type:", cancer_type, "\n")
+cat("Seq type filter:", seq_type_filter, "\n")
+cl_type_map <- NULL
 if (length(cl_type_args) > 0) {
   cl_type_map <- data.table(arg = cl_type_args)
   cl_type_map[, type      := sub(".*_([^_]+)$", "\\1", arg)]
@@ -127,7 +130,11 @@ bs_files <- list.files(cell_line_meth_dir,
                        pattern    = "^(RRBS|WGBS)_.*_meth\\.bed\\.gz$",
                        full.names = TRUE)
 if (length(bs_files) == 0) stop("No RRBS/WGBS meth.bed.gz files found in: ", cell_line_meth_dir)
-
+# Filter by sequencing type
+if (!is.null(seq_type_filter) && seq_type_filter != "all") {
+  bs_files <- bs_files[grepl(paste0("^", seq_type_filter, "_"), basename(bs_files))]
+  cat("Keeping only", seq_type_filter, "files:", length(bs_files), "\n")
+}
 rrbs_dt <- data.table(path = bs_files)
 rrbs_dt[, basename_ := basename(path)]
 rrbs_dt[, seq_type  := sub("^(RRBS|WGBS)_.*", "\\1", basename_)]
@@ -167,6 +174,11 @@ cl_meth[, source := "CellLine"]
 cat("Cell line methylation rows:", nrow(cl_meth), "\n")
 for (cl in cl_names) cat(" ", cl, ":", sum(cl_meth$cell_line == cl), "probe-replicate pairs\n")
 
+covered_probes <- unique(cl_meth$probe)
+n_covered      <- sum(sig_probes %in% covered_probes)
+coverage_label <- paste0(n_covered, "/", length(sig_probes),
+                         " probes covered by ", seq_type_filter, " data")
+cat("Coverage:", coverage_label, "\n")
 # ---------------------------------------------------------------------------
 # Step 4 — Combine TCGA and cell line data
 # ---------------------------------------------------------------------------
@@ -199,6 +211,12 @@ if (!is.null(cl_type_map) &&
   cl_med  <- cl_typed[, .(med = median(meth, na.rm = TRUE)), by = .(probe, cl_type)]
   cl_wide <- dcast(cl_med, probe ~ cl_type, value.var = "med")
 
+  if (!all(c("healthy", "tumor") %in% names(cl_wide))) {
+    cat("Skipping concordance: no data for",
+        paste(setdiff(c("healthy", "tumor"), names(cl_wide)), collapse = ", "),
+        "cell line type\n")
+  } else {
+
   cl_wide[, cl_dir := fifelse(tumor > healthy, "Hyper",
                       fifelse(tumor < healthy, "Hypo", "Flat"))]
 
@@ -221,13 +239,14 @@ if (!is.null(cl_type_map) &&
   n_not_in_tcga  <- sum(!sig_probes %in% in_beta)
   concordance_label <- paste0(
     n_conc, "/", n_total, " covered probes (", pct, "%) follow the same direction as TCGA",
-    "  |  ", n_not_cov, " not covered by RRBS",
+    "  |  ", n_not_cov, " not covered",
     if (n_not_in_tcga > 0) paste0("  |  ", n_not_in_tcga, " absent from TCGA beta matrix") else ""
   )
   cat("Concordance:", concordance_label, "\n")
   print(cl_wide[, .(probe, cl_dir, tcga_dir, concordant, covered)])
 
   gene_concordance <- cl_wide[, .(probe, concordant, covered)]
+  } # end else
 }
 
 # ---------------------------------------------------------------------------
@@ -298,7 +317,7 @@ p <- ggplot(combined, aes(x = group, y = meth, fill = group, colour = group)) +
   labs(x = NULL,
        y = "Methylation (%)",
        title    = paste0(cancer_type, " — significant probes: methylation by group"),
-       subtitle = if (!is.null(concordance_label)) concordance_label else NULL) +
+       subtitle = if (!is.null(concordance_label)) concordance_label else coverage_label) +
 
   theme_bw(base_size = 10) +
   theme(
@@ -311,7 +330,7 @@ p <- ggplot(combined, aes(x = group, y = meth, fill = group, colour = group)) +
 
 out_dir <- file.path(project_root, "cell_lines", cancer_type, "results")
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-out_pdf <- file.path(out_dir, paste0(cancer_type, "_methylation_boxplots.pdf"))
+out_pdf <- file.path(out_dir, paste0(cancer_type, "_", seq_type_filter, "_methylation_boxplots.pdf"))
 ggsave(out_pdf, plot = p,
        width  = max(12, 4 * 2.5),
        height = ceiling(length(sig_probes) / 4) * 3.5,

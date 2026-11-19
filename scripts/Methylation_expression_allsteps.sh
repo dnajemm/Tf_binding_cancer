@@ -1985,14 +1985,17 @@ for (tf_name in c("NRF1", "BANP")) {
                    col.names = c("tss_chr", "tss_start", "tss_end",
                                  "gene_name", "ensembl_gene", "ensembl_tx", "strand"))
 
-  # For each pair, find the TSS closest to the motif midpoint
-  pairs[, tss_pos := {
+  # For each pair, find the TSS closest to the motif midpoint also saves gene_strand
+  pairs[, c("tss_pos", "gene_strand") := {
     gn  <- gene[1]
     chr <- motif_chr[1]
     mid <- motif_mid[1]
     candidates <- tss_bed[gene_name == gn & tss_chr == chr]
-    if (nrow(candidates) == 0) NA_integer_
-    else candidates[which.min(abs(tss_start - mid)), tss_start]
+    if (nrow(candidates) == 0) list(NA_integer_, NA_character_)
+    else {
+      best <- candidates[which.min(abs(tss_start - mid))]
+      list(best$tss_start, best$strand)
+    }
   }, by = .(gene, motif_chr, motif_mid)]
 
   n_missing <- pairs[is.na(tss_pos), .N]
@@ -2204,6 +2207,22 @@ for (tf_name in c("NRF1", "BANP")) {
                label = "TSS",
                vjust = 1.4, hjust = -0.15,
                size  = 2.8, colour = "#2d6a4f", fontface = "bold") +
+            # Gene orientation arrow — 300 bp arm from TSS in transcription direction
+      annotate("segment",
+               x    = motif_row$tss_pos,
+               xend = motif_row$tss_pos +
+                        fifelse(motif_row$gene_strand == "+", 300L, -300L),
+               y = 4, yend = 4,
+               colour = "#2d6a4f", linewidth = 1.2,
+               arrow = arrow(length = unit(0.25, "cm"),
+                             type = "closed", ends = "last")) +
+      annotate("text",
+               x     = motif_row$tss_pos +
+                          fifelse(motif_row$gene_strand == "+", 320L, -320L),
+               y     = 4,
+               label = fifelse(motif_row$gene_strand == "+", "3′ →", "← 3′"),
+               hjust = fifelse(motif_row$gene_strand == "+", 0, 1),
+               size  = 3, colour = "#2d6a4f", fontface = "bold") +
       geom_ribbon(aes(ymin = median_meth - sd_meth,
                 ymax = median_meth + sd_meth,
                 fill = sample_type),
@@ -2217,8 +2236,27 @@ for (tf_name in c("NRF1", "BANP")) {
                  shape = 23, size = 4.5, colour = "black", stroke = 0.8) +
       geom_vline(xintercept = med[probe_type == "target", probe_start[1]],
                  linetype = "dashed", colour = "grey30", linewidth = 0.5) +
+            # ── 100 bp scale bar — bottom-right corner ──────────────────────────
+      annotate("segment",                          # horizontal bar
+               x = motif_row$tss_pos + 1700L, xend = motif_row$tss_pos + 1800L,
+               y = 8, yend = 8,
+               colour = "grey20", linewidth = 1) +
+      annotate("segment",                          # left tick
+               x = motif_row$tss_pos + 1700L, xend = motif_row$tss_pos + 1700L,
+               y = 6, yend = 10,
+               colour = "grey20", linewidth = 1) +
+      annotate("segment",                          # right tick
+               x = motif_row$tss_pos + 1800L, xend = motif_row$tss_pos + 1800L,
+               y = 6, yend = 10,
+               colour = "grey20", linewidth = 1) +
+      annotate("text",
+               x     = motif_row$tss_pos + 1750L,
+               y     = 12,
+               label = "100 bp",
+               size = 3, colour = "grey20", hjust = 0.5) +
       scale_colour_manual(values = c(tumor = "#d73027", healthy = "#4575b4"), name = NULL) +
       scale_fill_manual(values   = c(tumor = "#d73027", healthy = "#4575b4"), name = NULL) +
+      coord_cartesian(xlim = c(motif_row$tss_pos - 2000L, motif_row$tss_pos + 2000L)) +
       labs(
         title    = sprintf("%s  |  %s  |  %s  (◆ = target probe  ●  = control probes)",
                            gn, cx, tf_name),
@@ -3514,3 +3552,198 @@ cat ./snv/all_unique_variants_across_cancers.bed | grep 'chr9' | awk ' $2 >=3329
 find ./snv/ -name "SNV_TCGA*.vcf.gz" | \
   parallel -j 10 --bar 'zgrep -P "^chr9\t33290690\t" {} 2>/dev/null | sed "s|^|{}\t|"' \
   > ./results/integration/mutation_analysis/results_rs4879682.txt
+
+
+
+
+##############################################################
+# Overlapping my results with cg island and gene body position
+##############################################################
+zcat /data/genome/annotations/hg38_cpgIsland.bed.gz
+
+# Extract motif coordinates + TF name
+awk 'NR>1 {
+    split($2, a, ":");
+    print a[1] "\t" a[2] "\t" a[3] "\t" $2 "\t" $1 "\t" $24
+}' /data/najemd/TF_binding_cancer/results/integration/meth_expr_consistent_pairs_cancermine_labeled.tsv \
+> /data/najemd/TF_binding_cancer/results/integration/consistent_motifs_TF.bed
+
+# Intersect with CpG islands
+bedtools intersect \
+  -a /data/najemd/TF_binding_cancer/results/integration/consistent_motifs_TF.bed \
+  -b /data/genome/annotations/hg38_cpgIsland.bed.gz -u \
+> /data/najemd/TF_binding_cancer/results/integration/motifs_in_cpgi_TF.bed
+
+# Per-TF summary table: total | in_CpGI | percentage
+echo -e "TF\ttotal\tin_CpGI\tpct_in_CpGI" \
+> /data/najemd/TF_binding_cancer/results/integration/cpgi_per_TF.tsv
+
+awk 'NR==FNR {total[$6]++; next} {cpgi[$6]++}
+END {
+    for (tf in total)
+        printf "%s\t%d\t%d\t%.1f\n", tf, total[tf], cpgi[tf]+0, (cpgi[tf]+0)/total[tf]*100
+}' \
+  /data/najemd/TF_binding_cancer/results/integration/consistent_motifs_TF.bed \
+  /data/najemd/TF_binding_cancer/results/integration/motifs_in_cpgi_TF.bed \
+| sort -t$'\t' -k4 -rn \
+>> /data/najemd/TF_binding_cancer/results/integration/cpgi_per_TF.tsv
+
+# Preview
+cat /data/najemd/TF_binding_cancer/results/integration/cpgi_per_TF.tsv 
+
+# TF      total   in_CpGI pct_in_CpGI
+# NRF1    176     124     70.5
+# BANP    44      23      52.3
+
+# add column for cpg island overlap to the main results table
+# Extract just the motif_instance_ids that overlap CpG islands (column 4)
+bedtools intersect \
+  -a /data/najemd/TF_binding_cancer/results/integration/consistent_motifs_TF.bed \
+  -b /data/genome/annotations/hg38_cpgIsland.bed.gz -u \
+| awk '{print $4}' | sort -u \
+> /data/najemd/TF_binding_cancer/results/integration/cpgi_motif_ids.txt
+
+wc -l /data/najemd/TF_binding_cancer/results/integration/cpgi_motif_ids.txt
+# 80 /data/najemd/TF_binding_cancer/results/integration/cpgi_motif_ids.txt
+
+python3 - << 'EOF'
+with open("/data/najemd/TF_binding_cancer/results/integration/cpgi_motif_ids.txt") as f:
+    cpgi_set = set(line.strip() for line in f)
+
+print(f"CpGI motifs loaded: {len(cpgi_set)}")
+
+with open("/data/najemd/TF_binding_cancer/results/integration/meth_expr_consistent_pairs_cancermine_labeled.tsv") as fin, \
+     open("/data/najemd/TF_binding_cancer/results/integration/meth_expr_consistent_pairs_cancermine_cpgi.tsv", "w") as fout:
+    
+    for i, line in enumerate(fin):
+        line = line.rstrip("\n")
+        if i == 0:
+            fout.write(line + "\tin_CpGI\n")
+            continue
+        fields = line.split("\t")
+        motif_id = fields[1]
+        label = "yes" if motif_id in cpgi_set else "no"
+        fout.write(line + "\t" + label + "\n")
+
+print("Done!")
+EOF
+
+# Barplot the results 
+Rscript -e '
+library(ggplot2)
+library(data.table)
+
+cpgi <- fread("/data/najemd/TF_binding_cancer/results/integration/cpgi_per_TF.tsv")
+cpgi[, not_in_CpGI := total - in_CpGI]
+
+cpgi_long <- melt(cpgi[, .(TF, in_CpGI, not_in_CpGI)],
+                  id.vars       = "TF",
+                  variable.name = "category",
+                  value.name    = "count")
+cpgi_long[, category := factor(category,
+                                levels = c("not_in_CpGI", "in_CpGI"),
+                                labels = c("Not in CpG island", "In CpG island"))]
+
+label_dt <- cpgi[, .(TF, total, pct_in_CpGI)]
+
+p <- ggplot(cpgi_long, aes(x = TF, y = count, fill = category)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(data = label_dt,
+            aes(x = TF, y = total, label = paste0(pct_in_CpGI, "%")),
+            inherit.aes = FALSE,
+            vjust = -0.8, fontface = "bold", size = 5) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  scale_fill_manual(values = c("Not in CpG island" = "#B2DFDB",
+                               "In CpG island"     = "#00796B")) +
+  labs(x = NULL, y = "Number of motifs",
+       title = "TF motifs overlapping CpG islands",
+       fill  = NULL) +
+  theme_bw(base_size = 14) +
+  theme(legend.position  = "top",
+        panel.grid.major.x = element_blank(),
+        plot.title       = element_text(size = 15, hjust = 0.5),
+        plot.margin      = margin(t = 20, r = 20, b = 10, l = 10))
+
+ggsave("/data/najemd/TF_binding_cancer/results/integration/motifs_in_cpgi_barplot.pdf",
+       plot = p, width = 5, height = 6)
+'
+
+# Enrichment test to see if i take all motifs of NRF1 and BANP that overlap with a probe how much falls in a CpG islandIM HERE LOOK AT TH EOUTPUT 
+Rscript -e '
+suppressPackageStartupMessages({ library(data.table); library(ggplot2) })
+
+project_root <- "/data/najemd/TF_binding_cancer"
+out_dir      <- file.path(project_root, "results/integration")
+
+bg_raw <- fread(cmd = paste("zcat", file.path(project_root, "methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz")))
+bg_raw[, TF := sub("_.*", "", TF)]
+bg_raw <- bg_raw[is_proximal == TRUE]
+
+sig       <- fread(file.path(out_dir, "meth_expr_consistent_pairs_cancermine_cpgi.tsv"))
+sig_pairs <- unique(sig[, .(TF, gene)])
+bg_data   <- bg_raw[!sig_pairs, on = .(TF, gene)]
+cat("[INFO] Sig pairs:", nrow(sig_pairs), "| BG only pairs:", nrow(unique(bg_data[, .(TF, gene)])), "\n")
+
+sig_cpgi <- unique(sig[, .(TF, gene, in_CpGI)])
+if (is.character(sig_cpgi$in_CpGI)) sig_cpgi[, in_CpGI := in_CpGI == "yes"]
+sig_cpgi <- sig_cpgi[, .(in_CpGI = any(in_CpGI)), by = .(TF, gene)]
+cat("[INFO] Sig in CpGI:", sum(sig_cpgi$in_CpGI), "/ total:", nrow(sig_cpgi), "\n")
+
+bg_bed <- unique(bg_data[, .(TF, gene, motif_id = motif_instance_id)])
+cat("[INFO] Sample motif_id:", bg_bed$motif_id[1], "\n")
+bg_bed[, c("chr","start","end") := tstrsplit(motif_id, ":", keep=1:3)]
+tmp_a <- tempfile(fileext=".bed"); tmp_b <- tempfile(fileext=".bed")
+fwrite(bg_bed[, .(chr,start,end,motif_id,TF,gene)], tmp_a, sep="\t", col.names=FALSE)
+system(paste("bedtools intersect -a", tmp_a, "-b /data/genome/annotations/hg38_cpgIsland.bed.gz -u >", tmp_b))
+cpgi_res <- fread(tmp_b, header=FALSE)
+cat("[INFO] BG motifs in CpGI:", nrow(cpgi_res), "\n")
+bg_bed[, in_CpGI := motif_id %in% (if(nrow(cpgi_res)>0) cpgi_res[[4]] else character(0))]
+bg_cpgi <- bg_bed[, .(in_CpGI = any(in_CpGI)), by = .(TF, gene)]
+cat("[INFO] BG in CpGI:", sum(bg_cpgi$in_CpGI), "/ total:", nrow(bg_cpgi), "\n")
+
+make_summ <- function(dt, grp) dt[, .(group=grp, n_pairs=.N, n_in_cpgi=sum(in_CpGI), pct_in_cpgi=round(100*sum(in_CpGI)/.N,1)), by=TF]
+summ <- rbindlist(list(make_summ(sig_cpgi,"Significant"), make_summ(bg_cpgi,"Background")))
+print(summ[order(TF,group)])
+
+fisher_res <- rbindlist(lapply(unique(sig_cpgi$TF), function(tf) {
+  s <- sig_cpgi[TF==tf]; b <- bg_cpgi[TF==tf]
+  if (nrow(b)==0) return(NULL)
+  mat <- matrix(c(sum(s$in_CpGI),sum(!s$in_CpGI),sum(b$in_CpGI),sum(!b$in_CpGI)), nrow=2, byrow=TRUE,
+                dimnames=list(c("Significant","Background"),c("In_CpGI","Not_in_CpGI")))
+  cat("\n[Fisher] TF =", tf, "\n"); print(mat)
+  ft <- fisher.test(mat)
+  data.table(TF=tf, n_sig=nrow(s), n_bg=nrow(b), OR=round(ft$estimate,2),
+             CI_low=round(ft$conf.int[1],2), CI_high=round(ft$conf.int[2],2),
+             p_value=signif(ft$p.value,3),
+             sig_label=ifelse(ft$p.value<0.001,"***",ifelse(ft$p.value<0.01,"**",ifelse(ft$p.value<0.05,"*","ns"))))
+}))
+print(fisher_res)
+fwrite(fisher_res, file.path(out_dir,"cpgi_enrichment_fisher.tsv"), sep="\t")
+
+plot_dat <- merge(summ, fisher_res[,.(TF,sig_label,OR,CI_low,CI_high,p_value)], by="TF")
+plot_dat[, group := factor(group, levels=c("Background","Significant"))]
+star_dat <- plot_dat[, .(y=max(pct_in_cpgi)+8, p_label=paste0(sig_label[1],"\n",
+  ifelse(p_value[1]<0.001, paste0("p = ",formatC(p_value[1],format="e",digits=2)), paste0("p = ",formatC(p_value[1],format="f",digits=3))),
+  "\nOR = ",OR[1]," [",CI_low[1],"–",CI_high[1],"]")), by=TF]
+
+p <- ggplot(plot_dat, aes(x=group, y=pct_in_cpgi, fill=group)) +
+  geom_col(width=0.55) +
+  geom_text(aes(label=paste0(pct_in_cpgi,"%\n(n=",n_pairs,")")), vjust=-0.4, size=3.4) +
+  geom_text(data=star_dat, aes(x=1.5, y=y, label=p_label), inherit.aes=FALSE, size=3.6, fontface="bold", hjust=0.5) +
+  scale_fill_manual(values=c(Background="grey70",Significant="#00796B"), guide="none") +
+  facet_wrap(~TF) +
+  scale_y_continuous(expand=expansion(mult=c(0,0.25)), breaks=seq(0,100,25), labels=function(x) paste0(x,"%")) +
+  labs(title="CpG island enrichment: significant vs background motif-linked pairs",
+       subtitle="Per TF: proportion of proximal probe-gene pairs whose motif overlaps a CpG island.\nBackground = all proximal motif-linked pairs NOT in the significant set.",
+       x=NULL, y="% pairs with motif in CpG island",
+       caption="OR > 1: significant pairs more likely to fall in CpG islands than background.\nFisher'\''s exact test; pairs aggregated at TF–gene level (any motif in CpGI = TRUE).") +
+  theme_bw(base_size=13) +
+  theme(strip.text=element_text(face="bold"),
+        plot.subtitle=element_text(size=8.5,colour="grey20",lineheight=1.3),
+        plot.caption=element_text(size=7.5,colour="grey40",hjust=0,lineheight=1.3),
+        plot.caption.position="plot", plot.margin=margin(t=15,r=15,b=10,l=10))
+
+ggsave(file.path(out_dir,"cpgi_enrichment_vs_background.pdf"), p, width=9, height=7)
+cat("[DONE] cpgi_enrichment_vs_background.pdf\n")
+cat("[DONE] cpgi_enrichment_fisher.tsv\n")
+'

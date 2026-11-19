@@ -1,0 +1,3 @@
+#sampleName	genomeAssembly	singleEndPairedEnd	pathFromSAMPLEFILE	sampleControl	studyID	experimentID	sampleID	processedBy	toolsRun	comments
+WGBS_A549_1	hg38	2	.	-	-	GSM3633943	SRR8659901	najemd	-	-
+WGBS_A549_2	hg38	2	.	-	-	GSM3633944	SRR8659902	najemd	-	-
