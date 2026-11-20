@@ -327,9 +327,21 @@ if (!is.null(cl_type_map) && all(c("healthy", "tumor") %in% cl_type_map$type)) {
       " (", round(100 * n_both / n_tot_both, 1), "%) probe-gene pairs",
       " [", n_both_genes, "/", n_tot_genes, " unique genes]"
     )
-    cat("Both concordant:", both_label, "\n")
+        cat("Both concordant:", both_label, "\n")
+
+    # Save concordant genes list
+    concordant_genes <- both_conc[
+      meth_concordant == TRUE & expr_concordant == TRUE & covered == TRUE,
+      .(gene, probe)
+    ]
+    conc_out <- file.path(project_root, "cell_lines", cancer_type, "results",
+                          paste0(cancer_type, "_concordant_genes_HCC1954_HMEC.tsv"))
+    dir.create(dirname(conc_out), recursive = TRUE, showWarnings = FALSE)
+    fwrite(concordant_genes, conc_out, sep = "\t")
+    cat("Concordant genes saved to:", conc_out, "\n")
+
   } # end both concordant
-}
+} # end concordance block
 
 
 # ===========================================================================

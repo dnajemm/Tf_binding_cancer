@@ -1353,8 +1353,12 @@ EOF
 # CpG Probe Distance to TSS Distribution 
 # Description : Plot the density of CpG probe distances to TSS for
 #               methylation-expression consistent pairs (Hyper+Down / Hypo+Up),
-#               stratified by transcription factor.
+#               stratified by transcription factor. Distances are signed using
+#               the gene strand from the TSS annotation (hg38), so that negative
+#               values indicate positions upstream of the TSS and positive values
+#               indicate downstream positions.
 # Input       : results/integration/meth_expr_consistent_pairs.tsv
+#               /data/genome/annotations/hg38_tss.bed
 # Output      : results/integration/dist_to_tss_distribution.pdf
 ##############################################################################
 Rscript - <<'EOF'
@@ -1364,21 +1368,49 @@ suppressPackageStartupMessages({
 })
 
 dt <- fread("./results/integration/meth_expr_consistent_pairs.tsv")
+tss_bed <- fread("/data/genome/annotations/hg38_tss.bed", header = FALSE,
+                 col.names = c("tss_chr", "tss_start", "tss_end",
+                               "gene_name", "ensembl_gene", "ensembl_tx", "strand"))
 
-dt_uniq <- unique(dt[, .(TF, direction, dist_to_tss, gene)])[
+dt[, motif_chr   := sub(":.*", "", motif_instance_id)]
+dt[, motif_start := as.integer(sub("^[^:]+:([0-9]+):.*", "\\1", motif_instance_id))]
+dt[, motif_end   := as.integer(sub("^[^:]+:[0-9]+:([0-9]+):.*", "\\1", motif_instance_id))]
+dt[, motif_mid   := as.integer((motif_start + motif_end) / 2)]
+
+dt[, gene_strand := {
+  gn  <- gene[1]
+  chr <- motif_chr[1]
+  mid <- motif_mid[1]
+  candidates <- tss_bed[gene_name == gn & tss_chr == chr]
+  if (nrow(candidates) == 0) NA_character_
+  else {
+    best <- candidates[which.min(abs(tss_start - mid))]
+    best$strand
+  }
+}, by = .(gene, motif_chr, motif_mid)]
+
+dt[, dist_to_tss_signed := ifelse(gene_strand == "+", 
+                                   dist_to_tss, 
+                                   -dist_to_tss)]
+
+dt_uniq <- unique(dt[, .(TF, direction, dist_to_tss_signed, gene)])[
   , .SD[1], by = .(TF, direction, gene)]
 dt_uniq[, TF_label := paste0(TF, " (n=", uniqueN(gene), " genes)"), by = TF]
 
-p <- ggplot(dt_uniq, aes(x = dist_to_tss, fill = direction, colour = direction)) +
+p <- ggplot(dt_uniq, aes(x = dist_to_tss_signed, fill = direction, colour = direction)) +
   geom_density(alpha = 0.35, linewidth = 0.7) +
   geom_rug(alpha = 0.8, linewidth = 0.8, length = unit(0.06, "npc"), sides = "b") +
   geom_vline(xintercept = 0, linetype = "dashed", colour = "grey30", linewidth = 0.5) +
+  annotate("text", x = -1000, y = Inf, label = "← Upstream",
+           hjust = 0.5, vjust = 1.5, size = 3.5, colour = "grey40") +
+  annotate("text", x = 1000, y = Inf, label = "Downstream →",
+           hjust = 0.5, vjust = 1.5, size = 3.5, colour = "grey40") +
   scale_fill_manual(values = c(Hyper_Down = "#d73027", Hypo_Up = "#4575b4"),
                     labels = c(Hyper_Down = "Hyper + Down", Hypo_Up = "Hypo + Up")) +
   scale_colour_manual(values = c(Hyper_Down = "#d73027", Hypo_Up = "#4575b4"),
                       labels = c(Hyper_Down = "Hyper + Down", Hypo_Up = "Hypo + Up")) +
-  scale_x_continuous(limits = c(-200, 1000),
-                     breaks = seq(-200, 1000, 200)) +
+  scale_x_continuous(limits = c(-2000, 2000),
+                   breaks = seq(-2000, 2000, 500)) +
   facet_wrap(~TF_label, ncol = 1) +
   labs(
     x      = "Distance to TSS (bp)",
@@ -3668,82 +3700,3 @@ ggsave("/data/najemd/TF_binding_cancer/results/integration/motifs_in_cpgi_barplo
        plot = p, width = 5, height = 6)
 '
 
-# Enrichment test to see if i take all motifs of NRF1 and BANP that overlap with a probe how much falls in a CpG islandIM HERE LOOK AT TH EOUTPUT 
-Rscript -e '
-suppressPackageStartupMessages({ library(data.table); library(ggplot2) })
-
-project_root <- "/data/najemd/TF_binding_cancer"
-out_dir      <- file.path(project_root, "results/integration")
-
-bg_raw <- fread(cmd = paste("zcat", file.path(project_root, "methylation/probe_gene_pairs_in_motifs_with_tss.tsv.gz")))
-bg_raw[, TF := sub("_.*", "", TF)]
-bg_raw <- bg_raw[is_proximal == TRUE]
-
-sig       <- fread(file.path(out_dir, "meth_expr_consistent_pairs_cancermine_cpgi.tsv"))
-sig_pairs <- unique(sig[, .(TF, gene)])
-bg_data   <- bg_raw[!sig_pairs, on = .(TF, gene)]
-cat("[INFO] Sig pairs:", nrow(sig_pairs), "| BG only pairs:", nrow(unique(bg_data[, .(TF, gene)])), "\n")
-
-sig_cpgi <- unique(sig[, .(TF, gene, in_CpGI)])
-if (is.character(sig_cpgi$in_CpGI)) sig_cpgi[, in_CpGI := in_CpGI == "yes"]
-sig_cpgi <- sig_cpgi[, .(in_CpGI = any(in_CpGI)), by = .(TF, gene)]
-cat("[INFO] Sig in CpGI:", sum(sig_cpgi$in_CpGI), "/ total:", nrow(sig_cpgi), "\n")
-
-bg_bed <- unique(bg_data[, .(TF, gene, motif_id = motif_instance_id)])
-cat("[INFO] Sample motif_id:", bg_bed$motif_id[1], "\n")
-bg_bed[, c("chr","start","end") := tstrsplit(motif_id, ":", keep=1:3)]
-tmp_a <- tempfile(fileext=".bed"); tmp_b <- tempfile(fileext=".bed")
-fwrite(bg_bed[, .(chr,start,end,motif_id,TF,gene)], tmp_a, sep="\t", col.names=FALSE)
-system(paste("bedtools intersect -a", tmp_a, "-b /data/genome/annotations/hg38_cpgIsland.bed.gz -u >", tmp_b))
-cpgi_res <- fread(tmp_b, header=FALSE)
-cat("[INFO] BG motifs in CpGI:", nrow(cpgi_res), "\n")
-bg_bed[, in_CpGI := motif_id %in% (if(nrow(cpgi_res)>0) cpgi_res[[4]] else character(0))]
-bg_cpgi <- bg_bed[, .(in_CpGI = any(in_CpGI)), by = .(TF, gene)]
-cat("[INFO] BG in CpGI:", sum(bg_cpgi$in_CpGI), "/ total:", nrow(bg_cpgi), "\n")
-
-make_summ <- function(dt, grp) dt[, .(group=grp, n_pairs=.N, n_in_cpgi=sum(in_CpGI), pct_in_cpgi=round(100*sum(in_CpGI)/.N,1)), by=TF]
-summ <- rbindlist(list(make_summ(sig_cpgi,"Significant"), make_summ(bg_cpgi,"Background")))
-print(summ[order(TF,group)])
-
-fisher_res <- rbindlist(lapply(unique(sig_cpgi$TF), function(tf) {
-  s <- sig_cpgi[TF==tf]; b <- bg_cpgi[TF==tf]
-  if (nrow(b)==0) return(NULL)
-  mat <- matrix(c(sum(s$in_CpGI),sum(!s$in_CpGI),sum(b$in_CpGI),sum(!b$in_CpGI)), nrow=2, byrow=TRUE,
-                dimnames=list(c("Significant","Background"),c("In_CpGI","Not_in_CpGI")))
-  cat("\n[Fisher] TF =", tf, "\n"); print(mat)
-  ft <- fisher.test(mat)
-  data.table(TF=tf, n_sig=nrow(s), n_bg=nrow(b), OR=round(ft$estimate,2),
-             CI_low=round(ft$conf.int[1],2), CI_high=round(ft$conf.int[2],2),
-             p_value=signif(ft$p.value,3),
-             sig_label=ifelse(ft$p.value<0.001,"***",ifelse(ft$p.value<0.01,"**",ifelse(ft$p.value<0.05,"*","ns"))))
-}))
-print(fisher_res)
-fwrite(fisher_res, file.path(out_dir,"cpgi_enrichment_fisher.tsv"), sep="\t")
-
-plot_dat <- merge(summ, fisher_res[,.(TF,sig_label,OR,CI_low,CI_high,p_value)], by="TF")
-plot_dat[, group := factor(group, levels=c("Background","Significant"))]
-star_dat <- plot_dat[, .(y=max(pct_in_cpgi)+8, p_label=paste0(sig_label[1],"\n",
-  ifelse(p_value[1]<0.001, paste0("p = ",formatC(p_value[1],format="e",digits=2)), paste0("p = ",formatC(p_value[1],format="f",digits=3))),
-  "\nOR = ",OR[1]," [",CI_low[1],"–",CI_high[1],"]")), by=TF]
-
-p <- ggplot(plot_dat, aes(x=group, y=pct_in_cpgi, fill=group)) +
-  geom_col(width=0.55) +
-  geom_text(aes(label=paste0(pct_in_cpgi,"%\n(n=",n_pairs,")")), vjust=-0.4, size=3.4) +
-  geom_text(data=star_dat, aes(x=1.5, y=y, label=p_label), inherit.aes=FALSE, size=3.6, fontface="bold", hjust=0.5) +
-  scale_fill_manual(values=c(Background="grey70",Significant="#00796B"), guide="none") +
-  facet_wrap(~TF) +
-  scale_y_continuous(expand=expansion(mult=c(0,0.25)), breaks=seq(0,100,25), labels=function(x) paste0(x,"%")) +
-  labs(title="CpG island enrichment: significant vs background motif-linked pairs",
-       subtitle="Per TF: proportion of proximal probe-gene pairs whose motif overlaps a CpG island.\nBackground = all proximal motif-linked pairs NOT in the significant set.",
-       x=NULL, y="% pairs with motif in CpG island",
-       caption="OR > 1: significant pairs more likely to fall in CpG islands than background.\nFisher'\''s exact test; pairs aggregated at TF–gene level (any motif in CpGI = TRUE).") +
-  theme_bw(base_size=13) +
-  theme(strip.text=element_text(face="bold"),
-        plot.subtitle=element_text(size=8.5,colour="grey20",lineheight=1.3),
-        plot.caption=element_text(size=7.5,colour="grey40",hjust=0,lineheight=1.3),
-        plot.caption.position="plot", plot.margin=margin(t=15,r=15,b=10,l=10))
-
-ggsave(file.path(out_dir,"cpgi_enrichment_vs_background.pdf"), p, width=9, height=7)
-cat("[DONE] cpgi_enrichment_vs_background.pdf\n")
-cat("[DONE] cpgi_enrichment_fisher.tsv\n")
-'
