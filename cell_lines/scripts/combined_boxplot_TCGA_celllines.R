@@ -7,10 +7,12 @@
 # Layout: 2 columns per row
 #
 # Usage:
-#   Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R <cancer_type> <RRBS|WGBS|all> [CellLine_healthy|tumor ...]
-#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R COAD RRBS NCM460_healthy HCT116_tumor
-#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R PRAD WGBS PreC_healthy LNCaP_tumor
-#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R BRCA WGBS HMEC_healthy HCC1954_tumor 
+#   Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R <cancer_type> [meth_prefix:expr_prefix:healthy|tumor ...]
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R COAD RRBS_NCM460:RNA_NCM460:healthy RRBS_HCT116:RNA_HCT116:tumor
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R PRAD WGBS_PreC:RNA_PreC:healthy WGBS_LNCaP:RNA_LNCaP:tumor
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R BRCA WGBS_MCF10A:RNA_MCF10A:healthy RRBS_HCC1954:RNA_HCC1954:tumor
+#   e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R BRCA WGBS_HMEC:RNA_HMEC:healthy WGBS_HCC1954:RNA_HCC1954:tumor
+
 suppressPackageStartupMessages({
   library(data.table)
   library(ggplot2)
@@ -24,24 +26,28 @@ suppressPackageStartupMessages({
 # ===========================================================================
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 1) stop(
-  "Usage: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R <cancer_type> [CellLine_healthy|tumor ...]\n",
-  "  e.g.: Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/combined_boxplot_TCGA_celllines.R COAD NCM460_healthy HCT116_tumor\n"
+  "Usage: Rscript ... <cancer_type> [meth_prefix:expr_prefix:healthy|tumor ...]\n",
+  "  e.g.: Rscript ... BRCA WGBS_MCF10A:RNA_MCF10A:healthy RRBS_HCC1954:RNA_HCC1954:tumor\n"
 )
 cancer_type <- args[1]
+sample_args <- if (length(args) >= 2) args[-1] else character(0)
 cat("Cancer type:", cancer_type, "\n")
-seq_type_filter <- ifelse(length(args) >= 2, args[2], "all")
-cl_type_args    <- if (length(args) >= 3) args[-(1:2)] else character(0)
-cat("Seq type filter:", seq_type_filter, "\n")
 
-cl_type_map  <- NULL
-if (length(cl_type_args) > 0) {
-  cl_type_map <- data.table(arg = cl_type_args)
-  cl_type_map[, type      := sub(".*_([^_]+)$", "\\1", arg)]
-  cl_type_map[, cell_line := sub("_[^_]+$",     "",    arg)]
+cl_type_map <- NULL
+if (length(sample_args) > 0) {
+  parts <- strsplit(sample_args, ":")
+  cl_type_map <- rbindlist(lapply(parts, function(p) {
+    if (length(p) != 3) stop(
+      "Each sample arg must be meth_prefix:expr_prefix:type  (got: ",
+      paste(p, collapse = ":"), ")")
+    list(meth_prefix = p[1], expr_prefix = p[2], type = p[3])
+  }))
+  cl_type_map[, cell_line := sub("^RNA_", "", expr_prefix)]
   bad <- cl_type_map[!type %in% c("healthy", "tumor")]
-  if (nrow(bad) > 0) stop("Cell-line type must be 'healthy' or 'tumor'. Bad args: ",
-                           paste(bad$arg, collapse = ", "))
-  cat("Cell-line types specified:\n"); print(cl_type_map[, .(cell_line, type)])
+  if (nrow(bad) > 0) stop(
+    "type must be 'healthy' or 'tumor'. Bad args: ",
+    paste(bad$meth_prefix, collapse = ", "))
+  cat("Cell-line map:\n"); print(cl_type_map[, .(meth_prefix, expr_prefix, cell_line, type)])
 }
 
 project_root <- "/data/najemd/TF_binding_cancer"
@@ -129,17 +135,24 @@ bs_files <- list.files(cell_line_meth_dir,
                        pattern    = "^(RRBS|WGBS)_.*_meth\\.bed\\.gz$",
                        full.names = TRUE)
 if (length(bs_files) == 0) stop("No RRBS/WGBS files in: ", cell_line_meth_dir)
-if (!is.null(seq_type_filter) && seq_type_filter != "all") {
-  bs_files <- bs_files[grepl(paste0("^", seq_type_filter, "_"), basename(bs_files))]
-  cat("Keeping only", seq_type_filter, "files:", length(bs_files), "\n")
+if (!is.null(cl_type_map)) {
+  pfx_pattern <- paste0("^(", paste(cl_type_map$meth_prefix, collapse = "|"), ")_")
+  bs_files    <- bs_files[grepl(pfx_pattern, basename(bs_files))]
 }
+cat("Bisulfite files matched:", length(bs_files), "\n")
+
 rrbs_dt <- data.table(path = bs_files)
 rrbs_dt[, basename_ := basename(path)]
-rrbs_dt[, cell_line := sub("^(?:RRBS|WGBS)_(.+)_[0-9]+_meth\\.bed\\.gz$",
-                            "\\1", basename_, perl = TRUE)]
+if (!is.null(cl_type_map)) {
+  rrbs_dt[, cell_line := sapply(basename_, function(f)
+    cl_type_map$cell_line[which(startsWith(f, paste0(cl_type_map$meth_prefix, "_")))[1]])]
+} else {
+  rrbs_dt[, cell_line := sub("^(?:RRBS|WGBS)_(.+)_[0-9]+_meth\\.bed\\.gz$",
+                              "\\1", basename_, perl = TRUE)]
+}
 rrbs_dt[, replicate := as.integer(sub("^(?:RRBS|WGBS)_.+_([0-9]+)_meth\\.bed\\.gz$",
                                        "\\1", basename_, perl = TRUE))]
-cat("Bisulfite files found:\n"); print(rrbs_dt[, .(cell_line, replicate)])
+cat("Bisulfite files found:\n"); print(rrbs_dt[, .(cell_line, replicate, basename_)])
 
 cl_names <- if (!is.null(cl_type_map)) cl_type_map$cell_line else sort(unique(rrbs_dt$cell_line))
 
@@ -198,13 +211,23 @@ cl_expr_dir <- file.path(project_root, "cell_lines", cancer_type, "expression")
 expr_files  <- list.files(cl_expr_dir, pattern = "^RNA_.*_genes_count\\.txt$",
                           full.names = TRUE)
 if (length(expr_files) == 0) stop("No expression files in: ", cl_expr_dir)
+if (!is.null(cl_type_map)) {
+  pfx_pattern <- paste0("^(", paste(cl_type_map$expr_prefix, collapse = "|"), ")_")
+  expr_files  <- expr_files[grepl(pfx_pattern, basename(expr_files))]
+}
+cat("Expression files matched:", length(expr_files), "\n")
 
 expr_file_dt <- data.table(path = expr_files)
 expr_file_dt[, basename_ := basename(path)]
-expr_file_dt[, cell_line := sub("^RNA_(.+)_[0-9]+_genes_count\\.txt$", "\\1", basename_)]
+if (!is.null(cl_type_map)) {
+  expr_file_dt[, cell_line := sapply(basename_, function(f)
+    cl_type_map$cell_line[which(startsWith(f, paste0(cl_type_map$expr_prefix, "_")))[1]])]
+} else {
+  expr_file_dt[, cell_line := sub("^RNA_(.+)_[0-9]+_genes_count\\.txt$", "\\1", basename_)]
+}
 expr_file_dt[, replicate := as.integer(sub("^RNA_.+_([0-9]+)_genes_count\\.txt$",
                                             "\\1", basename_))]
-cat("Cell-line expression files:\n"); print(expr_file_dt[, .(cell_line, replicate)])
+cat("Cell-line expression files:\n"); print(expr_file_dt[, .(cell_line, replicate, basename_)])
 
 cl_expr <- rbindlist(lapply(seq_len(nrow(expr_file_dt)), function(i) {
   dt <- fread(expr_file_dt$path[i], header = TRUE, select = c("geneName", "TPM"))
@@ -556,8 +579,9 @@ p <- ggplot(all_panels, aes(x = x_pos, y = y_scaled, fill = group, colour = grou
 n_pairs <- nrow(pair_dir)
 out_dir <- file.path(project_root, "cell_lines", cancer_type, "results")
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+cl_tag  <- if (!is.null(cl_type_map)) paste(cl_type_map$cell_line, collapse = "_") else "all"
 out_pdf <- file.path(out_dir,
-  paste0(cancer_type, "_", seq_type_filter, "_meth_expr_combined_boxplots.pdf"))
+  paste0(cancer_type, "_", cl_tag, "_meth_expr_combined_boxplots.pdf"))
 panel_width <- (n_groups * 2 + 1) * 0.55 + 1.5
 ggsave(out_pdf, plot = p,
        width  = 2 * panel_width,

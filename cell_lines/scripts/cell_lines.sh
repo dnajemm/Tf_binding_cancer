@@ -22,7 +22,7 @@ done
 # launch RNAseq pipeline for HCT116 cell lines done
 for sample in RNA_HCT116_1 RNA_HCT116_2 ; do
     snakemake --cores 4 --latency-wait 150 --use-envmodules \
-        -s /data/collotr/pipelines/RNAseq_pipeline.smk \
+        -s /data/scripts/pipelines/1.0/RNAseq_pipeline.smk \
         -C sample=$sample track=y trim=y map=y multiqc=y all_genes=n counts=y \
         prepath=/data/najemd/TF_binding_cancer/cell_lines/COAD
 done
@@ -54,6 +54,13 @@ snakemake --cores 4 --latency-wait 180 --use-envmodules \
         prepath=/data/najemd/TF_binding_cancer/cell_lines/COAD \
     > /data/najemd/TF_binding_cancer/cell_lines/COAD/logs/${sample}_bismark.log 2>&1 
 
+# moved the methylation to /data/papers/blattler_genomeBiol_2014/ and do a symbolic link of the files from there to here 
+ln -s /data/papers/blattler_genomeBiol_2014/data/WGBS_HCT116_1* /data/najemd/TF_binding_cancer/cell_lines/COAD/data
+ln -s /data/papers/blattler_genomeBiol_2014/reads/WGBS_HCT116_1* /data/najemd/TF_binding_cancer/cell_lines/COAD/reads
+ln -s /data/papers/blattler_genomeBiol_2014/tracks/WGBS_HCT116_1* /data/najemd/TF_binding_cancer/cell_lines/COAD/tracks
+ln -s /data/papers/blattler_genomeBiol_2014/methylation/WGBS_HCT116_1* /data/najemd/TF_binding_cancer/cell_lines/COAD/methylation
+
+
 #########################################################################################
 # NCM460 cell line RNA-seq and RRBS data download and analysis pipeline
 #########################################################################################
@@ -69,7 +76,7 @@ done
 # launch RNAseq pipeline for NCM460 cell lines done
 for sample in RNA_NCM460_1 RNA_NCM460_2 RNA_NCM460_3; do
     snakemake --cores 4 --latency-wait 150 --use-envmodules \
-        -s /data/collotr/pipelines/RNAseq_pipeline.smk \
+        -s /data/scripts/pipelines/1.0/RNAseq_pipeline.smk \
         -C sample=$sample track=y trim=y map=y multiqc=y all_genes=n counts=y \
         prepath=/data/najemd/TF_binding_cancer/cell_lines/COAD
 done
@@ -208,6 +215,11 @@ done
 wait
 echo "All done"
 
+# moved the wgbs to /data/papers/pidsley_genomebio_2016/  and do a symbolic link of the files from there to here 
+ln -s /data/papers/pidsley_genomebio_2016/data/* /data/najemd/TF_binding_cancer/cell_lines/PRAD/data
+ln -s /data/papers/pidsley_genomebio_2016/reads/* /data/najemd/TF_binding_cancer/cell_lines/PRAD/reads
+ln -s /data/papers/pidsley_genomebio_2016/tracks/* /data/najemd/TF_binding_cancer/cell_lines/PRAD/tracks
+ln -s /data/papers/pidsley_genomebio_2016/methylation/* /data/najemd/TF_binding_cancer/cell_lines/PRAD/methylation
 
 # Download the RNAseq data for LNCaP and PrEC cell lines from SRA using fasterq-dump done 
 for sample in RNA_LNCaP_1 RNA_LNCaP_2 RNA_LNCaP_3 RNA_PreC_1 RNA_PreC_2 RNA_PreC_3; do
@@ -220,7 +232,7 @@ done
 # launch RNAseq pipeline for PreC and LNCaP cell lines done
 for sample in RNA_PreC_1 RNA_PreC_2 RNA_PreC_3 RNA_LNCaP_1 RNA_LNCaP_2 RNA_LNCaP_3 ; do
     snakemake --cores 4 --latency-wait 150 --use-envmodules \
-        -s /data/collotr/pipelines/RNAseq_pipeline.smk \
+        -s /data/scripts/pipelines/1.0/RNAseq_pipeline.smk \
         -C sample=$sample track=y trim=y map=y multiqc=y all_genes=n counts=y \
         prepath=/data/najemd/TF_binding_cancer/cell_lines/PRAD
 done
@@ -230,7 +242,6 @@ ln -s /data/papers/FrenchHJ_unpublished_2018/data/* /data/najemd/TF_binding_canc
 ln -s /data/papers/FrenchHJ_unpublished_2018/reads/* /data/najemd/TF_binding_cancer/cell_lines/PRAD/reads
 ln -s /data/papers/FrenchHJ_unpublished_2018/tracks/* /data/najemd/TF_binding_cancer/cell_lines/PRAD/tracks
 ln -s /data/papers/FrenchHJ_unpublished_2018/expression/* /data/najemd/TF_binding_cancer/cell_lines/PRAD/expression
-
 
 # Analysis 
 # using the deseq2 script to analyze the RNA-seq data for PreC and LNCaP cell lines 
@@ -290,7 +301,7 @@ run_sample() {
     if [[ $? -eq 0 ]]; then
         echo "[$(date)] getdata done for $sample — launching RNAseq"
         snakemake --cores 4 --latency-wait 150 --use-envmodules \
-            -s /data/collotr/pipelines/RNAseq_pipeline.smk \
+            -s /data/scripts/pipelines/1.0/RNAseq_pipeline.smk \
             -C sample=$sample track=y trim=y map=y multiqc=y all_genes=n counts=y \
             prepath=$prepath \
             > $logdir/${sample}_rnaseq.log 2>&1
@@ -312,7 +323,7 @@ done
 wait
 echo "All samples done"
 
-# moved the rnaseq to /data/papers/FrenchHJ_unpublished_2018/ and do a symbolic link of the files from there to here 
+# moved the rnaseq to /data/papers/hon_genomeRes_2012/ and do a symbolic link of the files from there to here 
 ln -s /data/papers/hon_genomeRes_2012/data/RNA* /data/najemd/TF_binding_cancer/cell_lines/BRCA/data
 ln -s /data/papers/hon_genomeRes_2012/reads/RNA* /data/najemd/TF_binding_cancer/cell_lines/BRCA/reads
 ln -s /data/papers/hon_genomeRes_2012/tracks/RNA* /data/najemd/TF_binding_cancer/cell_lines/BRCA/tracks
@@ -343,7 +354,7 @@ Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Deseq2.R \
 Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Expression_boxplots_TCGA_celllines.R BRCA HMEC_healthy HCC1954_tumor
 
 
-# get data and launch bismark pipeline  done done FOR THE _3 
+# get data and launch bismark pipeline  done 
 # Did it first and found it should be clipped at 2bp for r1 so redid it 
 export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
 run_sample() {
@@ -388,6 +399,13 @@ for sample in  WGBS_HCC1954_2 WGBS_HMEC_1 WGBS_HMEC_2 WGBS_HCC1954_3 ; do
 done
 wait
 echo "All BRCA WGBS samples done"
+
+# moved the methylation data to /data/papers/hon_genomeRes_2012 and do a symbolic link of the files from there to here 
+ln -s /data/papers/hon_genomeRes_2012/data/WGBS_H* /data/najemd/TF_binding_cancer/cell_lines/BRCA/data
+ln -s /data/papers/hon_genomeRes_2012/reads/WGBS_H* /data/najemd/TF_binding_cancer/cell_lines/BRCA/reads
+ln -s /data/papers/hon_genomeRes_2012/tracks/WGBS_H* /data/najemd/TF_binding_cancer/cell_lines/BRCA/tracks
+ln -s /data/papers/hon_genomeRes_2012/methylation/WGBS_H* /data/najemd/TF_binding_cancer/cell_lines/BRCA/methylation
+
 
 # plot the boxplots for the methylation data for HCC1954 and HMEC cell lines and TCGA BRCA samples
 Rscript /data/najemd/TF_binding_cancer/cell_lines/scripts/Methylation_boxplots_TCGA_celllines.R BRCA HCC1954_tumor HMEC_healthy
@@ -683,7 +701,7 @@ cat("BANP BRCA in peaks:", sum(main$in_BANP_HCC1954_peaks, na.rm=TRUE), "\n")
 
 
 ###########################################
-# MCF-7 and MCF10A cell line launched in MCF screen for MCF10A withoutsubset and for MCF10A  in screen MCF10A
+# MCF-7 and MCF10A cell line done
 ###########################################
 # found that MCF-7 should have R2 clipped at 7 while RRBS doesnt need clipping
 export _JAVA_OPTIONS="-Djava.io.tmpdir=/data/tmp/najemd/"
@@ -729,7 +747,44 @@ done
 wait
 echo "All BRCA WGBS samples done"
 
+# RNA seq data 
+# get data and RNAseq launched in SCREEN 
+run_sample() {
+    local sample=$1
+    local prepath=/data/najemd/TF_binding_cancer/cell_lines/BRCA
+    local logdir=$prepath/logs
 
+    echo "[$(date)] Starting getdata: $sample"
+    snakemake --cores 4 --latency-wait 180 --use-envmodules \
+        -s /data/scripts/pipelines/1.0/getdata_pipeline.smk \
+        -C sample=$sample geo=y quality=y \
+        prepath=$prepath \
+        > $logdir/${sample}_getdata.log 2>&1
+
+    if [[ $? -eq 0 ]]; then
+        echo "[$(date)] getdata done for $sample — launching RNAseq"
+        snakemake --cores 4 --latency-wait 150 --use-envmodules \
+            -s /data/scripts/pipelines/1.0/RNAseq_pipeline.smk \
+            -C sample=$sample track=y trim=y map=y multiqc=y all_genes=n counts=y \
+            prepath=$prepath \
+            > $logdir/${sample}_rnaseq.log 2>&1
+        echo "[$(date)] RNAseq done for $sample"
+    else
+        echo "[$(date)] ERROR: getdata failed for $sample — skipping RNAseq" >&2
+    fi
+}
+
+mkdir -p /data/najemd/TF_binding_cancer/cell_lines/BRCA/logs
+
+for sample in RNA_MCF7_1 RNA_MCF7_2 RNA_MCF7_3 RNA_MCF10A_1 RNA_MCF10A_2; do
+    run_sample $sample &
+
+    if (( $(jobs -r | wc -l) >= 3 )); then
+        wait
+    fi
+done
+wait
+echo "All samples done"
 
 
 
